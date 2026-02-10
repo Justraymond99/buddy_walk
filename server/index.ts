@@ -30,7 +30,6 @@ dotenv.config();
   app.use("/api/db", chatLogRoute)
   app.use("/api/token", tokenRoute)
 
-
   app.listen(port, () => {
     console.log(`Server is live at http://localhost:${port}`);
   });

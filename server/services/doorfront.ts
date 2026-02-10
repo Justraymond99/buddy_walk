@@ -1,4 +1,4 @@
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import { AppContext } from '../types/index';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -27,13 +27,14 @@ export async function getPanoramaData(ctx: AppContext, address: string) {
     const { res } = ctx;
   try {
     const db = await connectToDoorfrontDB();
-    if (db && address.trim() !== '') {
+    if (db && address && address.trim() !== '') {
         const collection = db.collection(collectionName);
         const data = await collection.findOne(
             { address:{$regex: address, $options: 'i' }}, 
-            { projection: {url:1, human_labels:{$slice:1}, creator:1,address:1, location: 1 }})
-        if (data) {
+            { projection: {url:1, human_labels:{$slice:1}, creator:1,address:1, location: 1, image_description:1 }})
+        if (data) { 
             console.log("Panorama data fetched successfully for address:", address);
+            console.log("Image URL: ", data.url);
             // res.status(200).json(data);
             return data; 
         }
@@ -47,5 +48,40 @@ export async function getPanoramaData(ctx: AppContext, address: string) {
   } catch (error) {
     console.error('Error fetching panorama data:', error);
     return null;
+  }
+}
+
+export async function addPanoramaDescription(panoramaId: string, description: string) {
+  try {
+    const db = await connectToDoorfrontDB();
+    if (!db) {
+      throw new Error("Failed to connect to database");
+    }
+
+    const collection = db.collection(collectionName);
+
+    // Using $set will add the field if it doesn't exist, 
+    // or overwrite it if it already does.
+    const result = await collection.updateOne(
+      { _id: new ObjectId(panoramaId) },
+      { 
+        $set: { 
+          image_description: description,
+          updatedAt: new Date() // Good practice to track when the write happened
+        } 
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      console.warn(`No panorama found with ID: ${panoramaId}`);
+      return false;
+    }
+
+    console.log(`Successfully updated panorama ${panoramaId} with description.`);
+    return true;
+
+  } catch (error) {
+    console.error('Error adding text description:', error);
+    return false;
   }
 }
