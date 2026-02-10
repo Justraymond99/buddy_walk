@@ -1,9 +1,11 @@
 import {OpenAIService} from "../services/openAI";
+import { GeminiService } from "../services/gemini";
 import {textRequestBody} from "../types";
 import { Request, Response } from "express";
 import { getPanoramaData } from "../services/doorfront"
 
 const openAIService = new OpenAIService();
+// const openAIService = new GeminiService();
 
 export class OpenAIController {
 

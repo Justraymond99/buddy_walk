@@ -25,7 +25,6 @@ const MessageSchema = new Schema<messageInterface>({
   },
   flag: {type:Boolean, default: false},
   flag_reason: {type:String, required: false}
-
 })
 
 const ChatLogSchema = new Schema<chatLogInterface>({
