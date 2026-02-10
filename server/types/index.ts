@@ -57,19 +57,24 @@ identifying the nearest subway or bus stations or relevant transport services.`
 
 export const entrancePrompt = `When asked about entrances or how to enter a building, give all the information to the user that is provided such as door type, knob type, and whether there are stairs or ramps. 
 Entrance information is provided with the main type first [door, ramp, knob, etc] then the subtype in parentheses. Ramps and stairs do not have subtypes.
-Use bounding box information (x,y,width,height) to relate features to each other. Example: "The knob is on the right side of the door, and the stairs are to the left of the door."
+Use bounding box information (x,y,width,height) to relate features to each other. Example: "The knob is on the right side of the door, and the stairs are to the left of the door." DO NOT GIVE THE RAW DATA TO THE USER.
 If an address does not have entrance information in the doorfront database, do not make up an entrance type, just say that there is no entrance information available and
 advise the user to put in a request at doorfront.org.  If no entrance data is provided, you must not speculate or assume entrance types. 
-Do not generalize based on prior answers. If no entrance data is provided for an address, say: 
+Additionally, an image of the entrance may be provided. Use the image to identify the store's name through signage or logos. When describing the image, provide a confidence level (High, Medium, Low) for your description of the entrance based on how clear the image is.
+If the image provided does not show an entrance, do not mention the image to the user.
+Also use the image to describe the texture, material, and other relevant details (location of knobs, type of knobs, presence of stairs, etc.) of the entrance to a blind user.
+If "Image Description: " is provided, repeat that description verbatim to the user.
+Do not generalize based on prior answers. If no entrance data or useful image is provided for an address, say: 
 "There is no entrance information available for this address. You can request more details at doorfront.org."`
 
 export const directionsPrompt = 
-`When a user asks for directions, you will be provided with step by step directions from Google Maps. If giving 
-directions, list them out. If data exists for entrance information, that will be provided as well.
+`When a user asks for directions, you will be provided with step by step directions from Google Maps. Do not just regurgitate the step by step directions, but use
+the provided static map image as well as latitude and longitude of important markers to help give more context to your directions. 
+If data exists for entrance information, that will be provided as well.
 Additionally, a static map image with markers and the route drawn on will be provided. The markers are helpful landmarks such as trees, subway grates, and more.
-The legend for this map is as follows: green T markers - trees, blue U marker - user starting location, red R marker - pedestrian ramp, orange S marker - subway grate.
-If no data is provided, do not make up any information. 
-Only use the provided Google Maps Step by Step directions, do not create a new route. `
+The legend for this map is as follows: green T markers - trees, blue U marker - user starting location, yellow R marker - pedestrian ramp, orange S marker - subway grate, red D marker - destination.
+The blue line is the route to the destination. Use the map to help give more context to your directions such as "cross the street then turn left".
+If no data is provided, do not make up any information.`
 
 export const crossStreetsPrompt = `If the user is asking about cross streets, a map will be provided. Use the map to read the nearby cross streets and provide them to the user.`
 
@@ -117,46 +122,47 @@ export const openAITools= [
       }
     }
   },
-  {
-    type: "function" as "function",
-    function: {
-      name: "generateGoogleDirectionAPILink",
-      description: `Generates a Google Directions API link based on user location. Use when a user asks for a direction to a location. 
-      If no city is provided, add "New York" by default. If there are spaces in user request, replace with {%20}
-        Link Format: https://maps.googleapis.com/maps/api/directions/json?destination={USER_REQUEST}&mode=walking&origin={LAT,LNG}`,
-      parameters: {
-        type: "object",
-        properties: {
-          link: {
-            type: "string",
-            description: "The completed Google Directions API link."
-          }
-        },
-        required: ["link"]
-      }
-    }
-  },
-  //   {
+  // {
   //   type: "function" as "function",
   //   function: {
   //     name: "generateGoogleDirectionAPILink",
-  //     description: "Extracts destination from user query to generate a Google Directions API link. Use when a user asks for directions to a location. The user may provide an address or a store/establishment name. Either can be used as the destination.",
+  //     description: `Generates a Google Directions API link based on user location. Use when a user asks for a direction to a location. 
+  //     If no city is provided, add "New York" by default. If there are spaces in user request, replace with {%20}. If the destination is a store/establishment name,
+  //     add 
+  //       Link Format: https://maps.googleapis.com/maps/api/directions/json?destination={USER_REQUEST}&mode=walking&origin={LAT,LNG}`,
   //     parameters: {
   //       type: "object",
   //       properties: {
-  //         destination: {
+  //         link: {
   //           type: "string",
-  //           description: "The user's requested destination for directions. This can be an address or a store/establishment name."
-  //         },
-  //         address:{
-  //           type: "boolean",
-  //           description: "Indicates if the destination is an address. If true, the destination is treated as a full address; if false, it is treated as a store/establishment name."
+  //           description: "The completed Google Directions API link."
   //         }
   //       },
-  //       required: ["destination", "address"]
+  //       required: ["link"]
   //     }
   //   }
   // },
+    {
+    type: "function" as "function",
+    function: {
+      name: "generateGoogleDirectionAPILink",
+      description: "Extracts destination from user query to generate a Google Directions API link. Use when a user asks for directions to a location. The user may provide an address or a store/establishment name. Either can be used as the destination.",
+      parameters: {
+        type: "object",
+        properties: {
+          destination: {
+            type: "string",
+            description: "The user's requested destination for directions. This can be an address or a store/establishment name."
+          },
+          address:{
+            type: "boolean",
+            description: "Indicates if the destination is an address. If true, the destination is treated as a full address; if false, it is treated as a store/establishment name."
+          }
+        },
+        required: ["destination", "address"]
+      }
+    }
+  },
   {
     type: "function" as "function",
     function: {
@@ -180,7 +186,7 @@ export const openAITools= [
     type: "function" as "function",
     function: {
       name: "useDoorfrontAPI",
-      description: "Fetches panorama data from the Doorfront API based on user location. Use when a user asks where is a locations entrance or wants to know what to expect when they arrive at a location.",
+      description: "Fetches panorama data from the Doorfront API based on user location. Use when a user asks where is a locations entrance or wants to know what to expect when they arrive at a location." ,
       parameters: {
         type: "object",
         properties: {

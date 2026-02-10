@@ -14,6 +14,7 @@
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
+    "@google/generative-ai": "^0.24.1",
     "@mui/icons-material": "^6.4.4",
     "@mui/material": "^6.4.10",
     "axios": "^1.7.3",
@@ -23,6 +24,7 @@
     "express": "^4.19.2",
     "fetch": "^1.1.0",
     "firebase": "^10.12.5",
+    "google": "^2.1.0",
     "gtfs-realtime-bindings": "^1.1.1",
     "howler": "^2.2.4",
     "microsoft-cognitiveservices-speech-sdk": "^1.44.1",
