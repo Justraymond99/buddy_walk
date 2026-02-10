@@ -171,7 +171,7 @@ export default function Test() {
                 // if you want “compass” you may need to invert it:
                 headingRef.current = e.alpha
             }
-            console.log('heading (approx):', headingRef.current);
+            // console.log('heading (approx):', headingRef.current);
             
         }, false);
     }, []);
@@ -187,9 +187,17 @@ export default function Test() {
                     
                     if (currentChatId === "") {
                         // Use localStorage to get the name if it exists, otherwise do not include the name
+                        // upload the image to firebase
+                        // get the url back from firebase
+                        // save the url in imageURL rather than the base64 image to save space
                         const res3 = localStorage.getItem('name') ? 
-                            await createChatLog({ user: localStorage.getItem('name') as string, messages: [{ input: userInput, output: openAIResponse + lastError, imageURL: image as string, location: { lat: coords?.latitude as number, lon: coords?.longitude as number } }] }) : 
-                            await createChatLog({ messages: [{ input: userInput, output: openAIResponse + lastError, imageURL: image as string, location: { lat: coords?.latitude as number, lon: coords?.longitude as number } }] })
+                            await createChatLog(
+                                { user: localStorage.getItem('name') as string, messages: [
+                                    { input: userInput, output: openAIResponse + lastError, imageURL: image as string, location: { lat: coords?.latitude as number, lon: coords?.longitude as number } }
+                                ]}) : 
+                            await createChatLog(
+                                { messages: [{ input: userInput, output: openAIResponse + lastError, imageURL: image as string, location: { lat: coords?.latitude as number, lon: coords?.longitude as number } }] }
+                            )
                         setLastError("")
                         console.log('chatLog', res3)
                         if (res3) {
@@ -433,6 +441,7 @@ export default function Test() {
 
             //console.log('Sending request data to backend:', data);
             const res = await sendTextRequest(data)
+            // image to backend for firebase
             if (res) {
                 //console.log('Received response from OpenAI:', res);
                 setOpenAIResponse(res.output);
@@ -463,21 +472,20 @@ export default function Test() {
     }
     // -------------------------------------------------------------------------------------------------------------------
     //speech to text- Speech recognition
-    const startListening = (e: React.PointerEvent) => {
+    const startListening = () => {
         if (!isListening){ 
-            e.currentTarget.setPointerCapture(e.pointerId);
             
             if (!('webkitSpeechRecognition' in window)) {
                 alert('Speech recognition is not supported in your browser.');
                 return;
             }
-            recognitionRef.current?.start();
-        } else recognitionRef.current?.stop();
+           if(recognitionRef.current) recognitionRef.current.start();
+        } else if(recognitionRef.current) recognitionRef.current.stop();
     };
 
-    const stopListening = (e: React.PointerEvent) => {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-        recognitionRef.current?.stop();
+    const stopListening = () => {
+
+        if(recognitionRef.current && typeof recognitionRef.current.stop === 'function') recognitionRef.current.stop();
         setIsListening(false);
         // console.log(useSound('ui/item_deselect')); // Play sound when stopping listening
     };
@@ -567,6 +575,14 @@ export default function Test() {
         e.currentTarget.releasePointerCapture(e.pointerId);
     }
 
+    function tapToListen() {
+        if(isListening){
+            stopListening();
+        } else {
+            startListening();
+        }
+    }
+
     // -------------------------------------------------------------------------------------------------------------------
     return (
 
@@ -645,6 +661,7 @@ export default function Test() {
                     <>
                         {/* Upload file button for desktop */}
                         {!isMobile && (
+                            <>
                             <AccessibleButton
                                 sx={{
                                     width: '100%',
@@ -658,16 +675,20 @@ export default function Test() {
                                     },
                                 }}
                                 aria-label={image || videoBlob ? "Reupload file" : "Upload file"}
+                                onClick={() => fileInputRef?.current?.click()}
                             >
                                 {cameraMode === 'video' ? "UPLOAD VIDEO" : "UPLOAD IMAGE"}
-                                <input
-                                    accept="image/*,video/*"
-                                    type="file"
-                                    capture="environment"
-                                    onChange={(e) => handleCapture(e.target)}
-                                    style={{ display: 'none' }}
-                                />
+                                
                             </AccessibleButton>
+                            <input
+                                ref={fileInputRef}
+                                accept="image/*,video/*"
+                                type="file"
+                                capture="environment"
+                                onChange={(e) => handleCapture(e.target)}
+                                style={{ display: 'none' }}
+                            />
+                            </>
                         )}
                         {/* ----------------------------------------------------------------------------------------------------------- */}
                         {/* take picture/video buttons for mobile */}
@@ -855,16 +876,17 @@ export default function Test() {
                 />
                 {/* speech to text button below */}
                 <Button
-                    onPointerDown={(e) => startListening(e)}
-                    // onPointerDown={()=> SpeechRecognition.startListening}
-                    onPointerUp={(e) => stopListening(e)}
-                    // onPointerUp={() => {SpeechRecognition.stopListening(); console.log(transcript)}}
-                    // onTouchStart={startListening}
-                    // onTouchEnd={stopListening}
-                    onPointerCancel={stopListening} // Ensure it stops if finger is moved
-                    onPointerLeave={stopListening} // Stop if pointer leaves the button
-                    aria-label="Hold to Ask a Question"
-                    onPointerOut={stopListening} // Stop if pointer is moved out
+                    // onPointerDown={(e) => startListening(e)}
+                    // // onPointerDown={()=> SpeechRecognition.startListening}
+                    // onPointerUp={(e) => stopListening(e)}
+                    // // onPointerUp={() => {SpeechRecognition.stopListening(); console.log(transcript)}}
+                    // // onTouchStart={startListening}
+                    // // onTouchEnd={stopListening}
+                    // onPointerCancel={stopListening} // Ensure it stops if finger is moved
+                    // onPointerLeave={stopListening} // Stop if pointer leaves the button
+                    aria-label="Tap to Ask a Question"
+                    // onPointerOut={stopListening} // Stop if pointer is moved out
+                    onClick={() => tapToListen()}
                     // onPointerCancel={() => SpeechRecognition.stopListening()}
                     style={{
                         padding: "12px 28px",          // shorter height and wider for tap comfort
@@ -886,7 +908,7 @@ export default function Test() {
                         minWidth: '50%', // minimum width for better touch target
                     }}
                 >
-                    {isListening ? 'Listening...' : 'Hold to Ask a Question'}
+                    {isListening ? 'Listening...' : 'Tap to Ask a Question'}
                 </Button>
             </GraySection>
 
@@ -992,7 +1014,7 @@ export default function Test() {
 
                         </Box>
                     )}
-
+                    
                     {/* code below adds the drag/seek audio bar */}
                     {/* {audioUrl && <audio id="ttsAudio" src={audioUrl} autoPlay style={{display:"none"}}/>}  */}
                     {/* --------------------------------------------------------------------------------------------- */}
