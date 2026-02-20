@@ -12,13 +12,8 @@ export function FirebaseStart(){
     measurementId: import.meta.env.VITE_FIREBASE_MEASURE_ID,
   };
 
-  console.log(import.meta.env.VITE_FIREBASE_API_KEY)
-// Initialize Firebase
   const app = initializeApp(firebaseConfig);
-
-// Initialize Cloud Firestore
   const db = getFirestore(app);
-  console.log(db)
   async function uploadFirebase(){
     try {
       const docRef = await addDoc(collection(db, "users"), {
