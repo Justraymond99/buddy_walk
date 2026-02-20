@@ -16,7 +16,7 @@ export class ChatLogService {
 
     } catch (e) {
       const error = new Error(`${e}`);
-      res.json({
+      res.status(500).json({
         code: 500,
         message: error.message
       })
@@ -25,7 +25,6 @@ export class ChatLogService {
 
   async addChat(ctx: AppContext, body: { chat: messageInterface, id: string }) {
     const {res} = ctx
-    // console.log(body)
     try {
 
       const result = await chatLogModel.findByIdAndUpdate(body.id, {$push: {messages: body.chat}}, {new: true})
@@ -37,7 +36,7 @@ export class ChatLogService {
       }
     } catch (e) {
       const error = new Error(`${e}`);
-      res.json({
+      res.status(500).json({
         code: 500,
         message: error.message
       })
@@ -59,7 +58,7 @@ export class ChatLogService {
       }
     }catch (e) {
       const error = new Error(`${e}`);
-      res.json({
+      res.status(500).json({
         code: 500,
         message: error.message
       })
