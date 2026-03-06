@@ -6,19 +6,27 @@ dotenv.config();
 const doorfront_uri = process.env.DOORFRONT_URI;
 const dbName = 'myFirstDatabase';
 const collectionName = 'collect_panorama';
-let client: MongoClient;
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+let clientPromise: Promise<MongoClient> | null = null;
 
 async function connectToDoorfrontDB() {
   try {
-    if(!client){
-        client = new MongoClient(doorfront_uri!, {
-        maxPoolSize: 10,
-        });
-        await client.connect();
+    if (!clientPromise) {
+      clientPromise = (async () => {
+        const c = new MongoClient(doorfront_uri!, { maxPoolSize: 10 });
+        await c.connect();
         console.log('Connected to Doorfront database');
+        return c;
+      })();
     }
-    return client.db(dbName);
+    const c = await clientPromise;
+    return c.db(dbName);
   } catch (error) {
+    clientPromise = null;
     console.error('Error connecting to Doorfront database:', error);
   }
 }
@@ -30,7 +38,7 @@ export async function getPanoramaData(ctx: AppContext, address: string) {
     if (db && address && address.trim() !== '') {
         const collection = db.collection(collectionName);
         const data = await collection.findOne(
-            { address:{$regex: address, $options: 'i' }}, 
+            { address: { $regex: escapeRegex(address), $options: 'i' } }, 
             { projection: {url:1, human_labels:{$slice:1}, creator:1,address:1, location: 1, image_description:1 }})
         if (data) { 
             console.log("Panorama data fetched successfully for address:", address);
