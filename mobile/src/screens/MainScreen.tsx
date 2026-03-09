@@ -15,13 +15,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
-import { Magnetometer } from 'expo-sensors';
+import { Magnetometer, DeviceMotion } from 'expo-sensors';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import * as VideoThumbnails from 'expo-video-thumbnails';
+import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
+
 import CallAccessARideButton from '../components/CallAccessARideButton';
 import { sendTextRequest } from '../api/openAi';
-import { createChatLog, addChatToChatLog } from '../api/chatLog';
+import { createChatLog, addChatToChatLog, flagMessage } from '../api/chatLog';
 import { getToken } from '../api/token';
 import { RequestData, CustomCoords } from '../types';
 
@@ -44,8 +48,13 @@ export default function MainScreen() {
   const [currentChatId, setCurrentChatId] = useState('');
   const [currentMessageId, setCurrentMessageId] = useState('');
 
+  const [videoFrames, setVideoFrames] = useState<string[]>([]);
+  const [reportVisible, setReportVisible] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+
   const locationRef = useRef<Location.LocationObject | null>(null);
   const headingRef = useRef<number>(0);
+  const orientationRef = useRef<{ alpha: number | null; beta: number | null; gamma: number | null }>({ alpha: null, beta: null, gamma: null });
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
   const azureTokenRef = useRef<{ token: string; region: string } | null>(null);
@@ -72,6 +81,17 @@ export default function MainScreen() {
       headingRef.current = (angle + 360) % 360;
     });
 
+    DeviceMotion.setUpdateInterval(500);
+    const motionSub = DeviceMotion.addListener(({ rotation }) => {
+      if (rotation) {
+        orientationRef.current = {
+          alpha: rotation.alpha ?? null,
+          beta: rotation.beta ?? null,
+          gamma: rotation.gamma ?? null,
+        };
+      }
+    });
+
     (async () => {
       try {
         const tok = await getToken();
@@ -84,7 +104,38 @@ export default function MainScreen() {
     return () => {
       locationSub?.remove();
       magnetometerSub?.remove();
+      motionSub.remove();
     };
+  }, []);
+
+  // ─── Sound effects ───────────────────────────────────────────────────────
+
+  const playListenStart = useCallback(async () => {
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require('../../assets/listen_start.mp3'),
+        { shouldPlay: true, volume: 0.6 }
+      );
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) sound.unloadAsync();
+      });
+    } catch {
+      // sound file missing or audio unavailable — fail silently
+    }
+  }, []);
+
+  const playListenStop = useCallback(async () => {
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require('../../assets/listen_stop.mp3'),
+        { shouldPlay: true, volume: 0.6 }
+      );
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) sound.unloadAsync();
+      });
+    } catch {
+      // sound file missing or audio unavailable — fail silently
+    }
   }, []);
 
   // ─── TTS ─────────────────────────────────────────────────────────────────
@@ -143,8 +194,10 @@ export default function MainScreen() {
   // ─── Camera: tap = photo, hold = video ───────────────────────────────────
 
   function handlePressIn() {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     holdTimerRef.current = setTimeout(() => {
       holdTimerRef.current = null;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       startVideoRecording();
     }, HOLD_THRESHOLD_MS);
   }
@@ -155,6 +208,7 @@ export default function MainScreen() {
       holdTimerRef.current = null;
       await takePhoto();
     } else if (recordingMode === 'recording-video') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await stopVideoRecording();
     }
   }
@@ -174,18 +228,48 @@ export default function MainScreen() {
     }
   }
 
+  async function extractFrames(uri: string): Promise<string[]> {
+    const frames: string[] = [];
+    const intervalSecs = 2;
+    const maxFrames = 8;
+    try {
+      for (let i = 0; i < maxFrames; i++) {
+        const { uri: frameUri } = await VideoThumbnails.getThumbnailAsync(uri, {
+          time: i * intervalSecs * 1000,
+          quality: 0.5,
+        });
+        const response = await fetch(frameUri);
+        const blob = await response.blob();
+        const reader = new FileReader();
+        const base64 = await new Promise<string>((resolve) => {
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+        frames.push(base64);
+      }
+    } catch {
+      // fewer frames than expected is fine — return what we got
+    }
+    return frames;
+  }
+
   async function startVideoRecording() {
     if (!cameraRef.current) return;
     try {
       setRecordingMode('recording-video');
+      setVideoFrames([]);
       speak('Recording video');
-      // recordAsync resolves when stopRecording is called or maxDuration is reached
       const video = await cameraRef.current.recordAsync({ maxDuration: MAX_VIDEO_DURATION_MS / 1000 });
       if (video?.uri) {
-        speak('Video captured');
+        speak('Processing video');
+        const frames = await extractFrames(video.uri);
+        if (frames.length > 0) {
+          setVideoFrames(frames);
+          speak(`Video captured. ${frames.length} frames extracted`);
+        } else {
+          speak('Video captured');
+        }
         setUserInput('Describe the video');
-        // Video URI stored for future frame extraction — not yet implemented on mobile
-        // TODO: extract frames with expo-video-thumbnails and send as images
       }
     } catch (e) {
       console.error('startVideoRecording error:', e);
@@ -256,6 +340,8 @@ export default function MainScreen() {
       const { recording } = await Audio.Recording.createAsync(AZURE_RECORDING_OPTIONS);
       audioRecordingRef.current = recording;
       setIsListening(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      playListenStart();
       speak('Listening');
     } catch (e) {
       console.error('startListening error:', e);
@@ -274,6 +360,8 @@ export default function MainScreen() {
 
       if (!uri || !azureTokenRef.current) return;
 
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      playListenStop();
       speak('Processing');
 
       const { token, region } = azureTokenRef.current;
@@ -331,11 +419,13 @@ export default function MainScreen() {
 
   async function handleSubmit() {
     if (!userInput.trim()) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       speak('Please enter a question first');
       return;
     }
     try {
       setLoading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       stopSpeaking();
       speak('Loading response');
 
@@ -349,13 +439,19 @@ export default function MainScreen() {
             altitudeAccuracy: loc.coords.altitudeAccuracy,
             heading: headingRef.current,
             speed: loc.coords.speed,
-            orientation: null,
+            orientation: orientationRef.current,
           }
         : null;
 
+      const images: (string | null)[] = videoFrames.length > 0
+        ? videoFrames
+        : capturedImage
+          ? [capturedImage]
+          : [null];
+
       const data: RequestData = {
         text: userInput,
-        image: capturedImage ? [capturedImage] : [null],
+        image: images,
         coords,
       };
 
@@ -364,7 +460,8 @@ export default function MainScreen() {
         setAiResponse(res.output);
         setUserInput('');
         setCapturedImage(null);
-        // Announce to screen readers
+        setVideoFrames([]);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         AccessibilityInfo.announceForAccessibility(res.output);
       }
     } catch (e) {
@@ -382,9 +479,11 @@ export default function MainScreen() {
   const cameraReady = cameraPermission?.granted;
   const captureLabel = recordingMode === 'recording-video'
     ? 'Recording... release to stop'
-    : capturedImage
-      ? 'Image Captured — tap to retake'
-      : 'Tap for Photo  ·  Hold for Video';
+    : videoFrames.length > 0
+      ? `Video Captured — ${videoFrames.length} frames`
+      : capturedImage
+        ? 'Image Captured — tap to retake'
+        : 'Tap for Photo  ·  Hold for Video';
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -420,10 +519,10 @@ export default function MainScreen() {
                 {recordingMode === 'recording-video' ? 'STOP VIDEO' : 'CAMERA BUTTON'}
               </Text>
             </Pressable>
-          ) : capturedImage ? (
+          ) : capturedImage || videoFrames.length > 0 ? (
             <Button
               mode="contained"
-              onPress={() => { setCapturedImage(null); setAiResponse(''); }}
+              onPress={() => { setCapturedImage(null); setVideoFrames([]); setAiResponse(''); }}
               style={styles.retakeButton}
               labelStyle={styles.retakeLabel}
               accessibilityLabel="Retake photo or video"
@@ -500,6 +599,27 @@ export default function MainScreen() {
                 >
                   <Text style={styles.actionButtonLabel}>🔊 Play / Pause</Text>
                 </Pressable>
+
+                <Pressable
+                  onPress={async () => {
+                    await Clipboard.setStringAsync(aiResponse);
+                    speak('Response copied');
+                  }}
+                  style={styles.actionButton}
+                  accessibilityLabel="Copy response to clipboard"
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.actionButtonLabel}>📋 Copy</Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => setReportVisible(true)}
+                  style={[styles.actionButton, styles.reportButton]}
+                  accessibilityLabel="Report this response"
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.reportButtonLabel}>⚑ Report</Text>
+                </Pressable>
               </View>
 
               <Text
@@ -508,6 +628,48 @@ export default function MainScreen() {
               >
                 {aiResponse}
               </Text>
+
+              {reportVisible && (
+                <View style={styles.reportContainer}>
+                  <Text style={styles.reportTitle}>Why are you reporting this?</Text>
+                  <TextInput
+                    value={reportReason}
+                    onChangeText={setReportReason}
+                    placeholder="Describe the issue (optional)"
+                    placeholderTextColor="#888"
+                    style={styles.reportInput}
+                    multiline
+                    accessibilityLabel="Report reason input"
+                  />
+                  <View style={styles.reportActions}>
+                    <Pressable
+                      onPress={async () => {
+                        await flagMessage({
+                          messageId: currentMessageId,
+                          chatlogId: currentChatId,
+                          flagReason: reportReason,
+                        });
+                        setReportVisible(false);
+                        setReportReason('');
+                        speak('Response reported. Thank you.');
+                      }}
+                      style={styles.actionButton}
+                      accessibilityLabel="Submit report"
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.actionButtonLabel}>Submit</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => { setReportVisible(false); setReportReason(''); }}
+                      style={[styles.actionButton, styles.cancelButton]}
+                      accessibilityLabel="Cancel report"
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.cancelButtonLabel}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
             </View>
           )}
         </View>
@@ -663,5 +825,46 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     lineHeight: 26,
+  },
+  reportButton: {
+    backgroundColor: '#3a0000',
+  },
+  reportButtonLabel: {
+    color: '#ff6b6b',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  reportContainer: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    padding: 16,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#ff6b6b',
+  },
+  reportTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  reportInput: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 15,
+    color: '#000',
+    minHeight: 60,
+  },
+  reportActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelButton: {
+    backgroundColor: '#333',
+  },
+  cancelButtonLabel: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
 });
