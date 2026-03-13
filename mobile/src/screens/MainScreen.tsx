@@ -9,6 +9,7 @@ import {
   Platform,
   AccessibilityInfo,
   Alert,
+  Keyboard,
 } from 'react-native';
 import { Text, Button, IconButton } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -326,11 +327,18 @@ export default function MainScreen() {
 
   async function startListening() {
     if (!azureTokenRef.current) {
-      Alert.alert(
-        'Voice Input Unavailable',
-        'Could not connect to the speech service. Make sure the backend is running and try again.'
-      );
-      return;
+      try {
+        const tok = await getToken();
+        if (tok) {
+          azureTokenRef.current = tok;
+        } else {
+          Alert.alert('Voice Input Unavailable', 'Could not connect to the speech service. Make sure the backend is running and try again.');
+          return;
+        }
+      } catch {
+        Alert.alert('Voice Input Unavailable', 'Could not connect to the speech service. Make sure the backend is running and try again.');
+        return;
+      }
     }
     try {
       await Audio.setAudioModeAsync({
@@ -424,6 +432,7 @@ export default function MainScreen() {
       return;
     }
     try {
+      Keyboard.dismiss();
       setLoading(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       stopSpeaking();
@@ -592,7 +601,10 @@ export default function MainScreen() {
             <View style={styles.responseContainer} accessibilityLiveRegion="polite">
               <View style={styles.responseActions}>
                 <Pressable
-                  onPress={() => Speech.speaking() ? Speech.stop() : speak(aiResponse)}
+                  onPress={async () => {
+                    const speaking = await Speech.isSpeakingAsync();
+                    speaking ? Speech.stop() : speak(aiResponse);
+                  }}
                   style={styles.actionButton}
                   accessibilityLabel="Play or pause text to speech"
                   accessibilityRole="button"
