@@ -16,7 +16,7 @@ export class ChatLogService {
 
     } catch (e) {
       const error = new Error(`${e}`);
-      res.json({
+      res.status(500).json({
         code: 500,
         message: error.message
       })
@@ -37,7 +37,7 @@ export class ChatLogService {
       }
     } catch (e) {
       const error = new Error(`${e}`);
-      res.json({
+      res.status(500).json({
         code: 500,
         message: error.message
       })
@@ -59,7 +59,7 @@ export class ChatLogService {
       }
     }catch (e) {
       const error = new Error(`${e}`);
-      res.json({
+      res.status(500).json({
         code: 500,
         message: error.message
       })

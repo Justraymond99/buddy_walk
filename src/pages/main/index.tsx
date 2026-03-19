@@ -86,6 +86,12 @@ export default function Test() {
                 recognitionRef.current = recognition;
             }
         })()
+        return () => {
+            if (recognitionRef.current) {
+                recognitionRef.current.abort?.();
+                recognitionRef.current = null;
+            }
+        };
     }, [])
 
     useEffect(()=> {
@@ -106,23 +112,16 @@ export default function Test() {
 
 
     useEffect(() => {
-        navigator.geolocation.getCurrentPosition((pos) => {
-            // console.log(pos.coords)
-        }, (error) => {
+        navigator.geolocation.getCurrentPosition(() => {}, (error) => {
             console.log(error.message);
-            //setOpenAIResponse(error.message)
         });
-        requestAccess().then((granted) => {
-            // console.log(orientation)
+        requestAccess().then(() => {
             if (orientation)
                 setCurrentOrientation({ alpha: orientation.alpha, beta: orientation.beta, gamma: orientation.gamma });
-            // console.log(currentOrientation)
         })
-        // console.log(orientation)
 
         if (orientation) {
             setCurrentOrientation({ alpha: orientation.alpha, beta: orientation.beta, gamma: orientation.gamma });
-            // console.log(currentOrientation)
         } else {
             setCurrentOrientation({ alpha: null, beta: null, gamma: null });
         }
@@ -135,7 +134,7 @@ export default function Test() {
                             videoStreamRef.current = stream;
                             if (videoRef.current) {
                                 videoRef.current.srcObject = stream;
-                                videoRef.current.playsInline = true; // Ensure video plays inline on iOS
+                                videoRef.current.playsInline = true;
                                 videoRef.current.muted = true;
                             }
                         })
@@ -146,34 +145,32 @@ export default function Test() {
         }
         try {
             navigator.permissions.query({ name: 'microphone' }).then(result => {
-                if (result.state === 'granted') {
-                    // Permission already granted — proceed without prompt
-                } else if (result.state === 'prompt') {
-                    navigator.mediaDevices
-                        .getUserMedia({ audio: true })
-                } else if (result.state === 'denied') {
-                    // Permission denied — show instructions to enable manually
+                if (result.state === 'prompt') {
+                    navigator.mediaDevices.getUserMedia({ audio: true }).catch(console.error);
                 }
             });
         } catch (error) {
             console.error("Error accessing the mic:", error);
         }
+
+        return () => {
+            videoStreamRef.current?.getTracks().forEach(t => t.stop());
+            videoStreamRef.current = null;
+        };
     }, []);
 
     useEffect(() => {
-        window.addEventListener('deviceorientation', function(e: any) {
+        function handleDeviceOrientation(e) {
             if (typeof e.webkitCompassHeading === 'number') {
-                // already 0–360° relative to north
-                headingRef.current = e.webkitCompassHeading
-            } else {
-                // fallback to alpha on Android/Chrome
-                // e.alpha is 0–360°, but measured clockwise from the device’s initial orientation
-                // if you want “compass” you may need to invert it:
-                headingRef.current = e.alpha
+                headingRef.current = e.webkitCompassHeading;
+            } else if (e.alpha !== null) {
+                headingRef.current = e.alpha;
             }
-            // console.log('heading (approx):', headingRef.current);
-            
-        }, false);
+        }
+        window.addEventListener('deviceorientation', handleDeviceOrientation, false);
+        return () => {
+            window.removeEventListener('deviceorientation', handleDeviceOrientation, false);
+        };
     }, []);
 
     useEffect(() => {
@@ -732,11 +729,12 @@ export default function Test() {
                                     }}
                                     onPointerDown={handlePointerDown}
                                     onPointerUp={handlePointerUp}
-                                    onPointerCancel={handlePointerUp} // Ensure it stops if finger is moved
-                                    onPointerLeave={handlePointerUp} // Stop if pointer leaves the button
-                                    onPointerOut={handlePointerUp} // Stop if pointer is moved out
-                                    disabled={isRecording} // Disable button while recording
-                                    aria-label="Tap for Picture, Hold for Video"
+                                    onPointerCancel={handlePointerUp}
+                                    onPointerLeave={handlePointerUp}
+                                    onPointerOut={handlePointerUp}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click(); setUserInput('Describe the image'); } }}
+                                    disabled={isRecording}
+                                    aria-label="Tap for Picture, Hold for Video. Press Enter or Space to upload a photo."
                                 >
                                     {isRecording ? "STOP VIDEO" : "CAMERA BUTTON"}
                                 </Button>
@@ -1006,7 +1004,10 @@ export default function Test() {
                             </AccessibleButton>}
                             <AccessibleTypography>{openAIResponse}</AccessibleTypography>
                             {openAIResponse != "" && 
-                            <AccessibleButton onClick={()=> {navigator.clipboard.writeText(openAIResponse); speak("Response copied")}}>
+                            <AccessibleButton
+                                onClick={()=> {navigator.clipboard.writeText(openAIResponse); speak("Response copied")}}
+                                aria-label="Copy response to clipboard"
+                            >
                                 Copy Response
                             </AccessibleButton>
                             }
