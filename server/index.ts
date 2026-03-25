@@ -1,4 +1,4 @@
-import express, { Application } from 'express';
+import express, { Application, Request, Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import path from 'path';
@@ -23,6 +23,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     console.error("Failed to connect to MongoDB:", error);
     process.exit(1);
   }
+
   const app: Application = express();
   const port = process.env.PORT || 8000;
 
