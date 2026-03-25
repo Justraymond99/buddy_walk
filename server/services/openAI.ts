@@ -8,9 +8,6 @@ import fetch from "node-fetch";
 import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
-import fs from "fs";
-import path from "path";
-import { json } from "stream/consumers";
 
 const mtaFeeds: Record<string, string> = {
   "1": "nyct%2Fgtfs", "2": "nyct%2Fgtfs", "3": "nyct%2Fgtfs", "4": "nyct%2Fgtfs", "5": "nyct%2Fgtfs", "6": "nyct%2Fgtfs",
@@ -75,15 +72,6 @@ async function geocodeCoordinates(latitude: number, longitude: number) {
   }
 }
 
-function writeFile(data: any) {
-  fs.writeFile('route.json', JSON.stringify(data), (err) => {
-    if (err) {
-      console.error('Error writing file:', err);
-    } else {
-      console.log('File written successfully');
-    }
-  });
-}
 
 // streetview-heading.ts
 
@@ -105,7 +93,32 @@ interface GeocodeResponse {
 
 interface StreetViewMetadataResponse {
   status: string;
-  location?: LatLng; // 'location' is the car's position
+  location?: LatLng;
+}
+
+interface PlaceResult {
+  name: string;
+  geometry: { location: LatLng };
+  rating: number;
+  vicinity: string;
+  place_id?: string;
+  opening_hours?: { open_now: boolean };
+}
+
+interface PlaceCandidate {
+  name: string;
+  formatted_address: string;
+  place_id: string;
+  opening_hours?: { open_now: boolean };
+}
+
+interface DistanceElement {
+  distance: { value: number; text: string };
+  duration: { value: number; text: string };
+}
+
+interface DistanceRow {
+  elements: DistanceElement[];
 }
 
 
@@ -170,8 +183,8 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
 
     // Step D: Construct Final URL
     const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${process.env.GOOGLE_API_KEY}`;
-
-    console.log(`\n✅ Final Image URL:\n${finalUrl}`);
+    
+    console.log(`\nStreet View image URL constructed for: ${address}`);
     return finalUrl;
 
   } catch (error) {
@@ -189,9 +202,18 @@ async function getTrainInfo(url: string, targetRoute: string, userLat: number, u
   console.log(`[MTA] Fetching live data for the ${targetRoute} train...`);
   
   try {
-    const response = await fetch(url);
-    if (!response.ok) return "Error: Could not connect to the MTA at this time.";
-
+    const response = await fetch("https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace"
+      //   , {
+      //   headers: {
+      //     "x-api-key": "<redacted>",
+      //     // replace with your GTFS-realtime source's auth token
+      //     // e.g. x-api-key is the header value used for NY's MTA GTFS APIs
+      //   },
+      // }
+    );
+    if (!response.ok) {
+      throw new Error(`${response.url}: ${response.status} ${response.statusText}`);
+    }
     const buffer = await response.arrayBuffer();
     const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(buffer));
 
@@ -215,45 +237,15 @@ async function getTrainInfo(url: string, targetRoute: string, userLat: number, u
         });
       }
     });
-
-    if (!closestStopId) {
-      return `There are currently no active ${targetRoute} trains scheduled near your location.`;
-    }
-
-    // STEP 2: Collect the schedules and use the real station name
-    const closestStopName = stopsMap.get(closestStopId)?.name || closestStopId;
-    let trainSchedule = "";
-    let count = 0;
-
-    feed.entity.forEach((entity: any) => {
-      if (entity.tripUpdate?.trip?.routeId === targetRoute) {
-        
-        // Check if this train stops at our station (either Northbound or Southbound)
-        const myStop = entity.tripUpdate.stopTimeUpdate?.find((s: any) => s.stopId.startsWith(closestStopId));
-        
-        if (myStop && count < 3) {
-          const unixTime = myStop.arrival?.time?.low || myStop.departure?.time?.low;
-          if (unixTime) {
-            const date = new Date(unixTime * 1000);
-            const direction = myStop.stopId.endsWith("N") ? "Uptown/Manhattan-bound" : "Downtown/Brooklyn-bound";
-            
-            trainSchedule += `A ${direction} ${targetRoute} train is arriving at ${closestStopName} at ${date.toLocaleTimeString()}. `;
-            count++;
-          }
-        }
-      }
-    });
-
-    return trainSchedule || `No upcoming schedules found for the ${targetRoute} train at ${closestStopName}.`;
-
-  } catch (error) {
-    console.error("[MTA] Error parsing data:", error);
-    return "Error processing real-time MTA data.";
+  }
+  catch (error) {
+    console.error(error);
   }
 }
 
 const tools = openAITools
 
+const MAX_HISTORY = 20;
 const openAIHistory: history[] = []
 
 export class OpenAIService {
@@ -339,7 +331,7 @@ export class OpenAIService {
         const parsedArgs = JSON.parse(parsedRequest.choices[0].message.tool_calls![0].function.arguments)
         //get link
         const { link } = parsedArgs;
-        console.log(link + `&key=${process.env.GOOGLE_API_KEY}`)
+        console.log("Tool resolved API link:", link)
         // console.log("parsedArgs", parsedArgs);  
         if (link !== undefined && parsedRequest.choices[0].message.tool_calls![0].function.name !== "generateTrainInformation") {
           //use link
@@ -356,8 +348,8 @@ export class OpenAIService {
             // console.log(userContent);
           }
 
-          else {
-            const places: any = await axios.get(link + `&key=${process.env.GOOGLE_API_KEY}`);
+            else {
+            const places: { data: { results?: PlaceResult[], candidates?: PlaceCandidate[], rows?: DistanceRow[] } } = await axios.get(link + `&key=${process.env.GOOGLE_API_KEY}`);
             //if its giving back a nearby places link
             if (places.data.results) {
               completeAIPrompt += nearbyPlacesPrompt;
@@ -421,11 +413,7 @@ export class OpenAIService {
           // console.log(address)
           const reqlink = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?location=
             ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname%2Cgeometry&inputtype=textquery&input=${address.replace(/\s+/g, '%2C')}` + `&key=${process.env.GOOGLE_API_KEY}`;
-          console.log(reqlink)
-          const location: any = await axios.get(reqlink);
-          // console.log(location)
-          // console.log(geocodedCoords[0].formatted_address)
-          // remove st, nd, rd, th from address for better matching
+          const location: { data: { candidates: PlaceCandidate[] } } = await axios.get(reqlink);
           const cleanAddress = location.data.candidates[0].name.replace(/(\d+)(st|nd|rd|th)\b/gi, '$1');
           const panoramaData = await getPanoramaData(ctx, cleanAddress);
           if (panoramaData) {
@@ -523,20 +511,13 @@ export class OpenAIService {
             let cleanAddress;
             if (!parsedArgs.address) {
               const reqlink = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${content.coords.latitude},${content.coords.longitude}&rankby=distance&keyword=${parsedArgs.destination.replace(/\s+/g, '%20')}&key=${process.env.GOOGLE_API_KEY}`;
-              console.log(reqlink)
-              const location: any = await axios.get(reqlink);
-              // console.log(location)
-              console.log(reqlink)
-              // const placeInformation = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${location.data.results[0].place_id}&fields=formatted_address&key=${process.env.GOOGLE_API_KEY}`);
-              // console.log(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${location.data.results[0].place_id}&fields=formatted_address&key=${process.env.GOOGLE_API_KEY}`)
+              const location: { data: { results: PlaceResult[] } } = await axios.get(reqlink);
               formattedAddress = location.data.results[0].vicinity;
-              // console.log(`Formatted Address: ${formattedAddress}`);
-              // console.log("placeID call ",placeInformation.data.result.formatted_address);
             }
             else {
               const reqlink = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?location=
                 ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname&inputtype=textquery&input=${parsedArgs.destination.replace(/\s+/g, '%2C')}` + `&key=${process.env.GOOGLE_API_KEY}`;
-              const location: any = await axios.get(reqlink);
+              const location: { data: { candidates: PlaceCandidate[] } } = await axios.get(reqlink);
               // console.log(location)
               formattedAddress = location.data.candidates[0].formatted_address;
               cleanAddress = location.data.candidates[0].name.replace(/(\d+)(st|nd|rd|th)\b/gi, '$1');
@@ -576,7 +557,6 @@ export class OpenAIService {
             for (let i = 0; i < route.data.routes[0].legs[0].steps.length; i++) {
               relevantData += `Step ${i + 1}) ${route.data.routes[0].legs[0].steps[i].html_instructions} for ${route.data.routes[0].legs[0].steps[i].distance.text} \n`
             }
-            console.log(`https://maps.googleapis.com/maps/api/directions/json?mode=walking&origin=${content.coords.latitude},${content.coords.longitude}&destination=${doorLocation}&key=${process.env.GOOGLE_API_KEY}`)
             systemContent += relevantData
             // // step 4: Take each lat/lng from each point in route --> can just use encoded polyline
             // const polyline = route.data.routes[0].overview_polyline.points;
@@ -716,6 +696,7 @@ export class OpenAIService {
       });
       console.log('OpenAI API response:', chatCompletion.usage?.total_tokens);
       openAIHistory.push({ input: content.text, output: chatCompletion.choices[0].message.content as string, data: relevantData });
+      if (openAIHistory.length > MAX_HISTORY) openAIHistory.shift();
 
       // 3. Only update if both conditions are met AND we have a valid ID
       if (panoramaId) {

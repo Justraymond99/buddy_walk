@@ -7,9 +7,6 @@ import fetch from "node-fetch";
 import { getPanoramaData } from "./doorfront";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
-import fs from "fs";
-import path from "path";
-import { json } from "stream/consumers";
 
 dotenv.config();
 
@@ -38,15 +35,6 @@ async function geocodeCoordinates(latitude: number, longitude: number) {
   }
 }
 
-function writeFile(data: any) {
-  fs.writeFile('route.json', JSON.stringify(data), (err) => {
-    if (err) {
-      console.error('Error writing file:', err);
-    } else {
-      console.log('File written successfully');
-    }
-  });
-}
 
 // streetview-heading.ts
 
@@ -134,7 +122,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     // Step D: Construct Final URL
     const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${process.env.GOOGLE_API_KEY}`;
     
-    console.log(`\n✅ Final Image URL:\n${finalUrl}`);
+    console.log(`\n✅ Street View image URL constructed for: ${address}`);
     return finalUrl;
 
   } catch (error) {
@@ -161,31 +149,18 @@ async function getTrainInfo(url: string) {
       // }
     );
     if (!response.ok) {
-      const error = new Error(`${response.url}: ${response.status} ${response.statusText}`);
-      throw error;
-      process.exit(1);
+      throw new Error(`${response.url}: ${response.status} ${response.statusText}`);
     }
     const buffer = await response.arrayBuffer();
     const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(
       new Uint8Array(buffer)
     );
-    //console.log(feed.entity[0].tripUpdate)
-    feed.entity.forEach((entity) => {
-      // console.log(entity);  
-      // if (entity.vehicle?.stopId) {
-      //   console.log(entity.vehicle.stopId);
-      // }
-      // if(entity.tripUpdate?.trip) {
-      //   // console.log(entity.tripUpdate.trip);
-      //   if(entity.tripUpdate.trip.routeId === "A") {
-      //     console.log(entity.tripUpdate.trip.routeId);
-      //   }
-      // }
+    feed.entity.forEach((_entity) => {
+      // reserved for future entity processing
     });
   }
   catch (error) {
-    console.log(error);
-    process.exit(1);
+    console.error(error);
   }
 }
 
@@ -201,6 +176,7 @@ const geminiTools: Tool[] = [
   }
 ];
 
+const MAX_HISTORY = 20;
 const openAIHistory: history[] = []
 
 export class GeminiService {
@@ -288,7 +264,7 @@ export class GeminiService {
         const { link } = parsedArgs;
         
         if (link) {
-             console.log(link + `&key=${process.env.GOOGLE_API_KEY}`);
+             console.log("Tool resolved API link:", link);
         }
 
         if (link !== undefined && functionCall.name !== "generateTrainInformation") {
@@ -503,6 +479,7 @@ export class GeminiService {
       console.log('Gemini API response token count (approx):', finalResult.response.usageMetadata?.totalTokenCount);
       
       openAIHistory.push({ input: content.text, output: responseText, data: relevantData });
+      if (openAIHistory.length > MAX_HISTORY) openAIHistory.shift();
       res.status(200).json({ output: responseText, history: openAIHistory });
     }
     catch (e: any) {
