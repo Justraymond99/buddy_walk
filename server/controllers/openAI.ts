@@ -9,8 +9,8 @@ const openAIService = new OpenAIService();
 
 export class OpenAIController {
 
-  async parseUserRequest(req:Request, res:Response) {
-    const {text, lat, lng} = req.body
+  async parseUserRequest(req: Request, res: Response) {
+    const { text, lat, lng } = req.body;
     if (typeof text !== 'string' || !text.trim()) {
       res.status(400).json({ error: 'text is required and must be a non-empty string' });
       return;
@@ -19,33 +19,33 @@ export class OpenAIController {
       res.status(400).json({ error: 'lat and lng must be numbers' });
       return;
     }
-    await openAIService.parseUserRequest({req,res}, text, lat, lng)
+    await openAIService.parseUserRequest({req, res}, text, lat, lng);
   }
 
   async textRequest(req: Request, res: Response): Promise<void> {
-    const body: textRequestBody = req.body
+    const body: textRequestBody = req.body;
     if (typeof body.text !== 'string' || !body.text.trim()) {
       res.status(400).json({ error: 'text is required and must be a non-empty string' });
       return;
     }
-    await openAIService.textRequest({req,res}, body)
+    await openAIService.textRequest({req, res}, body);
   }
 
   async audioRequest(req: Request, res: Response): Promise<void> {
-    const {text} = req.body
+    const { text } = req.body;
     if (typeof text !== 'string' || !text.trim()) {
       res.status(400).json({ error: 'text is required and must be a non-empty string' });
       return;
     }
-    await openAIService.audioRequest({req,res}, text)
+    await openAIService.audioRequest({req, res}, text);
   }
 
   async doorfrontPanorama(req: Request, res: Response): Promise<void> {
-    const {address} = req.body
+    const { address } = req.body;
     if (typeof address !== 'string' || !address.trim()) {
       res.status(400).json({ error: 'address is required and must be a non-empty string' });
       return;
     }
-    await getPanoramaData({req,res}, address)
+    await getPanoramaData({req, res}, address);
   }
 }
