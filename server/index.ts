@@ -28,9 +28,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   const port = process.env.PORT || 8000;
 
   app.use(cors({
-    origin: process.env.NODE_ENV === 'production'
-      ? allowedOrigins
-      : true,
+    origin: process.env.NODE_ENV === 'production' ? allowedOrigins : true,
     credentials: true,
   }));
   app.use(express.json({ limit: '16mb' }));
@@ -41,11 +39,12 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   app.use("/api/db", chatLogRoute)
   app.use("/api/token", tokenRoute)
 
-  app.get('*', (_req: Request, res: Response) => {
+  app.get('*', (_req, res) => {
     res.sendFile(path.join(__dirname, '../dist', 'index.html'));
   });
 
   app.listen(port, () => {
     console.log(`Server is live at http://localhost:${port}`);
   });
+
 })()
