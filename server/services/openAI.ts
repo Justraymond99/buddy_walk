@@ -135,7 +135,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     // Step D: Construct Final URL
     const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${process.env.GOOGLE_API_KEY}`;
     
-    console.log(`\n✅ Street View image URL constructed for: ${address}`);
+    console.log(`\nStreet View image URL constructed for: ${address}`);
     return finalUrl;
 
   } catch (error) {
