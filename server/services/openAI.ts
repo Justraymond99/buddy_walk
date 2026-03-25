@@ -9,6 +9,55 @@ import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
 
+const mtaFeeds: Record<string, string> = {
+  "1": "nyct%2Fgtfs", "2": "nyct%2Fgtfs", "3": "nyct%2Fgtfs", "4": "nyct%2Fgtfs", "5": "nyct%2Fgtfs", "6": "nyct%2Fgtfs",
+  "A": "nyct%2Fgtfs-ace", "C": "nyct%2Fgtfs-ace", "E": "nyct%2Fgtfs-ace",
+  "N": "nyct%2Fgtfs-nqrw", "Q": "nyct%2Fgtfs-nqrw", "R": "nyct%2Fgtfs-nqrw", "W": "nyct%2Fgtfs-nqrw",
+  "B": "nyct%2Fgtfs-bdfm", "D": "nyct%2Fgtfs-bdfm", "F": "nyct%2Fgtfs-bdfm", "M": "nyct%2Fgtfs-bdfm",
+  "L": "nyct%2Fgtfs-l",
+  "G": "nyct%2Fgtfs-g",
+  "J": "nyct%2Fgtfs-jz", "Z": "nyct%2Fgtfs-jz",
+  "7": "nyct%2Fgtfs-7"
+};
+
+const stopsMap = new Map<string, { name: string, lat: number, lon: number }>();
+
+// Reads the static MTA 'stops.txt' file and loads station IDs, names, and GPS coordinates into memory.
+function loadStops() {
+  try {
+    const data = fs.readFileSync(path.join(__dirname, '../stops.txt'), 'utf8');
+    const lines = data.split('\n');
+    
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(',');
+      if (parts.length >= 4) {
+        const stopId = parts[0]; // e.g. "L17"
+        const stopName = parts[1]; // e.g. "Myrtle-Wyckoff Avs"
+        const stopLat = parseFloat(parts[2]);
+        const stopLon = parseFloat(parts[3]);
+        stopsMap.set(stopId, { name: stopName, lat: stopLat, lon: stopLon });
+      }
+    }
+    console.log(`[MTA] Loaded ${stopsMap.size} stops into memory.`);
+  } catch (err) {
+    console.error("[MTA] Error loading stops.txt:", err);
+  }
+}
+
+loadStops();
+
+// Calculates the straight-line distance (in kilometers) between two GPS coordinates using the Haversine formula.
+function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; 
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)); 
+  return R * c; 
+}
+
 dotenv.config();
 
 async function geocodeCoordinates(latitude: number, longitude: number) {
@@ -103,7 +152,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
       address
     )}&key=${process.env.GOOGLE_API_KEY}`;
-    
+
     const geoRes = await fetch(geoUrl);
     const geoData = (await geoRes.json()) as GeocodeResponse;
 
@@ -117,7 +166,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     // Step B: Find Nearest Panorama (Find the Car)
     // The Metadata API returns the specific lat/lng where the car was standing
     const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${houseLoc.lat},${houseLoc.lng}&key=${process.env.GOOGLE_API_KEY}`;
-    
+
     const metaRes = await fetch(metaUrl);
     const metaData = (await metaRes.json()) as StreetViewMetadataResponse;
 
@@ -149,8 +198,9 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
 }
 
 
-
-async function getTrainInfo(url: string) {
+async function getTrainInfo(url: string, targetRoute: string, userLat: number, userLon: number): Promise<string> {
+  console.log(`[MTA] Fetching live data for the ${targetRoute} train...`);
+  
   try {
     const response = await fetch("https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace"
       //   , {
@@ -165,21 +215,27 @@ async function getTrainInfo(url: string) {
       throw new Error(`${response.url}: ${response.status} ${response.statusText}`);
     }
     const buffer = await response.arrayBuffer();
-    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(
-      new Uint8Array(buffer)
-    );
-    //console.log(feed.entity[0].tripUpdate)
-    feed.entity.forEach((entity) => {
-      // console.log(entity);  
-      // if (entity.vehicle?.stopId) {
-      //   console.log(entity.vehicle.stopId);
-      // }
-      // if(entity.tripUpdate?.trip) {
-      //   // console.log(entity.tripUpdate.trip);
-      //   if(entity.tripUpdate.trip.routeId === "A") {
-      //     console.log(entity.tripUpdate.trip.routeId);
-      //   }
-      // }
+    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(buffer));
+
+    // STEP 1: Find the closest active station to the user
+    let closestStopId = "";
+    let minDistance = Infinity;
+
+    feed.entity.forEach((entity: any) => {
+      if (entity.tripUpdate?.trip?.routeId === targetRoute) {
+        entity.tripUpdate.stopTimeUpdate?.forEach((stop: any) => {
+          const baseStopId = stop.stopId.substring(0, 3); // Removing the trailing N or S (e.g., L17S -> L17)
+          const stopData = stopsMap.get(baseStopId);
+          
+          if (stopData) {
+            const dist = getDistance(userLat, userLon, stopData.lat, stopData.lon);
+            if (dist < minDistance) {
+              minDistance = dist;
+              closestStopId = baseStopId;
+            }
+          }
+        });
+      }
     });
   }
   catch (error) {
@@ -386,12 +442,12 @@ export class OpenAIService {
             const streetViewURL = await getStreetViewWithHeading(location.data.candidates[0].formatted_address);
             console.log("getting sv with proper heading... ", streetViewURL);
             if (streetViewURL) userContent.push({
-                type: 'image_url',
-                image_url: {
-                  url: streetViewURL,
-                  detail: 'high',
-                }
-              });
+              type: 'image_url',
+              image_url: {
+                url: streetViewURL,
+                detail: 'high',
+              }
+            });
             // relevantData = 'Data on this address has not been collected yet. Let the user know if they want detailed information on this address, they can visit doorfront.org and request it be added.';
             relevantData = `Data on this address has not been collected yet by volunteers. Use the street view image to describe the entrance features visible from street view. Let the user know this data is not validated by real users and may not be correct.
              When describing this image, provide a confidence level (1 to 5) for your description of the entrance based on how clear the image is.`;
@@ -467,7 +523,7 @@ export class OpenAIService {
               cleanAddress = location.data.candidates[0].name.replace(/(\d+)(st|nd|rd|th)\b/gi, '$1');
             }
             console.log(formattedAddress);
-            
+
 
             // step 2: get doorfront data if it exists for the formatted address
             const panoramaData = await getPanoramaData(ctx, cleanAddress);
@@ -583,6 +639,31 @@ export class OpenAIService {
         else if (parsedRequest.choices[0].message.tool_calls![0].function.name === "videoDescription") {
           completeAIPrompt += videoPrompt;
         }
+        else if (parsedRequest.choices[0].message.tool_calls![0].function.name === "generateTrainInformation") {
+          const parsedArgs = JSON.parse(parsedRequest.choices[0].message.tool_calls![0].function.arguments);
+
+          const route = parsedArgs.routeId?.toUpperCase() || "A";
+
+          console.log(`AI requested data for the ${route} train.`);
+
+          const feedSuffix = mtaFeeds[route];
+
+          if (!feedSuffix) {
+            systemContent += `\nError: The train ${route} doesn't exist on the MTA database.`;
+          } else {
+            const mtaUrl = `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/${feedSuffix}`;
+          
+          const trainData = await getTrainInfo(
+            mtaUrl, 
+            route, 
+            content.coords.latitude, 
+            content.coords.longitude
+          );
+
+            relevantData = `Live MTA Transit Information for line ${route}: ${trainData}`;
+            systemContent += `\n${relevantData}`;
+          }
+        }
 
       } else console.log("No tool calls found in OpenAI response");
       // const places = await fetchNearbyPlaces(content.coords.latitude, content.coords.longitude);
@@ -596,7 +677,7 @@ export class OpenAIService {
     // openAI separate text request
     try {
       //  console.log("user prompt: ", userContent)
-        console.log("system prompt: ", systemContent)
+      console.log("system prompt: ", systemContent)
       // console.log("openAI history: ", openAIHistory)
       systemContent += `Current Date and Time: ${new Date().toLocaleString()}`;
       // console.log("prompt: ", completeAIPrompt)
@@ -619,10 +700,10 @@ export class OpenAIService {
 
       // 3. Only update if both conditions are met AND we have a valid ID
       if (panoramaId) {
-          console.log("Generating new description for DF database...");
-          
-          // We pass the panorama _id and the AI's generated output
-          await addPanoramaDescription(panoramaId, chatCompletion.choices[0].message.content as string);
+        console.log("Generating new description for DF database...");
+
+        // We pass the panorama _id and the AI's generated output
+        await addPanoramaDescription(panoramaId, chatCompletion.choices[0].message.content as string);
       }
       res.status(200).json({ output: chatCompletion.choices[0].message.content, history: openAIHistory });
     }
