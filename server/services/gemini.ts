@@ -7,9 +7,6 @@ import fetch from "node-fetch";
 import { getPanoramaData } from "./doorfront";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
-import fs from "fs";
-import path from "path";
-import { json } from "stream/consumers";
 
 dotenv.config();
 
@@ -38,15 +35,6 @@ async function geocodeCoordinates(latitude: number, longitude: number) {
   }
 }
 
-function writeFile(data: any) {
-  fs.writeFile('route.json', JSON.stringify(data), (err) => {
-    if (err) {
-      console.error('Error writing file:', err);
-    } else {
-      console.log('File written successfully');
-    }
-  });
-}
 
 // streetview-heading.ts
 
@@ -134,7 +122,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     // Step D: Construct Final URL
     const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${process.env.GOOGLE_API_KEY}`;
     
-    console.log(`\n✅ Final Image URL:\n${finalUrl}`);
+    console.log(`\n✅ Street View image URL constructed for: ${address}`);
     return finalUrl;
 
   } catch (error) {
