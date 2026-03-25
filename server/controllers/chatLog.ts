@@ -11,7 +11,7 @@ export class ChatLogController {
       res.status(400).json({ error: 'messages must be a non-empty array' });
       return;
     }
-    await chatLogService.newChatLog({req,res}, body);
+    await chatLogService.newChatLog({req, res}, body);
   }
 
   async updateChatLog(req: Request, res: Response): Promise<void> {
@@ -24,15 +24,15 @@ export class ChatLogController {
       res.status(400).json({ error: 'chat.input and chat.output are required strings' });
       return;
     }
-    await chatLogService.addChat({req,res}, body);
+    await chatLogService.addChat({req, res}, body);
   }
 
   async flagMessage(req: Request, res: Response): Promise<void> {
-    const body: {messageId: string, flagReason:string, chatlogId:string} = req.body;
+    const body: {messageId: string, flagReason: string, chatlogId: string} = req.body;
     if (!body.messageId || !body.chatlogId) {
       res.status(400).json({ error: 'messageId and chatlogId are required' });
       return;
     }
-    await chatLogService.flagMessage({req,res}, body);
+    await chatLogService.flagMessage({req, res}, body);
   }
 }

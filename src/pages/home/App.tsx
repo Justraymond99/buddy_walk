@@ -77,7 +77,7 @@ const App: React.FC = () => {
   // Navigate to the main project route
   const handleContinue = () => {
     if (locationEnabled && cameraEnabled && microphoneEnabled) {
-      navigate('/test');
+      navigate('/main');
     }
   };
 
