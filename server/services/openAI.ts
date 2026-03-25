@@ -8,9 +8,6 @@ import fetch from "node-fetch";
 import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
-import fs from "fs";
-import path from "path";
-import { json } from "stream/consumers";
 
 dotenv.config();
 
