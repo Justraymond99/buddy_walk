@@ -8,6 +8,11 @@ export default defineConfig({
     VitePWA({registerType: 'autoUpdate'})
   ],
   server: {
+    // allows for local testing over https, allows camera access
+//     https: {
+//       key: fs.readFileSync('./.cert/key.pem'),
+//       cert: fs.readFileSync('./.cert/cert.pem'),
+//     },
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
