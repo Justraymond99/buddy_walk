@@ -9,7 +9,8 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "frontend": "vite --host",
-    "backend": "nodemon --exec npx tsx ./server/index.ts"
+    "backend": "nodemon --exec npx tsx ./server/index.ts",
+    "start": "node ./dist/server/index.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
