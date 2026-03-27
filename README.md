@@ -27,15 +27,15 @@ Buddy Walk is in the early stages of development, and we plan to add many more f
 
 Some features to look forward to include:
 
-1. Compound requests such as: Give me directions to the nearest {non-specific location/ chain establishment}
-2. How far am I from the nearest {non-specific location/ chain establishment}
-3. Orientation specfic responses such as: "You are facing ____ st in the northwest direction, continue down the street and take a left to arrive at your destination"
+1. MTA Realtime bus and train times
+2. Mobile app version
+3. More accurate GPS signal and recalibration interface
 
 
 ## Tech stack and how to set up
 Buddy Walk runs on Vite + React+ Typescript as a web application. The backend is Node.js with a MongoDB database. We collect your inputs and the application's outputs to further tune the application to give better responses.
 
-You can visit the live website here:https://contextual-vlm-dsk5e3vfca-uc.a.runapp/test
+You can visit the live website here: https://buddywalk.app
 
 If you'd like to download the source code and run the app off your own machine, run the following code: 
 
