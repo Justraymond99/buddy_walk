@@ -8,6 +8,8 @@ import fetch from "node-fetch";
 import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
+import fs from "fs";
+import path from "path";
 
 const mtaFeeds: Record<string, string> = {
   "1": "nyct%2Fgtfs", "2": "nyct%2Fgtfs", "3": "nyct%2Fgtfs", "4": "nyct%2Fgtfs", "5": "nyct%2Fgtfs", "6": "nyct%2Fgtfs",
@@ -202,18 +204,9 @@ async function getTrainInfo(url: string, targetRoute: string, userLat: number, u
   console.log(`[MTA] Fetching live data for the ${targetRoute} train...`);
   
   try {
-    const response = await fetch("https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace"
-      //   , {
-      //   headers: {
-      //     "x-api-key": "<redacted>",
-      //     // replace with your GTFS-realtime source's auth token
-      //     // e.g. x-api-key is the header value used for NY's MTA GTFS APIs
-      //   },
-      // }
-    );
-    if (!response.ok) {
-      throw new Error(`${response.url}: ${response.status} ${response.statusText}`);
-    }
+    const response = await fetch(url);
+    if (!response.ok) return "Error: Could not connect to the MTA at this time.";
+
     const buffer = await response.arrayBuffer();
     const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(buffer));
 
@@ -237,9 +230,40 @@ async function getTrainInfo(url: string, targetRoute: string, userLat: number, u
         });
       }
     });
-  }
-  catch (error) {
-    console.error(error);
+
+    if (!closestStopId) {
+      return `There are currently no active ${targetRoute} trains scheduled near your location.`;
+    }
+
+    // STEP 2: Collect the schedules and use the real station name
+    const closestStopName = stopsMap.get(closestStopId)?.name || closestStopId;
+    let trainSchedule = "";
+    let count = 0;
+
+    feed.entity.forEach((entity: any) => {
+      if (entity.tripUpdate?.trip?.routeId === targetRoute) {
+        
+        // Check if this train stops at our station (either Northbound or Southbound)
+        const myStop = entity.tripUpdate.stopTimeUpdate?.find((s: any) => s.stopId.startsWith(closestStopId));
+        
+        if (myStop && count < 6) {
+          const unixTime = myStop.arrival?.time?.low || myStop.departure?.time?.low;
+          if (unixTime) {
+            const date = new Date(unixTime * 1000);
+            const direction = myStop.stopId.endsWith("N") ? "Uptown/Manhattan-bound" : "Downtown/Brooklyn-bound";
+            
+            trainSchedule += `A ${direction} ${targetRoute} train is arriving at ${closestStopName} at ${date.toLocaleTimeString()}. `;
+            count++;
+          }
+        }
+      }
+    });
+
+    return trainSchedule || `No upcoming schedules found for the ${targetRoute} train at ${closestStopName}.`;
+
+  } catch (error) {
+    console.error("[MTA] Error parsing data:", error);
+    return "Error processing real-time MTA data.";
   }
 }
 
@@ -526,7 +550,7 @@ export class OpenAIService {
 
 
             // step 2: get doorfront data if it exists for the formatted address
-            const panoramaData = await getPanoramaData(ctx, cleanAddress);
+            const panoramaData = await getPanoramaData(ctx, cleanAddress as string);
             let doorfrontData = '';
             let doorLocation: { lat: number, lng: number } | undefined | string = undefined;
             if (panoramaData && panoramaData.human_labels && panoramaData.human_labels.length > 0) {
