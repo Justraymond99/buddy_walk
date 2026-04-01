@@ -33,7 +33,7 @@ Some features to look forward to include:
 
 
 ## Tech stack and how to set up
-Buddy Walk runs on Vite + React+ Typescript as a web application. The backend is Node.js with a MongoDB database. We collect your inputs and the application's outputs to further tune the application to give better responses.
+Buddy Walk runs on Vite + React + Typescript as a web application. The backend is Node.js with a MongoDB database. We collect your inputs and the application's outputs to further tune the application to give better responses.
 
 You can visit the live website here: https://buddywalk.app
 

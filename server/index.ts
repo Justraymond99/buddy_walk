@@ -43,7 +43,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     res.sendFile(path.join(__dirname, '../dist', 'index.html'));
   });
 
-  app.listen(port, () => {
+  app.listen(Number(port), '0.0.0.0', () => {
     console.log(`Server is live at http://localhost:${port}`);
   });
 
