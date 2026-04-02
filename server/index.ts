@@ -15,6 +15,12 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   : ['http://localhost:5173', 'http://localhost:8000'];
 
 (async function(){
+  const app: Application = express();
+  const port = process.env.PORT || 8000;
+  app.listen(Number(port), '0.0.0.0', () => {
+    console.log(`Server is live at http://localhost:${port}`);
+  });
+  
   try {
     await mongoose.connect(config.link!, config.options);
     console.log("Connect to the MongoDB successfully!");
@@ -24,8 +30,6 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     process.exit(1);
   }
 
-  const app: Application = express();
-  const port = process.env.PORT || 8000;
 
   app.use(cors({
     origin: process.env.NODE_ENV === 'production' ? allowedOrigins : true,
@@ -43,8 +47,5 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     res.sendFile(path.join(__dirname, '../dist', 'index.html'));
   });
 
-  app.listen(Number(port), '0.0.0.0', () => {
-    console.log(`Server is live at http://localhost:${port}`);
-  });
 
 })()
