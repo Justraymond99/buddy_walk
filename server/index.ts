@@ -20,7 +20,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   app.listen(Number(port), '0.0.0.0', () => {
     console.log(`Server is live at http://localhost:${port}`);
   });
-  
+
   try {
     await mongoose.connect(config.link!, config.options);
     console.log("Connect to the MongoDB successfully!");
@@ -37,15 +37,19 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   }));
   app.use(express.json({ limit: '16mb' }));
   app.use(express.urlencoded({ limit: '10mb', extended: true }));
-  app.use(express.static(path.join(__dirname, '../dist')));
+  const rootDir = __dirname.includes('dist') 
+  ? path.join(__dirname, '..')       // Production: go up 1 level to /dist
+  : path.join(__dirname, '../../dist'); // Development: go up 2 levels to /dist
+
+  app.use(express.static(rootDir));
+
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(rootDir, 'index.html'));
+  });
 
   app.use("/api", openAIRoute)
   app.use("/api/db", chatLogRoute)
   app.use("/api/token", tokenRoute)
-
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(__dirname, '../dist', 'index.html'));
-  });
 
 
 })()
