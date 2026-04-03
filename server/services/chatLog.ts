@@ -5,28 +5,27 @@ export class ChatLogService {
   async newChatLog(ctx: AppContext, body: chatLogInterface) {
     const {res} = ctx;
     try {
-
-      const result = await chatLogModel.create({user: body.user, messages: body.messages});
+      console.log("[ChatLogService] newChatLog payload:", body);
+      const result = await chatLogModel.create({user: body?.user, messages: body?.messages});
       if (result) {
         res.status(200).json({
           message: "Created new chat log!",
           data: result
         });
       }
-
-    } catch (e) {
-      const error = new Error(`${e}`);
+    } catch (e: any) {
+      console.error("[ChatLogService] Error in newChatLog:", e);
       res.status(500).json({
         code: 500,
-        message: error.message
-      })
+        message: e.message || "Internal Server Error",
+        details: e.errors || null
+      });
     }
   }
 
   async addChat(ctx: AppContext, body: { chat: messageInterface, id: string }) {
     const {res} = ctx
     try {
-
       const result = await chatLogModel.findByIdAndUpdate(body.id, {$push: {messages: body.chat}}, {new: true})
       if (result) {
         res.status(200).json({
@@ -34,12 +33,13 @@ export class ChatLogService {
           data: result
         });
       }
-    } catch (e) {
-      const error = new Error(`${e}`);
+    } catch (e: any) {
+      console.error("[ChatLogService] Error in addChat:", e);
       res.status(500).json({
         code: 500,
-        message: error.message
-      })
+        message: e.message || "Internal Server Error",
+        details: e.errors || null
+      });
     }
   }
   // find message with matching id, flip flag, and add flag reason
@@ -56,12 +56,13 @@ export class ChatLogService {
           data: result
         }); 
       }
-    }catch (e) {
-      const error = new Error(`${e}`);
+    } catch (e: any) {
+      console.error("[ChatLogService] Error in flagMessage:", e);
       res.status(500).json({
         code: 500,
-        message: error.message
-      })
+        message: e.message || "Internal Server Error",
+        details: e.errors || null
+      });
     }
   }
 }
