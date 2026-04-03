@@ -216,6 +216,7 @@ export default function Test() {
                 } catch (error) {
                     console.error('Error creating chat log:', error);
                 }
+                setUserInput('')
                 // console.log(currentMessageId)
             }
         })()
@@ -442,7 +443,7 @@ export default function Test() {
             if (res) {
                 //console.log('Received response from OpenAI:', res);
                 setOpenAIResponse(res.output);
-                setUserInput('')
+                // setUserInput('')
                 //navigator.vibrate([100,100])
             }
 
