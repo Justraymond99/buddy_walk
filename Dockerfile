@@ -2,7 +2,7 @@
 FROM node:18-alpine
 
 # Set the working directory in the container
-WORKDIR /src
+WORKDIR /app
 
 # Copy package.json and package-lock.json into the container
 COPY package*.json ./
@@ -16,7 +16,7 @@ COPY . .
 # Build the frontend and backend
 RUN npm run build
 
-COPY /server/stops.txt /dist/server/stops.txt
+COPY /server/stops.txt ./dist/server/stops.txt
 
 # Expose the port the app runs on
 EXPOSE 8000

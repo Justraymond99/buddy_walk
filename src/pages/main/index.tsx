@@ -1,19 +1,18 @@
 import { Camera, CameraType } from 'react-camera-pro';
 import { useRef, useState, useEffect } from 'react';
-import { Box, Stack, Switch, FormControlLabel, useMediaQuery, InputAdornment, IconButton, CircularProgress, Button } from '@mui/material';
+import { Box, Stack, Switch, FormControlLabel, useMediaQuery, CircularProgress, Button } from '@mui/material';
 import { useGeolocated } from 'react-geolocated';
-import { sendAudioRequest, sendTextRequest } from "../../api/openAi.ts";
+import { sendTextRequest } from "../../api/openAi.ts";
 // import {FirebaseStart} from "../../api/firebase.ts";
 import { RequestData, CustomCoords } from "./types.ts";
 import { AccessibleButton, AccessibleTypography, AccessibleTextField, BlueSection, GraySection, GreenSection } from "./style.ts";
 import { createChatLog, addChatToChatLog } from "../../api/chatLog.ts";
 import ReportMessage from '../../components/ReportMessage.tsx';
-import ClearIcon from '@mui/icons-material/Clear';
 import { useDeviceOrientation } from '../../hooks/useDeviceOrientation.ts';
 import CallAccessARideButton from "../../components/call.tsx"
 import { createSpeechRecognitionPonyfill } from 'web-speech-cognitive-services';
 import { getToken } from '../../api/token.ts';
-import { playSound, useSound } from 'react-sounds';
+import { playSound } from 'react-sounds';
 
 export default function Test() {
     const camera = useRef<CameraType>(null);
@@ -28,7 +27,7 @@ export default function Test() {
     const [audioUrl, setAudioUrl] = useState("");
     const [currentChatId, setCurrentChatId] = useState("")
     const [currentMessageId, setCurrentMessageId] = useState("")
-    const { coords, isGeolocationEnabled } = useGeolocated({
+    const { coords } = useGeolocated({
         positionOptions: {
             enableHighAccuracy: true,
         },
@@ -51,7 +50,7 @@ export default function Test() {
     const HOLD_DELAY = 600;
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [lastError, setLastError] = useState<string>("");
-    const [showImage, setShowImage] = useState<boolean>(false)
+    // const [showImage, setShowImage] = useState<boolean>(false)
     const headingRef = useRef<number>(0);
 
     useEffect(() => {
@@ -160,7 +159,7 @@ export default function Test() {
     }, []);
 
     useEffect(() => {
-        function handleDeviceOrientation(e) {
+        function handleDeviceOrientation(e: any) {
             if (typeof e.webkitCompassHeading === 'number') {
                 headingRef.current = e.webkitCompassHeading;
             } else if (e.alpha !== null) {
@@ -497,7 +496,7 @@ export default function Test() {
                     setUserInput('Describe the video'); // Update prompt for video upload
                     //Blob URL for uploaded video
                     const videoBlob = new Blob([file], { type: file.type });
-                    const videoUrl = URL.createObjectURL(videoBlob);
+                    // const videoUrl = URL.createObjectURL(videoBlob);
                     //console.log("Video URL:", videoUrl);
                     setVideoBlob(videoBlob); // uploaded video is stored in BLOB same as recorded video
                 } else {
