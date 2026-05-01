@@ -6,6 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ensureAuth } from '../api/firebase';
 import { RootStackParamList } from '../types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Permissions'>;
@@ -16,6 +18,16 @@ export default function PermissionsScreen({ navigation }: Props) {
   const [micGranted, setMicGranted] = useState(false);
 
   const allGranted = locationGranted && cameraGranted && micGranted;
+
+  async function handleContinue() {
+    try {
+      await ensureAuth();
+    } catch (e) {
+      console.error('Firebase anonymous auth error:', e);
+    }
+    await AsyncStorage.setItem('onboardingComplete', 'true');
+    navigation.navigate('Main');
+  }
 
   async function requestLocation() {
     const { status } = await Location.requestForegroundPermissionsAsync();
@@ -111,7 +123,7 @@ export default function PermissionsScreen({ navigation }: Props) {
       {allGranted && (
         <Button
           mode="contained"
-          onPress={() => navigation.navigate('Main')}
+          onPress={handleContinue}
           style={styles.continueButton}
           contentStyle={styles.continueButtonContent}
           labelStyle={styles.continueButtonLabel}
