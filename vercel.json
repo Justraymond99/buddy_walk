@@ -1,61 +1,51 @@
 {
-
   "$schema": "https://openapi.vercel.sh/vercel.json",
-
   "buildCommand": "EXPO_PUBLIC_BYPASS_AUTH=true npx expo export --platform web",
-
   "outputDirectory": "dist",
-
   "installCommand": "npm install",
-
   "framework": null,
-
   "functions": {
-
-    "api/companion.ts": {
-
-      "maxDuration": 10
-
+    "api/text.ts": {
+      "maxDuration": 60,
+      "includeFiles": "server/stops.txt"
     },
-
+    "api/audio.ts": {
+      "maxDuration": 30
+    },
+    "api/parseRequest.ts": {
+      "maxDuration": 30
+    },
+    "api/token/getToken.ts": {
+      "maxDuration": 10
+    },
+    "api/feedback.ts": {
+      "maxDuration": 10
+    },
+    "api/telemetry/events.ts": {
+      "maxDuration": 10
+    },
+    "api/companion.ts": {
+      "maxDuration": 10
+    },
     "api/view.ts": {
-
       "includeFiles": "server/views/companion.html"
-
     }
-
   },
-
   "routes": [
-
-    { "src": "/api/text", "dest": "https://buddywalk.app/api/text" },
-
-    { "src": "/api/audio", "dest": "https://buddywalk.app/api/audio" },
-
-    { "src": "/api/parseRequest", "dest": "https://buddywalk.app/api/parseRequest" },
-
-    { "src": "/api/token/(.*)", "dest": "https://buddywalk.app/api/token/$1" },
-
+    { "src": "/api/text", "dest": "/api/text" },
+    { "src": "/api/audio", "dest": "/api/audio" },
+    { "src": "/api/parseRequest", "dest": "/api/parseRequest" },
+    { "src": "/api/token/getToken", "dest": "/api/token/getToken" },
+    { "src": "/api/feedback", "dest": "/api/feedback" },
+    { "src": "/api/telemetry/events", "dest": "/api/telemetry/events" },
     { "src": "/api/db/(.*)", "dest": "https://buddywalk.app/api/db/$1" },
-
     { "src": "/api/companion/health", "dest": "/api/companion?route=health" },
-
     { "src": "/api/companion/create", "dest": "/api/companion?route=create" },
-
     { "src": "/api/companion/ping", "dest": "/api/companion?route=ping" },
-
     { "src": "/api/companion/stop", "dest": "/api/companion?route=stop" },
-
     { "src": "/api/companion/snapshot", "dest": "/api/companion?route=snapshot" },
-
     { "src": "/companion/(.*)", "dest": "/api/view?token=$1" },
-
     { "handle": "filesystem" },
-
     { "src": "/(.*)", "dest": "/index.html" }
-
   ]
-
 }
-
-
