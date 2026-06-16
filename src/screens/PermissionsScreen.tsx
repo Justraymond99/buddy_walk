@@ -7,7 +7,6 @@ import * as Location from 'expo-location';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ensureAuth } from '../api/firebase';
 import { RootStackParamList } from '../types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Permissions'>;
@@ -20,11 +19,6 @@ export default function PermissionsScreen({ navigation }: Props) {
   const allGranted = locationGranted && cameraGranted && micGranted;
 
   async function handleContinue() {
-    try {
-      await ensureAuth();
-    } catch (e) {
-      console.error('Firebase anonymous auth error:', e);
-    }
     await AsyncStorage.setItem('onboardingComplete', 'true');
     navigation.navigate('Main');
   }

@@ -11,3 +11,5 @@ dist/
 web-build/
 android/
 ios/
+.vercel
+__pycache__/

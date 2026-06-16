@@ -2,6 +2,7 @@ import React from 'react';
 import { PaperProvider, MD3DarkTheme } from 'react-native-paper';
 import { StatusBar } from 'expo-status-bar';
 import Navigation from './src/navigation';
+import AppErrorBoundary from './src/components/AppErrorBoundary';
 
 const theme = {
   ...MD3DarkTheme,
@@ -16,9 +17,11 @@ const theme = {
 
 export default function App() {
   return (
-    <PaperProvider theme={theme}>
-      <StatusBar style="light" />
-      <Navigation />
-    </PaperProvider>
+    <AppErrorBoundary>
+      <PaperProvider theme={theme}>
+        <StatusBar style="light" />
+        <Navigation />
+      </PaperProvider>
+    </AppErrorBoundary>
   );
 }

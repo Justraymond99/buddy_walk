@@ -20,7 +20,7 @@ export default function WelcomeScreen({ navigation }: Props) {
 
         <Button
           mode="contained"
-          onPress={() => navigation.navigate('Permissions')}
+          onPress={() => navigation.navigate('Auth')}
           style={styles.button}
           contentStyle={styles.buttonContent}
           labelStyle={styles.buttonLabel}

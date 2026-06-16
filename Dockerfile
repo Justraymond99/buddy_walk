@@ -1,25 +1,18 @@
-# Use an official Node.js runtime as a parent image
-FROM node:18-alpine
+# Mobile backend container.
+# The Expo/React Native client is built and shipped separately via EAS;
+# this image only runs the Node/Express API in mobile/server.
 
-# Set the working directory in the container
+FROM node:20-alpine
+
 WORKDIR /app
 
-# Copy package.json and package-lock.json into the container
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+RUN npm ci --omit=optional || npm install --omit=optional
 
-# Copy the rest of the application code into the container
-COPY . .
+COPY tsconfig*.json ./
+COPY server ./server
 
-# Build the frontend and backend
-RUN npm run build
-
-COPY /server/stops.txt ./dist/server/stops.txt
-
-# Expose the port the app runs on
 EXPOSE 8000
 
-# Command to run the compiled server
-CMD ["npm", "run", "start"]
+CMD ["npm", "run", "serve"]

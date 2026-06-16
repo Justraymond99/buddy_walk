@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, Text, StyleSheet, Linking } from 'react-native';
 import * as Speech from 'expo-speech';
+import { tapMedium } from '../utils/haptics';
 
 const AAR_NUMBER = '8773372017';
 
@@ -12,6 +13,7 @@ export default function CallAccessARideButton() {
 
   return (
     <Pressable
+      onPressIn={() => tapMedium()}
       onPress={handlePress}
       style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
       accessibilityLabel="Call Access-A-Ride"

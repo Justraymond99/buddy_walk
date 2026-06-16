@@ -5,23 +5,35 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
+    "scheme": "buddywalk",
+    "icon": "./assets/icon.png",
     "splash": {
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#000000"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.buddywalk.app",
+      "usesAppleSignIn": true,
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Buddy Walk uses the camera to capture photos and videos to describe your surroundings.",
         "NSMicrophoneUsageDescription": "Buddy Walk uses the microphone so you can ask questions by voice.",
         "NSLocationWhenInUseUsageDescription": "Buddy Walk uses your location to provide navigation and nearby place information.",
         "NSLocationAlwaysUsageDescription": "Buddy Walk uses your location to provide navigation assistance."
       }
     },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/icon.png"
+    },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#000000"
       },
       "package": "com.buddywalk.app",
@@ -33,6 +45,12 @@
       ]
     },
     "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Buddy Walk uses the microphone so you can ask questions by voice."
+        }
+      ],
       [
         "expo-camera",
         {
@@ -46,7 +64,9 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Buddy Walk uses your location for navigation assistance."
         }
-      ]
+      ],
+      "expo-web-browser",
+      "expo-apple-authentication"
     ]
   }
 }

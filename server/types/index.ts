@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+import {Request, Response} from "express";
 
 export interface AppContext {
   req: Request;
@@ -14,16 +14,25 @@ export interface textRequestBody {
     longitude: number,
     heading?: number | null,
     orientation?: { alpha: number | null, beta: number | null, gamma: number | null }
-  } | null
+  } | null;
+  /** Anonymous client metadata for internal analytics (no PII). */
+  analytics?: {
+    requestId?: string;
+    installId?: string;
+    sessionId?: string;
+    platform?: string;
+    appVersion?: string;
+    feature?: string;
+  };
 }
 
-export interface parseRequestBody {
-  text: string,
+export interface parseRequestBody{
+  text:string,
   lat: number,
   lng: number
 }
 
-export interface history {
+export interface history{
   input: string,
   output: string,
   data: string
@@ -55,6 +64,9 @@ If there are no frames provided, do not make up any information about a video. I
 export const nearbyPlacesPrompt = `If a user requests transportation, prioritize
 identifying the nearest subway or bus stations or relevant transport services.`
 
+export const trainPrompt = `When answering subway arrival questions, use ONLY the provided live MTA data.
+State the nearest station name, train direction, and minutes until each arrival. Do not invent or adjust times.`
+
 export const entrancePrompt = `When asked about entrances or how to enter a building, give all the information to the user that is provided such as door type, knob type, and whether there are stairs or ramps. 
 Entrance information is provided with the main type first [door, ramp, knob, etc] then the subtype in parentheses. Ramps and stairs do not have subtypes.
 Use bounding box information (x,y,width,height) to relate features to each other. Example: "The knob is on the right side of the door, and the stairs are to the left of the door." DO NOT GIVE THE RAW DATA TO THE USER.
@@ -67,8 +79,8 @@ If "Image Description: " is provided, repeat that description verbatim to the us
 Do not generalize based on prior answers. If no entrance data or useful image is provided for an address, say: 
 "There is no entrance information available for this address. You can request more details at doorfront.org."`
 
-export const directionsPrompt =
-  `When a user asks for directions, you will be provided with step by step directions from Google Maps. Do not just regurgitate the step by step directions, but use
+export const directionsPrompt = 
+`When a user asks for directions, you will be provided with step by step directions from Google Maps. Do not just regurgitate the step by step directions, but use
 the provided static map image as well as latitude and longitude of important markers to help give more context to your directions. 
 If data exists for entrance information, that will be provided as well.
 Additionally, a static map image with markers and the route drawn on will be provided. The markers are helpful landmarks such as trees, subway grates, and more.
@@ -78,15 +90,15 @@ If no data is provided, do not make up any information.`
 
 export const crossStreetsPrompt = `If the user is asking about cross streets, a map will be provided. Use the map to read the nearby cross streets and provide them to the user.`
 
-export const openAITools = [
+export const openAITools= [
   {
     type: "function" as "function",
     function: {
       name: "generateGoogleAPILinkNonSpecificLocation",
       description: "Generates a Google Nearby Places API link based on user location. Use when user wants to find areas based on type, not specific name. Also use if user asks about where they are so you can geolocate them better." +
-        "Type only returns esthablishments that match(i.e. supermarket, library, restaurant, subway_station[use for subway, usually what people want if they say 'train' in New York City], transit_station[use for bus]," +
-        +"train_station[use for railroad trains], food, pharmacy), keyword is the relevant search term (i.e. mexican vs japanese food when type is restaurant, pizza,)" +
-        "Format: https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&rankby=distance&type=${type}&keyword=${keyword}",
+      "Type only returns esthablishments that match(i.e. supermarket, library, restaurant, subway_station[use for subway, usually what people want if they say 'train' in New York City], transit_station[use for bus],"+
+      +"train_station[use for railroad trains], food, pharmacy), keyword is the relevant search term (i.e. mexican vs japanese food when type is restaurant, pizza,)"+
+      "Format: https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&rankby=distance&type=${type}&keyword=${keyword}",
       parameters: {
         type: "object",
         properties: {
@@ -103,7 +115,7 @@ export const openAITools = [
     type: "function" as "function",
     function: {
       name: "generateGooglePlacesApiLinkSpecificLocation",
-      description: "Generates a Google Place From Text API link using user's current location as a starting point and the user's input as the destination." +
+      description: "Generates a Google Place From Text API link using user's current location as a starting point and the user's input as the destination."+
         "Use when a user wants details on a specific location (not when asking about a buildings entrance). If there are spaces in user request, replace with {%20}" +
         "Link Format: https://maps.googleapis.com/maps/api/place/findplacefromtext/json?location=${latitude},${longitude}&fields=place_id%2Cformatted_address%2Cname%2Ctype%2Copening_hours%2Crating&inputtype=textquery&input={USER_REQUEST}",
       parameters: {
@@ -142,7 +154,7 @@ export const openAITools = [
   //     }
   //   }
   // },
-  {
+    {
     type: "function" as "function",
     function: {
       name: "generateGoogleDirectionAPILink",
@@ -154,7 +166,7 @@ export const openAITools = [
             type: "string",
             description: "The user's requested destination for directions. This can be an address or a store/establishment name."
           },
-          address: {
+          address:{
             type: "boolean",
             description: "Indicates if the destination is an address. If true, the destination is treated as a full address; if false, it is treated as a store/establishment name."
           }
@@ -186,7 +198,7 @@ export const openAITools = [
     type: "function" as "function",
     function: {
       name: "useDoorfrontAPI",
-      description: "Fetches panorama data from the Doorfront API based on user location. Use when a user asks where is a locations entrance or wants to know what to expect when they arrive at a location.",
+      description: "Fetches panorama data from the Doorfront API based on user location. Use when a user asks where is a locations entrance or wants to know what to expect when they arrive at a location." ,
       parameters: {
         type: "object",
         properties: {
@@ -199,12 +211,12 @@ export const openAITools = [
       }
     }
   },
-  {
+    {
     type: "function" as "function",
     function: {
       name: "getNearbyFeatures",
       description: "Fetches nearby geographic features based on user location. Use when a user asks about geographic features (sidewalk materials, trees, or pedestrian ramps)." +
-        "Return the address the user wants the features for. If they ask for features near them, provide the user's current location.",
+      "Return the address the user wants the features for. If they ask for features near them, provide the user's current location.",
       parameters: {
         type: "object",
         properties: {
@@ -231,7 +243,7 @@ export const openAITools = [
             type: "string",
             description: "The completed Google Static Map API link for the address or location provided by the user. "
           }
-        },
+        }, 
         required: ["link"]
       }
     }
@@ -257,6 +269,9 @@ export const openAITools = [
       description: "Return if user wants information about their chat history.  ",
     }
   },
+
+
+
   {
     type: "function" as "function",
     function: {
@@ -273,7 +288,7 @@ export const openAITools = [
         required: ["routeId"]
       }
     }
-  }
+  },
 
 
 ]

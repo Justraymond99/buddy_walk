@@ -1,0 +1,61 @@
+{
+
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+
+  "buildCommand": "EXPO_PUBLIC_BYPASS_AUTH=true npx expo export --platform web",
+
+  "outputDirectory": "dist",
+
+  "installCommand": "npm install",
+
+  "framework": null,
+
+  "functions": {
+
+    "api/companion.ts": {
+
+      "maxDuration": 10
+
+    },
+
+    "api/view.ts": {
+
+      "includeFiles": "server/views/companion.html"
+
+    }
+
+  },
+
+  "routes": [
+
+    { "src": "/api/text", "dest": "https://buddywalk.app/api/text" },
+
+    { "src": "/api/audio", "dest": "https://buddywalk.app/api/audio" },
+
+    { "src": "/api/parseRequest", "dest": "https://buddywalk.app/api/parseRequest" },
+
+    { "src": "/api/token/(.*)", "dest": "https://buddywalk.app/api/token/$1" },
+
+    { "src": "/api/db/(.*)", "dest": "https://buddywalk.app/api/db/$1" },
+
+    { "src": "/api/companion/health", "dest": "/api/companion?route=health" },
+
+    { "src": "/api/companion/create", "dest": "/api/companion?route=create" },
+
+    { "src": "/api/companion/ping", "dest": "/api/companion?route=ping" },
+
+    { "src": "/api/companion/stop", "dest": "/api/companion?route=stop" },
+
+    { "src": "/api/companion/snapshot", "dest": "/api/companion?route=snapshot" },
+
+    { "src": "/companion/(.*)", "dest": "/api/view?token=$1" },
+
+    { "handle": "filesystem" },
+
+    { "src": "/(.*)", "dest": "/index.html" }
+
+  ]
+
+}
+
+
