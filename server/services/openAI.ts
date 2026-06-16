@@ -3,7 +3,6 @@ import OpenAI from "openai";
 import { textRequestBody, history, AIPrompt, AppContext, openAITools, nearbyPlacesPrompt, entrancePrompt, directionsPrompt, imagePrompt, videoPrompt, crossStreetsPrompt, trainPrompt } from "../types";
 import dotenv from "dotenv";
 import { ChatCompletionContentPartImage, ChatCompletionContentPartText } from "openai/resources";
-import fetch from "node-fetch";
 import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { aiRequestLogService } from "./aiRequestLog";
 import { getSubwayArrivals } from "./mta";
@@ -127,9 +126,18 @@ const tools = openAITools
 const openAIHistory: history[] = []
 
 export class OpenAIService {
-  client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
+  private _client: OpenAI | null = null;
+
+  private get client(): OpenAI {
+    if (!this._client) {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        throw new Error("OPENAI_API_KEY is not configured on the server");
+      }
+      this._client = new OpenAI({ apiKey });
+    }
+    return this._client;
+  }
 
   async parseUserRequest(ctx: AppContext, text: string, lat: number, lng: number) {
     //console.log(openAIHistory[openAIHistory.length - 1].data)
