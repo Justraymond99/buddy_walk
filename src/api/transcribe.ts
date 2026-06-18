@@ -12,8 +12,21 @@ async function parseTranscribeResponse(response: Response): Promise<TranscribeRe
     console.error('transcribe HTTP error:', response.status, await response.text());
     return null;
   }
-  const data = (await response.json()) as TranscribeResult;
-  return data;
+  const data = (await response.json()) as TranscribeResult & {
+    RecognitionStatus?: string;
+    DisplayText?: string;
+    NBest?: { Display: string }[];
+  };
+  if (data.transcript != null && data.status) {
+    return data;
+  }
+  if (data.RecognitionStatus) {
+    return {
+      status: data.RecognitionStatus,
+      transcript: data.NBest?.[0]?.Display ?? data.DisplayText ?? '',
+    };
+  }
+  return null;
 }
 
 export async function transcribeAudio(

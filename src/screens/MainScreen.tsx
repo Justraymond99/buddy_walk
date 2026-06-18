@@ -201,6 +201,7 @@ export default function MainScreen({ navigation }: Props) {
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
+  const voiceTranscriptRef = useRef('');
   const webAudioSessionRef = useRef<WebAudioSession | null>(null);
   const webSpeechSessionRef = useRef<WebSpeechSession | null>(null);
   const userInputRef = useRef('');
@@ -786,7 +787,10 @@ export default function MainScreen({ navigation }: Props) {
       notifyNoSpeechHeard();
       return;
     }
-    if (loadingRef.current) return;
+    if (loadingRef.current) {
+      speak('Still loading the last answer. Please wait.');
+      return;
+    }
     setUserInput(trimmed);
     setDisplayQuestion(trimmed);
     Vibration.vibrate(SPEECH_CAPTURED_VIBRATION_PATTERN);
@@ -836,42 +840,37 @@ export default function MainScreen({ navigation }: Props) {
     if (Platform.OS === 'web') {
       webAudioSessionRef.current?.abort();
       webSpeechSessionRef.current?.abort();
+      voiceTranscriptRef.current = '';
       try {
-        const auth = azureTokenRef.current;
-        if (auth) {
-          const speech = startWebSpeechRecognition(
-            auth,
-            (interim) => setUserInput(interim),
-            (final) => setUserInput(final),
-            (message) => speak(message)
-          );
-          if (speech) {
-            webSpeechSessionRef.current = speech;
-            voiceRecordingStartedAtRef.current = Date.now();
-            setIsListening(true);
-            setUserInput('');
-            void track(Events.VoiceStarted);
-            AccessibilityInfo.announceForAccessibility(
-              'Listening. Tap again when finished speaking.'
-            );
-            return;
-          }
-        }
-
         const session = await startWebAudioCapture();
         if (!session) {
           speak('Could not start microphone. Check browser permissions and try again.');
           return;
         }
         webAudioSessionRef.current = session;
+
+        const auth = azureTokenRef.current;
+        if (auth) {
+          const speech = startWebSpeechRecognition(
+            auth,
+            (interim) => {
+              voiceTranscriptRef.current = interim;
+              setUserInput(interim);
+            },
+            (final) => {
+              voiceTranscriptRef.current = final;
+              setUserInput(final);
+            },
+            (message) => console.warn('live speech:', message)
+          );
+          if (speech) {
+            webSpeechSessionRef.current = speech;
+          }
+        }
+
         voiceRecordingStartedAtRef.current = Date.now();
         setIsListening(true);
         setUserInput('');
-        try {
-          Vibration.vibrate(60);
-        } catch {
-          // noop
-        }
         void track(Events.VoiceStarted);
         AccessibilityInfo.announceForAccessibility(
           'Listening. Tap again when finished speaking.'
@@ -901,48 +900,49 @@ export default function MainScreen({ navigation }: Props) {
 
   async function stopListening() {
     if (Platform.OS === 'web') {
-      if (webSpeechSessionRef.current) {
-        webSpeechSessionRef.current.stop();
-        webSpeechSessionRef.current = null;
-        setIsListening(false);
-        voiceRecordingStartedAtRef.current = null;
-        void track(Events.VoiceStopped);
-        const text = userInputRef.current.trim();
-        if (text) {
-          await submitVoiceQuestion(text);
-        } else {
-          notifyNoSpeechHeard();
-        }
-        return;
-      }
-
       const session = webAudioSessionRef.current;
+      const speech = webSpeechSessionRef.current;
       webAudioSessionRef.current = null;
+      webSpeechSessionRef.current = null;
       setIsListening(false);
+
       const startedAt = voiceRecordingStartedAtRef.current;
       voiceRecordingStartedAtRef.current = null;
       if (startedAt != null && Date.now() - startedAt < MIN_VOICE_RECORDING_MS) {
+        speech?.abort();
         if (session) await session.stop();
-        setIsTranscribing(false);
         speak('Hold Tap to Ask a little longer while you speak, then tap again.');
         return;
       }
+
       setIsTranscribing(true);
       void track(Events.VoiceStopped);
+      AccessibilityInfo.announceForAccessibility('Processing speech');
+
       try {
-        const blob = session ? await session.stop() : null;
-        if (!blob || blob.size === 0) {
-          notifyNoSpeechHeard();
-          return;
+        const [liveText, blob] = await Promise.all([
+          speech ? speech.stop() : Promise.resolve(''),
+          session ? session.stop() : Promise.resolve(null),
+        ]);
+
+        let text =
+          liveText.trim() ||
+          voiceTranscriptRef.current.trim() ||
+          userInputRef.current.trim();
+
+        if (!text && blob && blob.size > 0) {
+          const transcript = await transcribeWithAzure(blob, contentTypeForWebBlob(blob));
+          if (transcript === null) {
+            speak('Speech service error. Please try again.');
+            return;
+          }
+          text = transcript.trim();
         }
-        AccessibilityInfo.announceForAccessibility('Processing speech');
-        const transcript = await transcribeWithAzure(blob, contentTypeForWebBlob(blob));
-        if (transcript === null) {
-          speak('Speech service error. Please try again.');
-          return;
-        }
-        if (transcript.trim()) {
-          await submitVoiceQuestion(transcript);
+
+        voiceTranscriptRef.current = '';
+        if (text) {
+          setUserInput(text);
+          await submitVoiceQuestion(text);
         } else {
           notifyNoSpeechHeard();
         }

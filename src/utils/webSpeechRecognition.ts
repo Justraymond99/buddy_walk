@@ -6,7 +6,7 @@ export interface AzureSpeechAuth {
 }
 
 export interface WebSpeechSession {
-  stop: () => void;
+  stop: () => Promise<string>;
   abort: () => void;
 }
 
@@ -18,6 +18,7 @@ type BrowserSpeechRecognition = {
   interimResults: boolean;
   lang: string;
   onresult: ((event: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0?: { transcript?: string } }> }) => void) | null;
+  onend: (() => void) | null;
   onerror: ((event: { error?: string }) => void) | null;
   start: () => void;
   stop: () => void;
@@ -44,7 +45,6 @@ export function startWebSpeechRecognition(
 ): WebSpeechSession | null {
   const NativeSpeechRecognition = getNativeSpeechRecognition();
   if (!NativeSpeechRecognition) {
-    onError('Speech recognition is not supported in this browser.');
     return null;
   }
 
@@ -63,18 +63,19 @@ export function startWebSpeechRecognition(
   recognition.interimResults = true;
   recognition.lang = 'en-US';
 
+  let latestTranscript = '';
+
   recognition.onresult = (event) => {
-    let interim = '';
-    let finalText = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      const chunk = result?.[0]?.transcript ?? '';
-      if (result?.isFinal) finalText += chunk;
-      else interim += chunk;
+    let transcript = '';
+    for (let i = 0; i < event.results.length; i++) {
+      transcript += event.results[i]?.[0]?.transcript ?? '';
     }
-    const live = (finalText || interim).trim();
-    if (live) onInterim(live);
-    if (finalText.trim()) onFinal(finalText.trim());
+    latestTranscript = transcript.trim();
+    if (latestTranscript) {
+      onInterim(latestTranscript);
+      const last = event.results[event.results.length - 1];
+      if (last?.isFinal) onFinal(latestTranscript);
+    }
   };
 
   recognition.onerror = (event) => {
@@ -90,14 +91,32 @@ export function startWebSpeechRecognition(
   }
 
   return {
-    stop: () => {
-      try {
-        recognition.stop();
-      } catch {
-        // noop
-      }
-    },
+    stop: () =>
+      new Promise<string>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          resolve(latestTranscript.trim());
+        };
+
+        recognition.onend = finish;
+        const priorOnError = recognition.onerror;
+        recognition.onerror = (event) => {
+          priorOnError?.(event);
+          if (event.error === 'aborted' || event.error === 'no-speech') finish();
+        };
+
+        try {
+          recognition.stop();
+        } catch {
+          finish();
+        }
+
+        setTimeout(finish, 1200);
+      }),
     abort: () => {
+      latestTranscript = '';
       try {
         recognition.abort();
       } catch {

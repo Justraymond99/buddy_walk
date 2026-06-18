@@ -52,8 +52,14 @@ export async function startWebAudioCapture(): Promise<WebAudioSession | null> {
           }
           resolve(new Blob(chunks, { type: recorder.mimeType || chunks[0]?.type || 'audio/webm' }));
         };
-        if (recorder.state !== 'inactive') recorder.stop();
-        else {
+        if (recorder.state === 'recording') {
+          try {
+            recorder.requestData();
+          } catch {
+            // noop
+          }
+          recorder.stop();
+        } else {
           stream.getTracks().forEach((track) => track.stop());
           resolve(null);
         }
