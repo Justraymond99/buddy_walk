@@ -64,7 +64,8 @@ If there are no frames provided, do not make up any information about a video. I
 export const nearbyPlacesPrompt = `If a user requests transportation, prioritize
 identifying the nearest subway or bus stations or relevant transport services.`
 
-export const trainPrompt = `When answering subway arrival questions, use ONLY the provided live MTA data.
+export const trainPrompt = `When answering subway arrival questions, use ONLY the provided live MTA data for the train line the user asked about.
+Never substitute or mention a different train line than the one requested.
 Lead with the nearest station name, then each train direction and how many minutes until arrival (e.g. "in 4 minutes").
 Only mention trains within the next 90 minutes. Do not invent, convert, or adjust times.`
 

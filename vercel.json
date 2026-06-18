@@ -21,6 +21,10 @@
     "api/transcribe.ts": {
       "maxDuration": 30
     },
+    "api/mta.ts": {
+      "maxDuration": 30,
+      "includeFiles": "server/stops.txt"
+    },
     "api/feedback.ts": {
       "maxDuration": 10
     },
@@ -40,6 +44,7 @@
     { "src": "/api/parseRequest", "dest": "https://buddywalk.app/api/parseRequest" },
     { "src": "/api/token/getToken", "dest": "https://buddywalk.app/api/token/getToken" },
     { "src": "/api/transcribe", "dest": "/api/transcribe" },
+    { "src": "/api/mta", "dest": "/api/mta" },
     { "src": "/api/feedback", "dest": "/api/feedback" },
     { "src": "/api/telemetry/events", "dest": "/api/telemetry/events" },
     { "src": "/api/db/(.*)", "dest": "https://buddywalk.app/api/db/$1" },

@@ -25,9 +25,15 @@ import CallAccessARideButton from '../components/CallAccessARideButton';
 import FeedbackModal from '../components/FeedbackModal';
 import AnswerFeedback from '../components/AnswerFeedback';
 import { sendTextRequest } from '../api/openAi';
+import { fetchMtaArrivals } from '../api/mta';
 import { createChatLog, addChatToChatLog } from '../api/chatLog';
 import { track, Events } from '../api/telemetry';
 import { classifyFeature, createRequestId } from '../utils/telemetryFeature';
+import {
+  buildTrainQuestionWithLiveData,
+  extractTrainLineFromText,
+  isTrainArrivalQuestion,
+} from '../utils/trainLine';
 import { getToken } from '../api/token';
 import { transcribeAudio } from '../api/transcribe';
 import { useAuthSession } from '../navigation/authSession';
@@ -1109,8 +1115,25 @@ export default function MainScreen({ navigation }: Props) {
         imagePayload = frames;
       }
 
+      let textToSend = resolvedText;
+      if (coords && isTrainArrivalQuestion(resolvedText)) {
+        const trainLine = extractTrainLineFromText(resolvedText);
+        if (trainLine) {
+          try {
+            const arrivals = await fetchMtaArrivals(
+              trainLine,
+              coords.latitude,
+              coords.longitude
+            );
+            textToSend = buildTrainQuestionWithLiveData(resolvedText, trainLine, arrivals);
+          } catch (e) {
+            console.warn('MTA prefetch failed, sending question without live data', e);
+          }
+        }
+      }
+
       const data: RequestData = {
-        text: resolvedText,
+        text: textToSend,
         image: imagePayload,
         coords,
         analytics: { requestId, feature },

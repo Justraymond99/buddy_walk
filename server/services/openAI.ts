@@ -6,6 +6,7 @@ import { ChatCompletionContentPartImage, ChatCompletionContentPartText } from "o
 import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { aiRequestLogService } from "./aiRequestLog";
 import { getSubwayArrivals } from "./mta";
+import { extractTrainLineFromText } from "../../src/utils/trainLine";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
 dotenv.config();
@@ -566,7 +567,8 @@ export class OpenAIService {
         else if (parsedRequest.choices[0].message.tool_calls![0].function.name === "generateTrainInformation") {
           completeAIPrompt += trainPrompt;
           const parsedArgs = JSON.parse(parsedRequest.choices[0].message.tool_calls![0].function.arguments);
-          const route = parsedArgs.routeId?.toUpperCase() || "A";
+          const extractedRoute = extractTrainLineFromText(content.text);
+          const route = extractedRoute ?? parsedArgs.routeId?.toUpperCase() || "A";
           console.log(`[MTA] AI requested data for the ${route} train.`);
 
           const trainData = await getSubwayArrivals(
