@@ -29,6 +29,7 @@ import { createChatLog, addChatToChatLog } from '../api/chatLog';
 import { track, Events } from '../api/telemetry';
 import { classifyFeature, createRequestId } from '../utils/telemetryFeature';
 import { getToken } from '../api/token';
+import { transcribeAudio } from '../api/transcribe';
 import { useAuthSession } from '../navigation/authSession';
 import { RequestData, CustomCoords, RootStackParamList, NavRoute } from '../types';
 import { expandSavedAliases } from '../utils/savedPlaces';
@@ -47,6 +48,10 @@ import {
   startWebAudioCapture,
   WebAudioSession,
 } from '../utils/webAudioCapture';
+import {
+  startWebSpeechRecognition,
+  WebSpeechSession,
+} from '../utils/webSpeechRecognition';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 const HOLD_THRESHOLD_MS = 600;
@@ -197,6 +202,7 @@ export default function MainScreen({ navigation }: Props) {
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const webAudioSessionRef = useRef<WebAudioSession | null>(null);
+  const webSpeechSessionRef = useRef<WebSpeechSession | null>(null);
   const userInputRef = useRef('');
   const azureTokenRef = useRef<{ token: string; region: string } | null>(null);
   const cameraReadyRef = useRef(false);
@@ -402,6 +408,8 @@ export default function MainScreen({ navigation }: Props) {
     return () => {
       webAudioSessionRef.current?.abort();
       webAudioSessionRef.current = null;
+      webSpeechSessionRef.current?.abort();
+      webSpeechSessionRef.current = null;
     };
   }, []);
 
@@ -795,49 +803,13 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   async function transcribeWithAzure(audioBody: Blob | ArrayBuffer, contentType: string): Promise<string | null> {
-    let auth = azureTokenRef.current ?? (await refreshAzureToken());
-    if (!auth) return null;
-
-    const callAzure = (credentials: { token: string; region: string }) =>
-      fetch(
-        `https://${credentials.region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${credentials.token}`,
-            'Content-Type': contentType,
-            Accept: 'application/json',
-          },
-          body: audioBody,
-        }
-      );
-
-    let response = await callAzure(auth);
-    if (response.status === 401) {
-      const refreshed = await refreshAzureToken();
-      if (refreshed) response = await callAzure(refreshed);
-    }
-    if (!response.ok) {
-      console.error('Azure STT HTTP error:', response.status, await response.text());
-      return null;
-    }
-
-    const result = (await response.json()) as {
-      DisplayText?: string;
-      RecognitionStatus: string;
-      NBest?: { Display: string }[];
-    };
-
-    if (result.RecognitionStatus === 'Success') {
-      return result.NBest?.[0]?.Display ?? result.DisplayText ?? '';
-    }
-    if (
-      result.RecognitionStatus === 'NoMatch' ||
-      result.RecognitionStatus === 'InitialSilenceTimeout'
-    ) {
+    const result = await transcribeAudio(audioBody, contentType);
+    if (!result) return null;
+    if (result.status === 'Success') return result.transcript;
+    if (result.status === 'NoMatch' || result.status === 'InitialSilenceTimeout' || result.status === 'EmptyAudio') {
       return '';
     }
-    console.error('Azure STT unhandled status:', result.RecognitionStatus);
+    console.error('Azure STT unhandled status:', result.status);
     return null;
   }
 
@@ -863,7 +835,29 @@ export default function MainScreen({ navigation }: Props) {
 
     if (Platform.OS === 'web') {
       webAudioSessionRef.current?.abort();
+      webSpeechSessionRef.current?.abort();
       try {
+        const auth = azureTokenRef.current;
+        if (auth) {
+          const speech = startWebSpeechRecognition(
+            auth,
+            (interim) => setUserInput(interim),
+            (final) => setUserInput(final),
+            (message) => speak(message)
+          );
+          if (speech) {
+            webSpeechSessionRef.current = speech;
+            voiceRecordingStartedAtRef.current = Date.now();
+            setIsListening(true);
+            setUserInput('');
+            void track(Events.VoiceStarted);
+            AccessibilityInfo.announceForAccessibility(
+              'Listening. Tap again when finished speaking.'
+            );
+            return;
+          }
+        }
+
         const session = await startWebAudioCapture();
         if (!session) {
           speak('Could not start microphone. Check browser permissions and try again.');
@@ -907,6 +901,21 @@ export default function MainScreen({ navigation }: Props) {
 
   async function stopListening() {
     if (Platform.OS === 'web') {
+      if (webSpeechSessionRef.current) {
+        webSpeechSessionRef.current.stop();
+        webSpeechSessionRef.current = null;
+        setIsListening(false);
+        voiceRecordingStartedAtRef.current = null;
+        void track(Events.VoiceStopped);
+        const text = userInputRef.current.trim();
+        if (text) {
+          await submitVoiceQuestion(text);
+        } else {
+          notifyNoSpeechHeard();
+        }
+        return;
+      }
+
       const session = webAudioSessionRef.current;
       webAudioSessionRef.current = null;
       setIsListening(false);

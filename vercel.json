@@ -18,6 +18,9 @@
     "api/token/getToken.ts": {
       "maxDuration": 10
     },
+    "api/transcribe.ts": {
+      "maxDuration": 30
+    },
     "api/feedback.ts": {
       "maxDuration": 10
     },
@@ -36,6 +39,7 @@
     { "src": "/api/audio", "dest": "/api/audio" },
     { "src": "/api/parseRequest", "dest": "/api/parseRequest" },
     { "src": "/api/token/getToken", "dest": "https://buddywalk.app/api/token/getToken" },
+    { "src": "/api/transcribe", "dest": "/api/transcribe" },
     { "src": "/api/feedback", "dest": "/api/feedback" },
     { "src": "/api/telemetry/events", "dest": "/api/telemetry/events" },
     { "src": "/api/db/(.*)", "dest": "https://buddywalk.app/api/db/$1" },
