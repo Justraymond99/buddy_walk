@@ -35,7 +35,7 @@
     { "src": "/api/text", "dest": "/api/text" },
     { "src": "/api/audio", "dest": "/api/audio" },
     { "src": "/api/parseRequest", "dest": "/api/parseRequest" },
-    { "src": "/api/token/getToken", "dest": "/api/token/getToken" },
+    { "src": "/api/token/getToken", "dest": "https://buddywalk.app/api/token/getToken" },
     { "src": "/api/feedback", "dest": "/api/feedback" },
     { "src": "/api/telemetry/events", "dest": "/api/telemetry/events" },
     { "src": "/api/db/(.*)", "dest": "https://buddywalk.app/api/db/$1" },

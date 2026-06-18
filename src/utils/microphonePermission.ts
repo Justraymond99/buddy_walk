@@ -16,7 +16,8 @@ export async function ensureMicrophonePermission(): Promise<boolean> {
     }
   }
 
-  const current = await Audio.getPermissionsAsync();  if (current.granted) return true;
+  const current = await Audio.getPermissionsAsync();
+  if (current.granted) return true;
 
   if (current.canAskAgain) {
     const requested = await Audio.requestPermissionsAsync();

@@ -770,7 +770,7 @@ export default function MainScreen({ navigation }: Props) {
     ? 'audio/wav; codecs=audio/pcm; samplerate=16000'
     : 'audio/aac';
 
-  const MIN_VOICE_RECORDING_MS = 700;
+  const MIN_VOICE_RECORDING_MS = 400;
 
   async function submitVoiceQuestion(transcript: string): Promise<void> {
     const trimmed = transcript.trim();
@@ -870,6 +870,7 @@ export default function MainScreen({ navigation }: Props) {
           return;
         }
         webAudioSessionRef.current = session;
+        voiceRecordingStartedAtRef.current = Date.now();
         setIsListening(true);
         setUserInput('');
         try {
@@ -909,6 +910,14 @@ export default function MainScreen({ navigation }: Props) {
       const session = webAudioSessionRef.current;
       webAudioSessionRef.current = null;
       setIsListening(false);
+      const startedAt = voiceRecordingStartedAtRef.current;
+      voiceRecordingStartedAtRef.current = null;
+      if (startedAt != null && Date.now() - startedAt < MIN_VOICE_RECORDING_MS) {
+        if (session) await session.stop();
+        setIsTranscribing(false);
+        speak('Hold Tap to Ask a little longer while you speak, then tap again.');
+        return;
+      }
       setIsTranscribing(true);
       void track(Events.VoiceStopped);
       try {
@@ -951,14 +960,16 @@ export default function MainScreen({ navigation }: Props) {
       }
       setIsTranscribing(true);
       void track(Events.VoiceStopped);
-      await audioRecordingRef.current.stopAndUnloadAsync();
+      const recording = audioRecordingRef.current;
+      const uri = recording.getURI();
+      await recording.stopAndUnloadAsync();
+      audioRecordingRef.current = null;
       await new Promise((resolve) => setTimeout(resolve, 150));
       await resetAudioForPlayback();
-      const uri = audioRecordingRef.current.getURI();
-      audioRecordingRef.current = null;
 
       if (!uri || !azureTokenRef.current) {
         setIsTranscribing(false);
+        if (!uri) speak('Could not read the recording. Please try again.');
         return;
       }
 
