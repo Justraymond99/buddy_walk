@@ -22,12 +22,11 @@ function readEnvRoot(name: string): string | undefined {
 
 /** Backend API root for Q&A, audio, tokens (see buddy-walk-default-api.json). */
 function resolveApiRoot(): string {
+  // Web always uses same-origin /api (Vercel serverless). Do not let a build-time
+  // EXPO_PUBLIC_API_URL override this — the Vercel dashboard may still set it.
+  if (Platform.OS === 'web') return '';
   const inlined = readEnvRoot('EXPO_PUBLIC_API_URL');
   if (inlined) return inlined;
-  // On web, default to a same-origin relative root ('' -> requests go to
-  // `/api`). A Vercel rewrite proxies `/api/*` to the real backend, so the
-  // browser never makes a cross-origin call and CORS is a non-issue.
-  if (Platform.OS === 'web') return '';
   const fromExtra = Constants.expoConfig?.extra?.buddyWalkApiUrl;
   if (typeof fromExtra === 'string' && fromExtra.trim().length > 0) {
     return normalizeApiRoot(fromExtra.trim());
