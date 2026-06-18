@@ -1,10 +1,22 @@
-import { Alert, Linking } from 'react-native';
+import { Alert, Linking, Platform } from 'react-native';
 import { Audio } from 'expo-av';
 
-/** Request mic access before expo-av Recording (needed when Permissions screen was skipped). */
+/** Request mic access before recording (web uses getUserMedia; native uses expo-av). */
 export async function ensureMicrophonePermission(): Promise<boolean> {
-  const current = await Audio.getPermissionsAsync();
-  if (current.granted) return true;
+  if (Platform.OS === 'web') {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      return false;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const current = await Audio.getPermissionsAsync();  if (current.granted) return true;
 
   if (current.canAskAgain) {
     const requested = await Audio.requestPermissionsAsync();

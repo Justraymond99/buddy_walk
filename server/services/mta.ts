@@ -16,6 +16,8 @@ const MTA_FEEDS: Record<string, string> = {
 const NYC_TZ = "America/New_York";
 const MAX_STATION_KM = 2.5;
 const MAX_ARRIVALS = 4;
+/** Ignore scheduled trips far in the future — they are not useful "next train" answers. */
+const MAX_ARRIVAL_MINUTES = 90;
 
 interface Stop {
   name: string;
@@ -59,14 +61,22 @@ function baseStopId(stopId: string) {
   return stopId.replace(/[NS]$/, "");
 }
 
-function epochSeconds(timeField: unknown): number | null {
+export function epochSeconds(timeField: unknown): number | null {
   if (timeField == null) return null;
-  if (typeof timeField === "number") return timeField;
+  if (typeof timeField === "number") {
+    // GTFS-RT uses Unix seconds; guard against millisecond payloads.
+    return timeField > 1e12 ? Math.floor(timeField / 1000) : timeField;
+  }
+  if (typeof timeField === "bigint") return Number(timeField);
+  if (typeof timeField === "string") {
+    const parsed = Number.parseInt(timeField, 10);
+    return Number.isFinite(parsed) ? epochSeconds(parsed) : null;
+  }
   const t = timeField as { toNumber?: () => number; low?: number; high?: number };
-  if (typeof t.toNumber === "function") return t.toNumber();
+  if (typeof t.toNumber === "function") return epochSeconds(t.toNumber());
   if (t.low != null) {
     const high = t.high ?? 0;
-    return high * 0x100000000 + (t.low >>> 0);
+    return epochSeconds(high * 0x100000000 + (t.low >>> 0));
   }
   return null;
 }
@@ -151,6 +161,8 @@ export async function getSubwayArrivals(routeId: string, userLat: number, userLo
 
       const arrivalSec = epochSeconds(stu.arrival?.time) ?? epochSeconds(stu.departure?.time);
       if (!arrivalSec || arrivalSec < nowSec - 30) continue;
+      const minutesAhead = (arrivalSec - nowSec) / 60;
+      if (minutesAhead > MAX_ARRIVAL_MINUTES) continue;
 
       const direction = stu.stopId.endsWith("N")
         ? "Uptown/Manhattan-bound"
@@ -170,7 +182,7 @@ export async function getSubwayArrivals(routeId: string, userLat: number, userLo
   const upcoming = arrivals.slice(0, MAX_ARRIVALS);
 
   if (upcoming.length === 0) {
-    return `No upcoming ${route} trains are scheduled at ${stationName}, your nearest station (${nearest.km.toFixed(1)} km away).`;
+    return `No ${route} trains are expected at ${stationName}, your nearest station (${nearest.km.toFixed(1)} km away), in the next ${MAX_ARRIVAL_MINUTES} minutes.`;
   }
 
   const lines = upcoming.map((a) => {

@@ -7,9 +7,9 @@ const PLAYBACK_MODE: Partial<AudioMode> = {
   allowsRecordingIOS: false,
   playsInSilentModeIOS: true,
   staysActiveInBackground: false,
-  interruptionModeIOS: InterruptionModeIOS.DuckOthers,
-  interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
-  shouldDuckAndroid: true,
+  interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+  interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+  shouldDuckAndroid: false,
   playThroughEarpieceAndroid: false,
 };
 

@@ -33,6 +33,7 @@ export default function SavedPlacesScreen({ navigation }: Props) {
   const [busy, setBusy] = useState(false);
   const [alias, setAlias] = useState('');
   const [address, setAddress] = useState('');
+  const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [resolvingLocation, setResolvingLocation] = useState(false);
 
   const reload = useCallback(async () => {
@@ -77,8 +78,10 @@ export default function SavedPlacesScreen({ navigation }: Props) {
           .filter(Boolean)
           .join(', ');
         setAddress(composed || `${fix.coords.latitude}, ${fix.coords.longitude}`);
+        setCoords({ lat: fix.coords.latitude, lon: fix.coords.longitude });
       } else {
         setAddress(`${fix.coords.latitude}, ${fix.coords.longitude}`);
+        setCoords({ lat: fix.coords.latitude, lon: fix.coords.longitude });
       }
     } catch (e) {
       console.warn('reverse geocode failed:', e);
@@ -97,9 +100,15 @@ export default function SavedPlacesScreen({ navigation }: Props) {
     }
     setBusy(true);
     try {
-      const saved = await savePlace({ alias: aliasTrim, address: addressTrim });
+      const saved = await savePlace({
+        alias: aliasTrim,
+        address: addressTrim,
+        lat: coords?.lat,
+        lon: coords?.lon,
+      });
       setAlias('');
       setAddress('');
+      setCoords(null);
       await reload();
       Speech.speak(`Saved ${saved.alias}.`, { language: 'en-US' });
       AccessibilityInfo.announceForAccessibility(`Saved ${saved.alias}.`);
@@ -158,7 +167,9 @@ export default function SavedPlacesScreen({ navigation }: Props) {
           <Text style={styles.label}>Name</Text>
           <TextInput
             value={alias}
-            onChangeText={setAlias}
+            onChangeText={(text) => {
+              setAlias(text);
+            }}
             placeholder="e.g. home"
             placeholderTextColor="#888"
             style={styles.input}
@@ -183,7 +194,10 @@ export default function SavedPlacesScreen({ navigation }: Props) {
           <Text style={styles.label}>Address</Text>
           <TextInput
             value={address}
-            onChangeText={setAddress}
+            onChangeText={(text) => {
+              setAddress(text);
+              setCoords(null);
+            }}
             placeholder="123 Main Street, Brooklyn, NY"
             placeholderTextColor="#888"
             style={[styles.input, styles.multiline]}
@@ -252,7 +266,8 @@ export default function SavedPlacesScreen({ navigation }: Props) {
                   iconColor="#ff8a8a"
                   size={24}
                   onPress={() => confirmDelete(p)}
-                  accessibilityLabel={`Remove ${p.alias}`}
+                  accessibilityLabel={`Remove saved place ${p.alias}`}
+                  accessibilityHint="Deletes this saved place from your list"
                 />
               </View>
             ))

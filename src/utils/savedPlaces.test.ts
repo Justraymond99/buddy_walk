@@ -56,6 +56,22 @@ describe('savedPlaces store', () => {
     assert.equal(all.length, 1);
   });
 
+  it('includes coordinates in expanded text when a place has lat/lon', async () => {
+    const store = createSavedPlacesStore({ storage: memoryStorage() });
+    await store.savePlace({
+      alias: 'gym',
+      address: '200 Fitness Ave, Brooklyn, NY',
+      lat: 40.6925,
+      lon: -73.9857,
+    });
+
+    const expanded = await store.expandSavedAliases('How do I get to gym?');
+    assert.equal(
+      expanded.text,
+      'How do I get to 200 Fitness Ave, Brooklyn, NY (coordinates 40.6925, -73.9857)?'
+    );
+  });
+
   it('expands saved aliases as whole words and prefers longer aliases first', async () => {
     const store = createSavedPlacesStore({ storage: memoryStorage() });
     await store.savePlace({ alias: 'home', address: '123 Main St' });

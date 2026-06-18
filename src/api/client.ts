@@ -4,6 +4,10 @@ import Constants from 'expo-constants';
 
 import defaultApi from '../../buddy-walk-default-api.json';
 
+function isPrivateDevHost(url: string): boolean {
+  return /localhost|127\.|192\.168\.|10\.|100\.|\b172\.(1[6-9]|2\d|3[01])\./i.test(url);
+}
+
 function normalizeApiRoot(raw: string): string {
   return raw.replace(/\/+$/, '').replace(/\/api$/i, '');
 }
@@ -55,7 +59,11 @@ export function resolveCompanionShareBaseUrl(): string {
   if (typeof fromDefault === 'string' && fromDefault.trim().length > 0) {
     return normalizeApiRoot(fromDefault.trim());
   }
-  return resolveCompanionApiRoot();
+  const apiRoot = resolveCompanionApiRoot();
+  if (/^https?:\/\//i.test(apiRoot) && !isPrivateDevHost(apiRoot)) {
+    return apiRoot;
+  }
+  return normalizeApiRoot(defaultApi.apiRoot);
 }
 
 /** Root of the Buddy Walk backend (no `/api` suffix). */

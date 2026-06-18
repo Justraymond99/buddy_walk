@@ -130,9 +130,13 @@ export function createSavedPlacesStore({
       if (!aliasPattern) continue;
       const re = new RegExp(`(^|[^A-Za-z0-9_])(${aliasPattern})(?=$|[^A-Za-z0-9_])`, 'gi');
       let didMatch = false;
+      const replacement =
+        place.lat != null && place.lon != null
+          ? `${place.address} (coordinates ${place.lat}, ${place.lon})`
+          : place.address;
       result = result.replace(re, (_fullMatch, prefix: string) => {
         didMatch = true;
-        return `${prefix}${place.address}`;
+        return `${prefix}${replacement}`;
       });
       if (didMatch) {
         matched.push(place);

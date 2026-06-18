@@ -43,9 +43,10 @@ import { announce } from '../utils/announce';
 import { extractVideoFrames } from '../utils/extractVideoFrames';
 import { startWebFrameCapture, WebFrameSession } from '../utils/webFrameCapture';
 import {
-  startWebSpeechRecognition,
-  WebSpeechSession,
-} from '../utils/webSpeechRecognition';
+  contentTypeForWebBlob,
+  startWebAudioCapture,
+  WebAudioSession,
+} from '../utils/webAudioCapture';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 const HOLD_THRESHOLD_MS = 600;
@@ -117,7 +118,9 @@ function captureStatusLabel(state: CaptureUiState): string {
     case 'video-ready':
       return 'Video captured — tap Retake to replace';
     default:
-      return 'Tap for Photo  ·  Hold for Video';
+      return Platform.OS === 'web'
+        ? 'Take Photo  ·  Record Video'
+        : 'Tap for Photo  ·  Hold for Video';
   }
 }
 
@@ -177,6 +180,7 @@ export default function MainScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [screenReaderEnabled, setScreenReaderEnabled] = useState(false);
   const [recordingMode, setRecordingMode] = useState<RecordingMode>('idle');
   const [isHoldingForVideo, setIsHoldingForVideo] = useState(false);
   const [recordingElapsedSec, setRecordingElapsedSec] = useState(0);
@@ -191,7 +195,8 @@ export default function MainScreen({ navigation }: Props) {
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
-  const webSpeechRef = useRef<WebSpeechSession | null>(null);
+  const voiceRecordingStartedAtRef = useRef<number | null>(null);
+  const webAudioSessionRef = useRef<WebAudioSession | null>(null);
   const userInputRef = useRef('');
   const azureTokenRef = useRef<{ token: string; region: string } | null>(null);
   const cameraReadyRef = useRef(false);
@@ -385,9 +390,18 @@ export default function MainScreen({ navigation }: Props) {
   }, []);
 
   useEffect(() => {
+    AccessibilityInfo.isScreenReaderEnabled().then(setScreenReaderEnabled);
+    const sub = AccessibilityInfo.addEventListener(
+      'screenReaderChanged',
+      setScreenReaderEnabled
+    );
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
     return () => {
-      webSpeechRef.current?.abort();
-      webSpeechRef.current = null;
+      webAudioSessionRef.current?.abort();
+      webAudioSessionRef.current = null;
     };
   }, []);
 
@@ -544,6 +558,17 @@ export default function MainScreen({ navigation }: Props) {
     return false;
   }
 
+  async function handleReleaseCapture() {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+      setIsHoldingForVideo(false);
+      await takePhoto();
+    } else if (recordingModeRef.current === 'recording-video') {
+      await stopVideoRecording();
+    }
+  }
+
   function handlePressIn() {
     tap();
     setIsHoldingForVideo(true);
@@ -554,13 +579,14 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   async function handlePressOut() {
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-      setIsHoldingForVideo(false);
-      await takePhoto();
-    } else if (recordingMode === 'recording-video') {
+    await handleReleaseCapture();
+  }
+
+  async function toggleVideoCapture() {
+    if (recordingModeRef.current === 'recording-video') {
       await stopVideoRecording();
+    } else {
+      await startVideoRecording();
     }
   }
 
@@ -744,6 +770,8 @@ export default function MainScreen({ navigation }: Props) {
     ? 'audio/wav; codecs=audio/pcm; samplerate=16000'
     : 'audio/aac';
 
+  const MIN_VOICE_RECORDING_MS = 700;
+
   async function submitVoiceQuestion(transcript: string): Promise<void> {
     const trimmed = transcript.trim();
     if (!trimmed) {
@@ -766,13 +794,65 @@ export default function MainScreen({ navigation }: Props) {
     }
   }
 
+  async function transcribeWithAzure(audioBody: Blob | ArrayBuffer, contentType: string): Promise<string | null> {
+    let auth = azureTokenRef.current ?? (await refreshAzureToken());
+    if (!auth) return null;
+
+    const callAzure = (credentials: { token: string; region: string }) =>
+      fetch(
+        `https://${credentials.region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${credentials.token}`,
+            'Content-Type': contentType,
+            Accept: 'application/json',
+          },
+          body: audioBody,
+        }
+      );
+
+    let response = await callAzure(auth);
+    if (response.status === 401) {
+      const refreshed = await refreshAzureToken();
+      if (refreshed) response = await callAzure(refreshed);
+    }
+    if (!response.ok) {
+      console.error('Azure STT HTTP error:', response.status, await response.text());
+      return null;
+    }
+
+    const result = (await response.json()) as {
+      DisplayText?: string;
+      RecognitionStatus: string;
+      NBest?: { Display: string }[];
+    };
+
+    if (result.RecognitionStatus === 'Success') {
+      return result.NBest?.[0]?.Display ?? result.DisplayText ?? '';
+    }
+    if (
+      result.RecognitionStatus === 'NoMatch' ||
+      result.RecognitionStatus === 'InitialSilenceTimeout'
+    ) {
+      return '';
+    }
+    console.error('Azure STT unhandled status:', result.RecognitionStatus);
+    return null;
+  }
+
   async function startListening() {
     if (!azureTokenRef.current) {
+      await refreshAzureToken();
+    }
+    if (!azureTokenRef.current) {
       speak('Voice input is unavailable. Make sure the backend is running and try again.');
-      Alert.alert(
-        'Voice Input Unavailable',
-        'Could not connect to the speech service. Make sure the backend is running and try again.'
-      );
+      if (Platform.OS !== 'web') {
+        Alert.alert(
+          'Voice Input Unavailable',
+          'Could not connect to the speech service. Make sure the backend is running and try again.'
+        );
+      }
       return;
     }
     const micOk = await ensureMicrophonePermission();
@@ -782,28 +862,29 @@ export default function MainScreen({ navigation }: Props) {
     }
 
     if (Platform.OS === 'web') {
-      webSpeechRef.current?.abort();
-      webSpeechRef.current = startWebSpeechRecognition(
-        azureTokenRef.current,
-        (live) => setUserInput(live),
-        () => {
-          /* finals stream into the text field via onInterim */
-        },
-        (message) => {
-          console.error('Web speech error:', message);
-          setIsListening(false);
-          speak('Voice recognition failed. Please try again.');
+      webAudioSessionRef.current?.abort();
+      try {
+        const session = await startWebAudioCapture();
+        if (!session) {
+          speak('Could not start microphone. Check browser permissions and try again.');
+          return;
         }
-      );
-      if (!webSpeechRef.current) {
-        speak('Speech recognition is not supported in this browser.');
-        return;
+        webAudioSessionRef.current = session;
+        setIsListening(true);
+        setUserInput('');
+        try {
+          Vibration.vibrate(60);
+        } catch {
+          // noop
+        }
+        void track(Events.VoiceStarted);
+        AccessibilityInfo.announceForAccessibility(
+          'Listening. Tap again when finished speaking.'
+        );
+      } catch (e) {
+        console.error('startListening web error:', e);
+        speak('Could not start microphone');
       }
-      setIsListening(true);
-      setUserInput('');
-      Vibration.vibrate(60);
-      void track(Events.VoiceStarted);
-      AccessibilityInfo.announceForAccessibility('Listening. Tap again when finished speaking.');
       return;
     }
 
@@ -811,6 +892,7 @@ export default function MainScreen({ navigation }: Props) {
       await prepareAudioForRecording();
       const { recording } = await Audio.Recording.createAsync(AZURE_RECORDING_OPTIONS);
       audioRecordingRef.current = recording;
+      voiceRecordingStartedAtRef.current = Date.now();
       setIsListening(true);
       setUserInput('');
       Vibration.vibrate(60);
@@ -824,15 +906,33 @@ export default function MainScreen({ navigation }: Props) {
 
   async function stopListening() {
     if (Platform.OS === 'web') {
-      const session = webSpeechRef.current;
-      webSpeechRef.current = null;
-      session?.stop();
+      const session = webAudioSessionRef.current;
+      webAudioSessionRef.current = null;
       setIsListening(false);
-      const transcript = userInputRef.current.trim();
-      if (transcript) {
-        await submitVoiceQuestion(transcript);
-      } else {
-        notifyNoSpeechHeard();
+      setIsTranscribing(true);
+      void track(Events.VoiceStopped);
+      try {
+        const blob = session ? await session.stop() : null;
+        if (!blob || blob.size === 0) {
+          notifyNoSpeechHeard();
+          return;
+        }
+        AccessibilityInfo.announceForAccessibility('Processing speech');
+        const transcript = await transcribeWithAzure(blob, contentTypeForWebBlob(blob));
+        if (transcript === null) {
+          speak('Speech service error. Please try again.');
+          return;
+        }
+        if (transcript.trim()) {
+          await submitVoiceQuestion(transcript);
+        } else {
+          notifyNoSpeechHeard();
+        }
+      } catch (e) {
+        console.error('stopListening web error:', e);
+        speak('Voice recognition failed');
+      } finally {
+        setIsTranscribing(false);
       }
       return;
     }
@@ -840,9 +940,19 @@ export default function MainScreen({ navigation }: Props) {
     if (!audioRecordingRef.current) return;
     try {
       setIsListening(false);
+      const startedAt = voiceRecordingStartedAtRef.current;
+      voiceRecordingStartedAtRef.current = null;
+      if (startedAt != null && Date.now() - startedAt < MIN_VOICE_RECORDING_MS) {
+        await audioRecordingRef.current.stopAndUnloadAsync();
+        audioRecordingRef.current = null;
+        await resetAudioForPlayback();
+        speak('Hold Tap to Ask a little longer while you speak, then tap again.');
+        return;
+      }
       setIsTranscribing(true);
       void track(Events.VoiceStopped);
       await audioRecordingRef.current.stopAndUnloadAsync();
+      await new Promise((resolve) => setTimeout(resolve, 150));
       await resetAudioForPlayback();
       const uri = audioRecordingRef.current.getURI();
       audioRecordingRef.current = null;
@@ -856,57 +966,16 @@ export default function MainScreen({ navigation }: Props) {
 
       const audioData = await fetch(uri);
       const audioBlob = await audioData.arrayBuffer();
+      const transcript = await transcribeWithAzure(audioBlob, AZURE_CONTENT_TYPE);
 
-      const callAzure = (auth: { token: string; region: string }) =>
-        fetch(
-          `https://${auth.region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${auth.token}`,
-              'Content-Type': AZURE_CONTENT_TYPE,
-              Accept: 'application/json',
-            },
-            body: audioBlob,
-          }
-        );
-
-      let response = await callAzure(azureTokenRef.current);
-
-      if (response.status === 401) {
-        const refreshed = await refreshAzureToken();
-        if (refreshed) {
-          response = await callAzure(refreshed);
-        }
-      }
-
-      if (!response.ok) {
-        console.error('Azure STT HTTP error:', response.status, await response.text());
+      if (transcript === null) {
         speak('Speech service error. Please try again.');
         return;
       }
-
-      const result = await response.json() as {
-        DisplayText?: string;
-        RecognitionStatus: string;
-        NBest?: { Display: string }[];
-      };
-
-      if (result.RecognitionStatus === 'Success') {
-        const transcript = result.NBest?.[0]?.Display ?? result.DisplayText ?? '';
-        if (transcript) {
-          await submitVoiceQuestion(transcript);
-        } else {
-          notifyNoSpeechHeard();
-        }
-      } else if (
-        result.RecognitionStatus === 'NoMatch' ||
-        result.RecognitionStatus === 'InitialSilenceTimeout'
-      ) {
-        notifyNoSpeechHeard();
+      if (transcript.trim()) {
+        await submitVoiceQuestion(transcript);
       } else {
-        console.error('Azure STT unhandled status:', result.RecognitionStatus);
-        speak('Could not process speech. Please try again.');
+        notifyNoSpeechHeard();
       }
     } catch (e) {
       console.error('stopListening error:', e);
@@ -1180,6 +1249,45 @@ export default function MainScreen({ navigation }: Props) {
   const captureLabel = captureStatusLabel(captureUiState);
   const cameraButtonLabel = captureButtonLabel(captureUiState);
   const cameraA11yLabel = captureAccessibilityLabel(captureUiState);
+  const useExplicitCaptureControls = Platform.OS === 'web' || screenReaderEnabled;
+  const isRecordingVideo = captureUiState === 'recording';
+
+  const cameraPreview = (
+    <View
+      style={[
+        styles.cameraPreviewWrapper,
+        captureUiState === 'holding' && styles.cameraPreviewHolding,
+        captureUiState === 'recording' && styles.cameraPreviewRecording,
+      ]}
+    >
+      <CameraView
+        ref={cameraRef}
+        style={styles.cameraPreview}
+        facing={'back' as CameraType}
+        mode="video"
+        onCameraReady={onCameraReady}
+      />
+      {captureUiState === 'holding' ? (
+        <View style={styles.captureOverlayHolding} pointerEvents="none">
+          <Text style={styles.captureOverlayTitle}>KEEP HOLDING</Text>
+          <Text style={styles.captureOverlaySub}>Video starts in a moment</Text>
+        </View>
+      ) : null}
+      {captureUiState === 'recording' ? (
+        <View style={styles.captureOverlayRecording} pointerEvents="none">
+          <View style={styles.recBadge}>
+            <Animated.View style={[styles.recDot, { opacity: recDotOpacity }]} />
+            <Text style={styles.recBadgeText}>
+              REC {formatRecordingTime(recordingElapsedSec)}
+            </Text>
+          </View>
+          <Text style={styles.recHint}>
+            {useExplicitCaptureControls ? 'Tap Stop Video below' : 'Release to stop'}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -1192,64 +1300,90 @@ export default function MainScreen({ navigation }: Props) {
           </Text>
 
           {!hasCapture && cameraReady ? (
-            <Pressable
-              onPressIn={handlePressIn}
-              onPressOut={handlePressOut}
-              style={({ pressed }) => [
-                styles.cameraButton,
-                captureUiState === 'holding' && styles.cameraButtonHolding,
-                captureUiState === 'recording' && styles.cameraButtonRecording,
-                pressed && styles.cameraButtonPressed,
-              ]}
-              accessibilityLabel={cameraA11yLabel}
-              accessibilityRole="button"
-              accessibilityHint="Tap quickly to take a photo. Hold to record video."
-              accessibilityState={{
-                busy: captureUiState === 'recording',
-              }}
-            >
-              <View
-                style={[
-                  styles.cameraPreviewWrapper,
-                  captureUiState === 'holding' && styles.cameraPreviewHolding,
-                  captureUiState === 'recording' && styles.cameraPreviewRecording,
-                ]}
-              >
-                <CameraView
-                  ref={cameraRef}
-                  style={styles.cameraPreview}
-                  facing={'back' as CameraType}
-                  mode="video"
-                  onCameraReady={onCameraReady}
-                />
-                {captureUiState === 'holding' ? (
-                  <View style={styles.captureOverlayHolding} pointerEvents="none">
-                    <Text style={styles.captureOverlayTitle}>KEEP HOLDING</Text>
-                    <Text style={styles.captureOverlaySub}>Video starts in a moment</Text>
-                  </View>
-                ) : null}
-                {captureUiState === 'recording' ? (
-                  <View style={styles.captureOverlayRecording} pointerEvents="none">
-                    <View style={styles.recBadge}>
-                      <Animated.View style={[styles.recDot, { opacity: recDotOpacity }]} />
-                      <Text style={styles.recBadgeText}>
-                        REC {formatRecordingTime(recordingElapsedSec)}
-                      </Text>
-                    </View>
-                    <Text style={styles.recHint}>Release to stop</Text>
-                  </View>
+            useExplicitCaptureControls ? (
+              <View style={styles.cameraCaptureBlock}>
+                {cameraPreview}
+                <View style={styles.captureActionRow}>
+                  <Button
+                    mode="contained"
+                    onPressIn={() => tap()}
+                    onPress={() => void takePhoto()}
+                    disabled={isRecordingVideo}
+                    style={[styles.captureActionButton, styles.capturePhotoButton]}
+                    labelStyle={styles.captureActionLabel}
+                    accessibilityLabel="Take photo"
+                    accessibilityHint="Captures a still photo from the camera"
+                  >
+                    Take Photo
+                  </Button>
+                  <Button
+                    mode="contained"
+                    onPressIn={() => tapMedium()}
+                    onPress={() => void toggleVideoCapture()}
+                    style={[
+                      styles.captureActionButton,
+                      isRecordingVideo ? styles.captureStopButton : styles.captureVideoButton,
+                    ]}
+                    labelStyle={styles.captureActionLabel}
+                    accessibilityLabel={isRecordingVideo ? 'Stop video recording' : 'Record video'}
+                    accessibilityHint={
+                      isRecordingVideo
+                        ? 'Stops the current video recording'
+                        : 'Starts recording video from the camera'
+                    }
+                    accessibilityState={{ busy: isRecordingVideo }}
+                  >
+                    {isRecordingVideo ? 'Stop Video' : 'Record Video'}
+                  </Button>
+                </View>
+              </View>
+            ) : (
+              <View>
+                <Pressable
+                  onPressIn={handlePressIn}
+                  onPressOut={handlePressOut}
+                  onTouchEnd={() => void handleReleaseCapture()}
+                  onPointerUp={() => void handleReleaseCapture()}
+                  onPointerCancel={() => void handleReleaseCapture()}
+                  style={({ pressed }) => [
+                    styles.cameraButton,
+                    captureUiState === 'holding' && styles.cameraButtonHolding,
+                    captureUiState === 'recording' && styles.cameraButtonRecording,
+                    pressed && styles.cameraButtonPressed,
+                  ]}
+                  accessibilityLabel={cameraA11yLabel}
+                  accessibilityRole="button"
+                  accessibilityHint="Tap quickly to take a photo. Hold to record video."
+                  accessibilityState={{
+                    busy: captureUiState === 'recording',
+                  }}
+                >
+                  {cameraPreview}
+                  <Text
+                    style={[
+                      styles.cameraButtonLabel,
+                      captureUiState === 'holding' && styles.cameraButtonLabelHolding,
+                      captureUiState === 'recording' && styles.cameraButtonLabelRecording,
+                    ]}
+                  >
+                    {cameraButtonLabel}
+                  </Text>
+                </Pressable>
+                {isRecordingVideo ? (
+                  <Button
+                    mode="contained"
+                    onPressIn={() => tapMedium()}
+                    onPress={() => void stopVideoRecording()}
+                    style={styles.stopVideoButton}
+                    labelStyle={styles.captureActionLabel}
+                    accessibilityLabel="Stop video recording"
+                    accessibilityHint="Stops the current video recording immediately"
+                  >
+                    Stop Video
+                  </Button>
                 ) : null}
               </View>
-              <Text
-                style={[
-                  styles.cameraButtonLabel,
-                  captureUiState === 'holding' && styles.cameraButtonLabelHolding,
-                  captureUiState === 'recording' && styles.cameraButtonLabelRecording,
-                ]}
-              >
-                {cameraButtonLabel}
-              </Text>
-            </Pressable>
+            )
           ) : hasCapture ? (
             <Button
               mode="contained"
@@ -1312,7 +1446,7 @@ export default function MainScreen({ navigation }: Props) {
 
           <Pressable
             onPressIn={() => tap()}
-            onPress={toggleListening}
+            onPress={() => void toggleListening()}
             disabled={loading || isTranscribing}
             style={[
               styles.voiceButton,
@@ -1595,6 +1729,37 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 3,
     borderColor: 'transparent',
+  },
+  cameraCaptureBlock: {
+    width: '100%',
+    gap: 12,
+  },
+  captureActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  captureActionButton: {
+    flex: 1,
+    borderRadius: 14,
+  },
+  capturePhotoButton: {
+    backgroundColor: '#2e7d32',
+  },
+  captureVideoButton: {
+    backgroundColor: '#1565c0',
+  },
+  captureStopButton: {
+    backgroundColor: '#c62828',
+  },
+  stopVideoButton: {
+    marginTop: 12,
+    borderRadius: 14,
+    backgroundColor: '#c62828',
+  },
+  captureActionLabel: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
   },
   cameraButtonHolding: {
     borderColor: '#ffb300',

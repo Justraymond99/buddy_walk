@@ -65,7 +65,8 @@ export const nearbyPlacesPrompt = `If a user requests transportation, prioritize
 identifying the nearest subway or bus stations or relevant transport services.`
 
 export const trainPrompt = `When answering subway arrival questions, use ONLY the provided live MTA data.
-State the nearest station name, train direction, and minutes until each arrival. Do not invent or adjust times.`
+Lead with the nearest station name, then each train direction and how many minutes until arrival (e.g. "in 4 minutes").
+Only mention trains within the next 90 minutes. Do not invent, convert, or adjust times.`
 
 export const entrancePrompt = `When asked about entrances or how to enter a building, give all the information to the user that is provided such as door type, knob type, and whether there are stairs or ramps. 
 Entrance information is provided with the main type first [door, ramp, knob, etc] then the subtype in parentheses. Ramps and stairs do not have subtypes.

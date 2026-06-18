@@ -5,25 +5,6 @@
   "installCommand": "npm install",
   "framework": null,
   "functions": {
-    "api/text.ts": {
-      "maxDuration": 60,
-      "includeFiles": "server/stops.txt"
-    },
-    "api/audio.ts": {
-      "maxDuration": 30
-    },
-    "api/parseRequest.ts": {
-      "maxDuration": 30
-    },
-    "api/token/getToken.ts": {
-      "maxDuration": 10
-    },
-    "api/feedback.ts": {
-      "maxDuration": 10
-    },
-    "api/telemetry/events.ts": {
-      "maxDuration": 10
-    },
     "api/companion.ts": {
       "maxDuration": 10
     },
@@ -32,12 +13,12 @@
     }
   },
   "routes": [
-    { "src": "/api/text", "dest": "/api/text" },
-    { "src": "/api/audio", "dest": "/api/audio" },
-    { "src": "/api/parseRequest", "dest": "/api/parseRequest" },
-    { "src": "/api/token/getToken", "dest": "/api/token/getToken" },
-    { "src": "/api/feedback", "dest": "/api/feedback" },
-    { "src": "/api/telemetry/events", "dest": "/api/telemetry/events" },
+    { "src": "/api/text", "dest": "https://buddywalk.app/api/text" },
+    { "src": "/api/audio", "dest": "https://buddywalk.app/api/audio" },
+    { "src": "/api/parseRequest", "dest": "https://buddywalk.app/api/parseRequest" },
+    { "src": "/api/token/(.*)", "dest": "https://buddywalk.app/api/token/$1" },
+    { "src": "/api/feedback", "dest": "https://buddywalk.app/api/feedback" },
+    { "src": "/api/telemetry/(.*)", "dest": "https://buddywalk.app/api/telemetry/$1" },
     { "src": "/api/db/(.*)", "dest": "https://buddywalk.app/api/db/$1" },
     { "src": "/api/companion/health", "dest": "/api/companion?route=health" },
     { "src": "/api/companion/create", "dest": "/api/companion?route=create" },
