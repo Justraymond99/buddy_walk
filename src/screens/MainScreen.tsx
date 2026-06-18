@@ -47,6 +47,7 @@ import { ensureMicrophonePermission } from '../utils/microphonePermission';
 import { prepareAudioForRecording, resetAudioForPlayback } from '../utils/audioSession';
 import { stopSpeaking, isSpeaking } from '../utils/speakText';
 import { announce } from '../utils/announce';
+import { unlockWebAudioForPlayback, isSafariBrowser } from '../utils/webAudioUnlock';
 import { extractVideoFrames } from '../utils/extractVideoFrames';
 import { startWebFrameCapture, WebFrameSession } from '../utils/webFrameCapture';
 import {
@@ -516,8 +517,8 @@ export default function MainScreen({ navigation }: Props) {
       // When the response is a route, haptic navigation speaks the steps as we
       // go — reading the full directions text too would talk over those cues.
       if (!aiRouteRef.current) {
-        // Web: use server voice (clearer). Native: device TTS starts immediately.
-        speak(aiResponse, Platform.OS === 'web' ? undefined : { preferDevice: true });
+        // Safari blocks async MP3 playback after mic capture — use device speech.
+        speak(aiResponse, { preferDevice: true });
       }
     }
 
@@ -827,6 +828,7 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   async function startListening() {
+    if (Platform.OS === 'web') unlockWebAudioForPlayback();
     if (!azureTokenRef.current) {
       await refreshAzureToken();
     }
@@ -908,6 +910,8 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   async function stopListening() {
+    if (Platform.OS === 'web') unlockWebAudioForPlayback();
+
     if (Platform.OS === 'web') {
       const session = webAudioSessionRef.current;
       const speech = webSpeechSessionRef.current;
@@ -933,6 +937,12 @@ export default function MainScreen({ navigation }: Props) {
           speech ? speech.stop() : Promise.resolve(''),
           session ? session.stop() : Promise.resolve(null),
         ]);
+
+        // Safari needs the mic fully released before speechSynthesis can run.
+        if (isSafariBrowser()) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          unlockWebAudioForPlayback();
+        }
 
         let text =
           liveText.trim() ||
@@ -1491,7 +1501,10 @@ export default function MainScreen({ navigation }: Props) {
           />
 
           <Pressable
-            onPressIn={() => tap()}
+            onPressIn={() => {
+              tap();
+              if (Platform.OS === 'web') unlockWebAudioForPlayback();
+            }}
             onPress={() => void toggleListening()}
             disabled={loading || isTranscribing}
             style={[

@@ -5,6 +5,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import { sendAudioRequest } from '../api/openAi';
 import { resetAudioForPlayback } from './audioSession';
+import { isSafariBrowser, unlockWebAudioForPlayback } from './webAudioUnlock';
 
 const MAX_TTS_CHARS = 800;
 const isWeb = Platform.OS === 'web';
@@ -61,11 +62,13 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 async function playMp3BufferWeb(buffer: ArrayBuffer, generation: number): Promise<boolean> {
   if (generation !== speakGeneration || typeof window === 'undefined') return false;
 
+  unlockWebAudioForPlayback();
   await stopPlayback();
 
   const blob = new Blob([buffer], { type: 'audio/mpeg' });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
+  audio.preload = 'auto';
   activeWebAudio = audio;
 
   return new Promise((resolve) => {
@@ -143,13 +146,18 @@ function speakWithWebSpeech(text: string, generation: number): Promise<void> {
     }
 
     const synth = window.speechSynthesis;
+    const safari = isSafariBrowser();
+
     const start = () => {
       if (generation !== speakGeneration) {
         resolve();
         return;
       }
 
-      synth.cancel();
+      unlockWebAudioForPlayback();
+
+      if (!safari) synth.cancel();
+
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'en-US';
       utterance.rate = 1.0;
@@ -160,29 +168,55 @@ function speakWithWebSpeech(text: string, generation: number): Promise<void> {
         voices.find((v) => v.lang.startsWith('en'));
       if (voice) utterance.voice = voice;
 
+      let resumeTimer: ReturnType<typeof setInterval> | null = null;
+      const cleanup = () => {
+        if (resumeTimer) {
+          clearInterval(resumeTimer);
+          resumeTimer = null;
+        }
+      };
+
       utterance.onend = () => {
+        cleanup();
         if (generation === speakGeneration) resolve();
       };
-      utterance.onerror = () => resolve();
+      utterance.onerror = () => {
+        cleanup();
+        resolve();
+      };
+
+      // iOS Safari pauses synthesis after mic use; keep nudging it alive.
+      if (safari) {
+        resumeTimer = setInterval(() => {
+          if (generation !== speakGeneration) {
+            cleanup();
+            return;
+          }
+          synth.resume();
+        }, 400);
+      }
 
       synth.resume();
       synth.speak(utterance);
 
-      // Chrome/Safari sometimes drop the first speak() after mic capture.
       window.setTimeout(() => {
         if (generation !== speakGeneration) return;
         if (!synth.speaking && !synth.pending) {
           synth.resume();
           synth.speak(utterance);
         }
-      }, 250);
+      }, safari ? 400 : 250);
     };
 
     if (synth.getVoices().length === 0) {
-      synth.onvoiceschanged = () => start();
-      window.setTimeout(start, 100);
+      const onVoices = () => {
+        synth.removeEventListener('voiceschanged', onVoices);
+        start();
+      };
+      synth.addEventListener('voiceschanged', onVoices);
+      window.setTimeout(start, safari ? 200 : 100);
     } else {
-      window.setTimeout(start, 50);
+      window.setTimeout(start, safari ? 80 : 50);
     }
   });
 }
@@ -240,10 +274,16 @@ export async function speakText(text: string, options?: { preferDevice?: boolean
   await stopPlayback();
   if (generation !== speakGeneration) return;
 
-  await resetAudioForPlayback();
+  if (isWeb) {
+    unlockWebAudioForPlayback();
+  } else {
+    await resetAudioForPlayback();
+  }
   if (generation !== speakGeneration) return;
 
-  if (options?.preferDevice) {
+  const preferDevice = options?.preferDevice ?? (isWeb && isSafariBrowser());
+
+  if (preferDevice) {
     await speakWithExpoSpeech(trimmed, generation);
     return;
   }
