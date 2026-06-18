@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -6,10 +7,19 @@ import { sendAudioRequest } from '../api/openAi';
 import { resetAudioForPlayback } from './audioSession';
 
 const MAX_TTS_CHARS = 800;
+const isWeb = Platform.OS === 'web';
 
 let activeSound: Audio.Sound | null = null;
 /** Bumps when a new speak starts or stopSpeaking() runs — stale async work exits early. */
 let speakGeneration = 0;
+
+function stopDeviceSpeech(): void {
+  if (isWeb && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+    return;
+  }
+  Speech.stop();
+}
 
 async function stopPlayback(): Promise<void> {
   if (!activeSound) return;
@@ -79,7 +89,32 @@ async function playMp3Buffer(buffer: ArrayBuffer, generation: number): Promise<b
   return generation === speakGeneration;
 }
 
+function speakWithWebSpeech(text: string, generation: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (generation !== speakGeneration) {
+      resolve();
+      return;
+    }
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      resolve();
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US';
+    utterance.rate = 1.0;
+    utterance.onend = () => {
+      if (generation === speakGeneration) resolve();
+    };
+    utterance.onerror = () => resolve();
+    // iOS Safari can leave synthesis paused after mic capture.
+    window.speechSynthesis.resume();
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
 function speakWithExpoSpeech(text: string, generation: number): Promise<void> {
+  if (isWeb) return speakWithWebSpeech(text, generation);
   return new Promise((resolve) => {
     if (generation !== speakGeneration) {
       resolve();
@@ -97,7 +132,7 @@ function speakWithExpoSpeech(text: string, generation: number): Promise<void> {
   });
 }
 
-/** True if server MP3 or expo-speech is currently playing. */
+/** True if server MP3 or device TTS is currently playing. */
 export async function isSpeaking(): Promise<boolean> {
   if (activeSound) {
     try {
@@ -106,6 +141,9 @@ export async function isSpeaking(): Promise<boolean> {
     } catch {
       /* ignore */
     }
+  }
+  if (isWeb && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    return window.speechSynthesis.speaking;
   }
   try {
     return await Speech.isSpeakingAsync();
@@ -124,7 +162,7 @@ export async function speakText(text: string, options?: { preferDevice?: boolean
   if (!trimmed) return;
 
   const generation = ++speakGeneration;
-  Speech.stop();
+  stopDeviceSpeech();
   await stopPlayback();
   if (generation !== speakGeneration) return;
 
@@ -156,6 +194,6 @@ export async function speakText(text: string, options?: { preferDevice?: boolean
 
 export async function stopSpeaking(): Promise<void> {
   speakGeneration += 1;
-  Speech.stop();
+  stopDeviceSpeech();
   await stopPlayback();
 }

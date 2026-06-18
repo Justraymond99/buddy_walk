@@ -35,9 +35,9 @@
     }
   },
   "routes": [
-    { "src": "/api/text", "dest": "/api/text" },
-    { "src": "/api/audio", "dest": "/api/audio" },
-    { "src": "/api/parseRequest", "dest": "/api/parseRequest" },
+    { "src": "/api/text", "dest": "https://buddywalk.app/api/text" },
+    { "src": "/api/audio", "dest": "https://buddywalk.app/api/audio" },
+    { "src": "/api/parseRequest", "dest": "https://buddywalk.app/api/parseRequest" },
     { "src": "/api/token/getToken", "dest": "https://buddywalk.app/api/token/getToken" },
     { "src": "/api/transcribe", "dest": "/api/transcribe" },
     { "src": "/api/feedback", "dest": "/api/feedback" },
