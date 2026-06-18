@@ -9,6 +9,7 @@ import {
   getLocationPermissionState,
   requestLocationPermission,
 } from '../utils/locationPermission';
+import { isBraveBrowser } from '../utils/webAudioUnlock';
 import {
   getCameraPermissionState,
   requestCameraPermission,
@@ -59,9 +60,11 @@ export default function PermissionsScreen({ navigation }: Props) {
         setLocationGranted(true);
       } else {
         const message =
-          Platform.OS === 'web'
-            ? 'Location was not enabled. In Safari, tap Allow when prompted, or open Settings → Safari → Location and allow this site.'
-            : 'Location is required for navigation features.';
+          Platform.OS === 'web' && isBraveBrowser()
+            ? 'Location was not enabled. In Brave, open the lion icon in the address bar and allow Location for this site, or turn off Shields for buddy-walk-mobile.vercel.app.'
+            : Platform.OS === 'web'
+              ? 'Location was not enabled. Tap Allow when prompted, or check your browser site settings.'
+              : 'Location is required for navigation features.';
         Alert.alert('Location Access Denied', message);
       }
     } catch (e) {

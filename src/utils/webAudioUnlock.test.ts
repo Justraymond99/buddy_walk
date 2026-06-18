@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isSafariBrowser } from './webAudioUnlock.ts';
+import { isBraveBrowser, isSafariBrowser } from './webAudioUnlock.ts';
 
 describe('isSafariBrowser', () => {
   it('detects Safari user agents', () => {
@@ -27,6 +27,19 @@ describe('isSafariBrowser', () => {
       configurable: true,
     });
     assert.equal(isSafariBrowser(), false);
+    Object.defineProperty(globalThis, 'navigator', { value: original, configurable: true });
+  });
+
+  it('detects Brave', () => {
+    const original = globalThis.navigator;
+    Object.defineProperty(globalThis, 'navigator', {
+      value: {
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Brave/120',
+      },
+      configurable: true,
+    });
+    assert.equal(isBraveBrowser(), true);
     Object.defineProperty(globalThis, 'navigator', { value: original, configurable: true });
   });
 });

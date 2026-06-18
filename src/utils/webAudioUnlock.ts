@@ -15,6 +15,12 @@ export function isSafariBrowser(): boolean {
   return /Safari/i.test(ua) && !/Chrome|CriOS|FxiOS|EdgiOS|Chromium|OPR/i.test(ua);
 }
 
+/** Brave is Chromium-based but Shields can block location/mic without a normal prompt. */
+export function isBraveBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Brave/i.test(navigator.userAgent);
+}
+
 /** Run synchronously inside onPressIn / onClick — before any await. */
 export function unlockWebAudioForPlayback(): void {
   if (typeof window === 'undefined') return;
