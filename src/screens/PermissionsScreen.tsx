@@ -1,13 +1,22 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, Alert } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, StyleSheet, Alert, Platform } from 'react-native';
 import { Text, Button } from 'react-native-paper';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Location from 'expo-location';
-import { Camera } from 'expo-camera';
-import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RootStackParamList } from '../types';
+import {
+  getLocationPermissionState,
+  requestLocationPermission,
+} from '../utils/locationPermission';
+import {
+  getCameraPermissionState,
+  requestCameraPermission,
+} from '../utils/cameraPermission';
+import {
+  ensureMicrophonePermission,
+  isMicrophonePermissionGranted,
+} from '../utils/microphonePermission';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Permissions'>;
 
@@ -15,8 +24,26 @@ export default function PermissionsScreen({ navigation }: Props) {
   const [locationGranted, setLocationGranted] = useState(false);
   const [cameraGranted, setCameraGranted] = useState(false);
   const [micGranted, setMicGranted] = useState(false);
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [cameraBusy, setCameraBusy] = useState(false);
+  const [micBusy, setMicBusy] = useState(false);
 
   const allGranted = locationGranted && cameraGranted && micGranted;
+
+  const refreshPermissionStates = useCallback(async () => {
+    const [location, camera, mic] = await Promise.all([
+      getLocationPermissionState(),
+      getCameraPermissionState(),
+      isMicrophonePermissionGranted(),
+    ]);
+    setLocationGranted(location === 'granted');
+    setCameraGranted(camera === 'granted');
+    setMicGranted(mic);
+  }, []);
+
+  useEffect(() => {
+    void refreshPermissionStates();
+  }, [refreshPermissionStates]);
 
   async function handleContinue() {
     await AsyncStorage.setItem('onboardingComplete', 'true');
@@ -24,29 +51,63 @@ export default function PermissionsScreen({ navigation }: Props) {
   }
 
   async function requestLocation() {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status === 'granted') {
-      setLocationGranted(true);
-    } else {
-      Alert.alert('Location Access Denied', 'Location is required for navigation features.');
+    if (locationBusy || locationGranted) return;
+    setLocationBusy(true);
+    try {
+      const state = await requestLocationPermission();
+      if (state === 'granted') {
+        setLocationGranted(true);
+      } else {
+        const message =
+          Platform.OS === 'web'
+            ? 'Location was not enabled. In Safari, tap Allow when prompted, or open Settings → Safari → Location and allow this site.'
+            : 'Location is required for navigation features.';
+        Alert.alert('Location Access Denied', message);
+      }
+    } catch (e) {
+      console.error('requestLocation error:', e);
+      Alert.alert(
+        'Location Error',
+        'Could not request location. Make sure you are on a secure connection (https) and try again.'
+      );
+    } finally {
+      setLocationBusy(false);
     }
   }
 
   async function requestCamera() {
-    const { status } = await Camera.requestCameraPermissionsAsync();
-    if (status === 'granted') {
-      setCameraGranted(true);
-    } else {
-      Alert.alert('Camera Access Denied', 'Camera is required to capture photos and videos.');
+    if (cameraBusy || cameraGranted) return;
+    setCameraBusy(true);
+    try {
+      const state = await requestCameraPermission();
+      if (state === 'granted') {
+        setCameraGranted(true);
+      } else {
+        Alert.alert('Camera Access Denied', 'Camera is required to capture photos and videos.');
+      }
+    } catch (e) {
+      console.error('requestCamera error:', e);
+      Alert.alert('Camera Error', 'Could not request camera access. Please try again.');
+    } finally {
+      setCameraBusy(false);
     }
   }
 
   async function requestMic() {
-    const { status } = await Audio.requestPermissionsAsync();
-    if (status === 'granted') {
-      setMicGranted(true);
-    } else {
-      Alert.alert('Microphone Access Denied', 'Microphone is required to ask questions by voice.');
+    if (micBusy || micGranted) return;
+    setMicBusy(true);
+    try {
+      const ok = await ensureMicrophonePermission();
+      if (ok) {
+        setMicGranted(true);
+      } else {
+        Alert.alert('Microphone Access Denied', 'Microphone is required to ask questions by voice.');
+      }
+    } catch (e) {
+      console.error('requestMic error:', e);
+      Alert.alert('Microphone Error', 'Could not request microphone access. Please try again.');
+    } finally {
+      setMicBusy(false);
     }
   }
 
@@ -79,45 +140,51 @@ export default function PermissionsScreen({ navigation }: Props) {
       <View style={styles.buttons}>
         <Button
           mode="contained"
-          onPress={requestLocation}
+          onPress={() => void requestLocation()}
+          disabled={locationBusy || locationGranted}
+          loading={locationBusy}
           style={[styles.button, locationGranted && styles.buttonGranted]}
           contentStyle={styles.buttonContent}
           labelStyle={[styles.buttonLabel, locationGranted && styles.buttonLabelGranted]}
           accessibilityLabel={locationGranted ? 'Location enabled' : 'Enable location access'}
           icon={locationGranted ? 'check' : 'map-marker'}
         >
-          {locationGranted ? 'Location Enabled' : 'Enable Location'}
+          {locationGranted ? 'Location Enabled' : locationBusy ? 'Requesting…' : 'Enable Location'}
         </Button>
 
         <Button
           mode="contained"
-          onPress={requestCamera}
+          onPress={() => void requestCamera()}
+          disabled={cameraBusy || cameraGranted}
+          loading={cameraBusy}
           style={[styles.button, cameraGranted && styles.buttonGranted]}
           contentStyle={styles.buttonContent}
           labelStyle={[styles.buttonLabel, cameraGranted && styles.buttonLabelGranted]}
           accessibilityLabel={cameraGranted ? 'Camera enabled' : 'Enable camera access'}
           icon={cameraGranted ? 'check' : 'camera'}
         >
-          {cameraGranted ? 'Camera Enabled' : 'Enable Camera'}
+          {cameraGranted ? 'Camera Enabled' : cameraBusy ? 'Requesting…' : 'Enable Camera'}
         </Button>
 
         <Button
           mode="contained"
-          onPress={requestMic}
+          onPress={() => void requestMic()}
+          disabled={micBusy || micGranted}
+          loading={micBusy}
           style={[styles.button, micGranted && styles.buttonGranted]}
           contentStyle={styles.buttonContent}
           labelStyle={[styles.buttonLabel, micGranted && styles.buttonLabelGranted]}
           accessibilityLabel={micGranted ? 'Microphone enabled' : 'Enable microphone access'}
           icon={micGranted ? 'check' : 'microphone'}
         >
-          {micGranted ? 'Microphone Enabled' : 'Enable Microphone'}
+          {micGranted ? 'Microphone Enabled' : micBusy ? 'Requesting…' : 'Enable Microphone'}
         </Button>
       </View>
 
       {allGranted && (
         <Button
           mode="contained"
-          onPress={handleContinue}
+          onPress={() => void handleContinue()}
           style={styles.continueButton}
           contentStyle={styles.continueButtonContent}
           labelStyle={styles.continueButtonLabel}

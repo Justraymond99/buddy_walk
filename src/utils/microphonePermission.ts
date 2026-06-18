@@ -1,6 +1,23 @@
 import { Alert, Linking, Platform } from 'react-native';
 import { Audio } from 'expo-av';
 
+/** True when mic access is already granted (no prompt). */
+export async function isMicrophonePermissionGranted(): Promise<boolean> {
+  if (Platform.OS === 'web') {
+    try {
+      if (navigator.permissions?.query) {
+        const perm = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        return perm.state === 'granted';
+      }
+    } catch {
+      /* Safari */
+    }
+    return false;
+  }
+  const current = await Audio.getPermissionsAsync();
+  return current.granted;
+}
+
 /** Request mic access before recording (web uses getUserMedia; native uses expo-av). */
 export async function ensureMicrophonePermission(): Promise<boolean> {
   if (Platform.OS === 'web') {

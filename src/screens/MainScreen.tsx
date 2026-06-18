@@ -63,7 +63,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 const HOLD_THRESHOLD_MS = 600;
 const MAX_VIDEO_DURATION_MS = 30000;
-const LOCATION_WAIT_MS = 2000;
+const LOCATION_WAIT_MS = 1000;
 const SLOW_RESPONSE_HINT_MS = 4500;
 const VIDEO_RECORDING_START_VIBRATION = [0, 120, 80, 120] as const;
 const PHOTO_CAPTURED_VIBRATION = [0, 50] as const;
@@ -940,7 +940,7 @@ export default function MainScreen({ navigation }: Props) {
 
         // Safari needs the mic fully released before speechSynthesis can run.
         if (isSafariBrowser()) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          await new Promise((resolve) => setTimeout(resolve, 50));
           unlockWebAudioForPlayback();
         }
 
@@ -1133,11 +1133,12 @@ export default function MainScreen({ navigation }: Props) {
         const trainLine = extractTrainLineFromText(resolvedText);
         if (trainLine) {
           try {
-            const arrivals = await fetchMtaArrivals(
-              trainLine,
-              coords.latitude,
-              coords.longitude
-            );
+            const arrivals = await Promise.race([
+              fetchMtaArrivals(trainLine, coords.latitude, coords.longitude),
+              new Promise<string>((_, reject) =>
+                setTimeout(() => reject(new Error('mta_timeout')), 1500)
+              ),
+            ]);
             textToSend = buildTrainQuestionWithLiveData(resolvedText, trainLine, arrivals);
           } catch (e) {
             console.warn('MTA prefetch failed, sending question without live data', e);
@@ -1217,6 +1218,10 @@ export default function MainScreen({ navigation }: Props) {
         // instead of reading the full directions text over the voice cues.
         aiRouteRef.current = finalRoute;
         setAiResponse(res.output);
+        if (!finalRoute) {
+          lastAutoSpokenRef.current = res.output;
+          speak(res.output, { preferDevice: true });
+        }
         setUserInput('');
         setCapturedImage(null);
         setCapturedVideoUri(null);

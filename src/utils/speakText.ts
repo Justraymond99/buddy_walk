@@ -185,7 +185,6 @@ function speakWithWebSpeech(text: string, generation: number): Promise<void> {
         resolve();
       };
 
-      // iOS Safari pauses synthesis after mic use; keep nudging it alive.
       if (safari) {
         resumeTimer = setInterval(() => {
           if (generation !== speakGeneration) {
@@ -193,7 +192,7 @@ function speakWithWebSpeech(text: string, generation: number): Promise<void> {
             return;
           }
           synth.resume();
-        }, 400);
+        }, 1000);
       }
 
       synth.resume();
@@ -205,7 +204,7 @@ function speakWithWebSpeech(text: string, generation: number): Promise<void> {
           synth.resume();
           synth.speak(utterance);
         }
-      }, safari ? 400 : 250);
+      }, 100);
     };
 
     if (synth.getVoices().length === 0) {
@@ -214,9 +213,9 @@ function speakWithWebSpeech(text: string, generation: number): Promise<void> {
         start();
       };
       synth.addEventListener('voiceschanged', onVoices);
-      window.setTimeout(start, safari ? 200 : 100);
+      window.setTimeout(start, 50);
     } else {
-      window.setTimeout(start, safari ? 80 : 50);
+      start();
     }
   });
 }
