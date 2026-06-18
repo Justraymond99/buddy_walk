@@ -515,7 +515,10 @@ export default function MainScreen({ navigation }: Props) {
       lastAutoSpokenRef.current = aiResponse;
       // When the response is a route, haptic navigation speaks the steps as we
       // go — reading the full directions text too would talk over those cues.
-      if (!aiRouteRef.current) speak(aiResponse, { preferDevice: true });
+      if (!aiRouteRef.current) {
+        // Web: use server voice (clearer). Native: device TTS starts immediately.
+        speak(aiResponse, Platform.OS === 'web' ? undefined : { preferDevice: true });
+      }
     }
 
     const loc = locationRef.current;

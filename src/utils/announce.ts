@@ -1,4 +1,4 @@
-import { AccessibilityInfo } from 'react-native';
+import { AccessibilityInfo, Platform } from 'react-native';
 import { speakText } from './speakText';
 
 // Cached screen-reader state so callers can branch synchronously. Kept in sync
@@ -27,12 +27,15 @@ export function isScreenReaderActive(): boolean {
  *
  * - Screen reader ON  → hand off to the screen reader (announceForAccessibility).
  * - Screen reader OFF → use the app's text-to-speech (server voice / expo-speech).
+ *
+ * RN Web always reports screen reader enabled but announceForAccessibility is a
+ * no-op there, so web always uses in-app TTS.
  */
 export function announce(text: string, options?: { preferDevice?: boolean }): void {
   const trimmed = text?.trim();
   if (!trimmed) return;
 
-  if (screenReaderOn) {
+  if (Platform.OS !== 'web' && screenReaderOn) {
     AccessibilityInfo.announceForAccessibility(trimmed);
   } else {
     void speakText(trimmed, options);

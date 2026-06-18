@@ -10,8 +10,21 @@ const MAX_TTS_CHARS = 800;
 const isWeb = Platform.OS === 'web';
 
 let activeSound: Audio.Sound | null = null;
+let activeWebAudio: HTMLAudioElement | null = null;
 /** Bumps when a new speak starts or stopSpeaking() runs — stale async work exits early. */
 let speakGeneration = 0;
+
+function stopWebAudio(): void {
+  if (!activeWebAudio) return;
+  const audio = activeWebAudio;
+  activeWebAudio = null;
+  try {
+    audio.pause();
+    audio.src = '';
+  } catch {
+    /* ignore */
+  }
+}
 
 function stopDeviceSpeech(): void {
   if (isWeb && typeof window !== 'undefined' && 'speechSynthesis' in window) {
@@ -22,6 +35,7 @@ function stopDeviceSpeech(): void {
 }
 
 async function stopPlayback(): Promise<void> {
+  stopWebAudio();
   if (!activeSound) return;
   const sound = activeSound;
   activeSound = null;
@@ -44,8 +58,36 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+async function playMp3BufferWeb(buffer: ArrayBuffer, generation: number): Promise<boolean> {
+  if (generation !== speakGeneration || typeof window === 'undefined') return false;
+
+  await stopPlayback();
+
+  const blob = new Blob([buffer], { type: 'audio/mpeg' });
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  activeWebAudio = audio;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      if (activeWebAudio === audio) activeWebAudio = null;
+      resolve(ok && generation === speakGeneration);
+    };
+
+    audio.onended = () => finish(true);
+    audio.onerror = () => finish(false);
+    void audio.play().then(() => undefined).catch(() => finish(false));
+  });
+}
+
 async function playMp3Buffer(buffer: ArrayBuffer, generation: number): Promise<boolean> {
   if (generation !== speakGeneration) return false;
+
+  if (isWeb) return playMp3BufferWeb(buffer, generation);
 
   const cacheDir = FileSystem.cacheDirectory;
   if (!cacheDir) return false;
@@ -99,17 +141,49 @@ function speakWithWebSpeech(text: string, generation: number): Promise<void> {
       resolve();
       return;
     }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 1.0;
-    utterance.onend = () => {
-      if (generation === speakGeneration) resolve();
+
+    const synth = window.speechSynthesis;
+    const start = () => {
+      if (generation !== speakGeneration) {
+        resolve();
+        return;
+      }
+
+      synth.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.rate = 1.0;
+
+      const voices = synth.getVoices();
+      const voice =
+        voices.find((v) => v.lang.startsWith('en-US')) ??
+        voices.find((v) => v.lang.startsWith('en'));
+      if (voice) utterance.voice = voice;
+
+      utterance.onend = () => {
+        if (generation === speakGeneration) resolve();
+      };
+      utterance.onerror = () => resolve();
+
+      synth.resume();
+      synth.speak(utterance);
+
+      // Chrome/Safari sometimes drop the first speak() after mic capture.
+      window.setTimeout(() => {
+        if (generation !== speakGeneration) return;
+        if (!synth.speaking && !synth.pending) {
+          synth.resume();
+          synth.speak(utterance);
+        }
+      }, 250);
     };
-    utterance.onerror = () => resolve();
-    // iOS Safari can leave synthesis paused after mic capture.
-    window.speechSynthesis.resume();
-    window.speechSynthesis.speak(utterance);
+
+    if (synth.getVoices().length === 0) {
+      synth.onvoiceschanged = () => start();
+      window.setTimeout(start, 100);
+    } else {
+      window.setTimeout(start, 50);
+    }
   });
 }
 
@@ -143,7 +217,7 @@ export async function isSpeaking(): Promise<boolean> {
     }
   }
   if (isWeb && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-    return window.speechSynthesis.speaking;
+    return window.speechSynthesis.speaking || window.speechSynthesis.pending;
   }
   try {
     return await Speech.isSpeakingAsync();
