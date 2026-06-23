@@ -1385,7 +1385,9 @@ export default function MainScreen({ navigation }: Props) {
                       styles.captureActionButton,
                       isRecordingVideo ? styles.captureStopButton : styles.captureVideoButton,
                     ]}
-                    labelStyle={styles.captureActionLabel}
+                    labelStyle={
+                      isRecordingVideo ? styles.captureActionLabelOnDark : styles.captureActionLabel
+                    }
                     accessibilityLabel={isRecordingVideo ? 'Stop video recording' : 'Record video'}
                     accessibilityHint={
                       isRecordingVideo
@@ -1436,7 +1438,7 @@ export default function MainScreen({ navigation }: Props) {
                     onPressIn={() => tapMedium()}
                     onPress={() => void stopVideoRecording()}
                     style={styles.stopVideoButton}
-                    labelStyle={styles.captureActionLabel}
+                    labelStyle={styles.captureActionLabelOnDark}
                     accessibilityLabel="Stop video recording"
                     accessibilityHint="Stops the current video recording immediately"
                   >
@@ -1527,7 +1529,12 @@ export default function MainScreen({ navigation }: Props) {
             accessibilityHint={VOICE_INPUT_HINT}
             accessibilityRole="button"
           >
-            <Text style={styles.voiceButtonLabel}>
+            <Text
+              style={[
+                styles.voiceButtonLabel,
+                (isListening || isTranscribing) && styles.voiceButtonLabelOnDark,
+              ]}
+            >
               {isTranscribing
                 ? '⏳ Transcribing…'
                 : isListening
@@ -1772,7 +1779,7 @@ const styles = StyleSheet.create({
 
   // ─── Blue Section ───
   blueSection: {
-    backgroundColor: '#0a1628',
+    backgroundColor: '#000',
     padding: 20,
     alignItems: 'center',
     gap: 16,
@@ -1807,31 +1814,42 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
   capturePhotoButton: {
-    backgroundColor: '#2e7d32',
+    backgroundColor: '#fff',
   },
   captureVideoButton: {
-    backgroundColor: '#1565c0',
+    backgroundColor: '#fff',
   },
   captureStopButton: {
-    backgroundColor: '#c62828',
+    backgroundColor: '#000',
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   stopVideoButton: {
     marginTop: 12,
     borderRadius: 14,
-    backgroundColor: '#c62828',
+    backgroundColor: '#000',
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   captureActionLabel: {
     fontSize: 16,
     fontWeight: 'bold',
     letterSpacing: 0.5,
+    color: '#000',
+  },
+  captureActionLabelOnDark: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+    color: '#fff',
   },
   cameraButtonHolding: {
-    borderColor: '#ffb300',
-    backgroundColor: '#fff8e1',
+    borderColor: '#fff',
+    backgroundColor: '#e8e8e8',
   },
   cameraButtonRecording: {
-    borderColor: '#ff1744',
-    backgroundColor: '#1a0008',
+    borderColor: '#fff',
+    backgroundColor: '#000',
   },
   cameraButtonPressed: {
     opacity: 0.85,
@@ -1845,25 +1863,25 @@ const styles = StyleSheet.create({
   },
   cameraPreviewHolding: {
     borderBottomWidth: 4,
-    borderBottomColor: '#ffb300',
+    borderBottomColor: '#fff',
   },
   cameraPreviewRecording: {
     borderBottomWidth: 4,
-    borderBottomColor: '#ff1744',
+    borderBottomColor: '#888',
   },
   cameraPreview: {
     flex: 1,
   },
   captureOverlayHolding: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255, 179, 0, 0.35)',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
   },
   captureOverlayRecording: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(180, 0, 30, 0.42)',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
@@ -1891,18 +1909,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: 'rgba(0,0,0,0.72)',
+    backgroundColor: 'rgba(0,0,0,0.85)',
     borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderWidth: 2,
-    borderColor: '#ff5252',
+    borderColor: '#fff',
   },
   recDot: {
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: '#ff1744',
+    backgroundColor: '#fff',
   },
   recBadgeText: {
     color: '#fff',
@@ -1928,22 +1946,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   cameraButtonLabelHolding: {
-    color: '#e65100',
+    color: '#000',
   },
   cameraButtonLabelRecording: {
-    color: '#ff5252',
+    color: '#fff',
   },
   retakeButton: {
     width: '100%',
     borderRadius: 20,
     backgroundColor: '#fff',
     borderWidth: 3,
+    borderColor: '#000',
   },
   retakeButtonPhoto: {
-    borderColor: '#43a047',
+    borderColor: '#000',
   },
   retakeButtonVideo: {
-    borderColor: '#e53935',
+    borderColor: '#000',
   },
   retakeLabel: {
     color: '#000',
@@ -1973,10 +1992,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   voiceButtonActive: {
-    backgroundColor: '#c62828',
+    backgroundColor: '#000',
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   voiceButtonTranscribing: {
-    backgroundColor: '#ff8f00',
+    backgroundColor: '#333',
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   voiceButtonLabel: {
     color: '#000',
@@ -1984,10 +2007,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     letterSpacing: 0.5,
   },
+  voiceButtonLabelOnDark: {
+    color: '#fff',
+  },
 
   // ─── Green Section ───
   greenSection: {
-    backgroundColor: '#0a1f0a',
+    backgroundColor: '#1a1a1a',
     padding: 20,
     gap: 16,
     flexGrow: 1,
@@ -2013,11 +2039,11 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
   loadingText: {
-    color: '#f8f8ff',
+    color: '#fff',
     fontSize: 16,
   },
   pendingQuestion: {
-    color: '#d7e8ff',
+    color: '#ccc',
     fontSize: 15,
     textAlign: 'center',
     paddingHorizontal: 8,
@@ -2026,7 +2052,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   questionEcho: {
-    color: '#b8d4ff',
+    color: '#ccc',
     fontSize: 15,
     fontWeight: '600',
     lineHeight: 22,
@@ -2056,24 +2082,24 @@ const styles = StyleSheet.create({
   hapticNavButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#2ecc71',
+    backgroundColor: '#fff',
     borderRadius: 16,
     paddingVertical: 14,
     paddingHorizontal: 16,
     gap: 14,
     marginTop: 12,
   },
-  hapticNavButtonPressed: { backgroundColor: '#27ae60' },
+  hapticNavButtonPressed: { backgroundColor: '#e0e0e0' },
   hapticNavIcon: { fontSize: 28 },
   hapticNavText: { flex: 1 },
   hapticNavTitle: {
-    color: '#0a1f0a',
+    color: '#000',
     fontSize: 16,
     fontWeight: 'bold',
     letterSpacing: 0.5,
   },
   hapticNavSubtitle: {
-    color: '#0a1f0a',
+    color: '#444',
     fontSize: 13,
     fontWeight: '600',
     marginTop: 2,
