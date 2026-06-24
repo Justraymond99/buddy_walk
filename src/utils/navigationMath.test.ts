@@ -6,6 +6,8 @@ import {
   hasUsableDestination,
   metersToFeetText,
   stepHasUsableCoords,
+  estimateStepDurationMs,
+  NAV_MIN_AUTO_STEP_MS,
 } from './navigationMath.ts';
 import type { NavRoute, NavStep } from '../types';
 
@@ -65,5 +67,18 @@ describe('navigationMath', () => {
       hasUsableDestination(routeWithDestination({ lat: 40.73, lng: -73.99 })),
       true
     );
+  });
+
+  it('estimates slower auto-step timing for blind navigation', () => {
+    const fromDuration = estimateStepDurationMs(
+      navStep({ lat: 0, lng: 0 }, { lat: 0, lng: 0 })
+    );
+    assert.ok(fromDuration >= NAV_MIN_AUTO_STEP_MS);
+
+    const timed = estimateStepDurationMs({
+      ...navStep({ lat: 40.1, lng: -73.1 }, { lat: 40.2, lng: -73.2 }),
+      duration: { text: '1 min', value: 60 },
+    });
+    assert.equal(timed, 90_000);
   });
 });

@@ -10,42 +10,23 @@ import {
   hasUsableDestination,
   metersToFeetText,
   stepHasUsableCoords,
+  estimateStepDurationMs,
 } from '../utils/navigationMath';
 
 /** Distance in meters at which we consider a maneuver point "reached". */
-const STEP_ADVANCE_RADIUS_M = 18;
+const STEP_ADVANCE_RADIUS_M = 12;
+/** Must stay within advance radius this long before the next step fires (GPS jitter guard). */
+const STEP_ADVANCE_DWELL_MS = 6000;
 /** Distance at which we proactively warn the user a maneuver is coming. */
-const HEADS_UP_RADIUS_M = 35;
+const HEADS_UP_RADIUS_M = 40;
 /** Distance at which we declare arrival on the final step. */
-const ARRIVE_RADIUS_M = 14;
+const ARRIVE_RADIUS_M = 12;
 /** How far off the planned step we tolerate before flagging "off route". */
 const OFF_ROUTE_RADIUS_M = 70;
 /** How long we must remain off-route before the warning fires (debounce). */
 const OFF_ROUTE_GRACE_MS = 8000;
 /** How often the manual "what's my distance" recap will repeat at most. */
-const MIN_RESPEAK_GAP_MS = 4000;
-/** Average walking speed (m/s) used to estimate step timing when GPS is absent. */
-const WALK_SPEED_MPS = 1.3;
-/** Clamp auto-advance delays so a bad estimate can't strand or rush the user. */
-const MIN_AUTO_STEP_MS = 5000;
-const MAX_AUTO_STEP_MS = 90000;
-
-/**
- * Estimated time to walk a step, used to auto-advance routes that have no
- * usable GPS coordinates so blind users never have to tap "next".
- */
-function estimateStepMs(step: NavStep | undefined): number {
-  let ms = 0;
-  const secs = step?.duration?.value;
-  if (typeof secs === 'number' && secs > 0) {
-    ms = secs * 1000;
-  } else {
-    const meters = step?.distance?.value;
-    if (typeof meters === 'number' && meters > 0) ms = (meters / WALK_SPEED_MPS) * 1000;
-  }
-  if (!ms) ms = 15000;
-  return Math.min(Math.max(ms, MIN_AUTO_STEP_MS), MAX_AUTO_STEP_MS);
-}
+const MIN_RESPEAK_GAP_MS = 6000;
 
 export interface UseTurnByTurnResult {
   active: boolean;
@@ -98,6 +79,7 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
   const headsUpFiredRef = useRef<Set<number>>(new Set());
   const lastSpokenAtRef = useRef<number>(0);
   const manualOnlyRef = useRef(false);
+  const stepAdvanceEligibleSinceRef = useRef<number | null>(null);
 
   // Keep refs in sync so the location callback always reads fresh values.
   useEffect(() => {
@@ -189,7 +171,7 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
         fireStepCue(next);
       }
       runManualAdvanceRef.current();
-    }, estimateStepMs(cur));
+    }, estimateStepDurationMs(cur));
   };
 
   const stop = useCallback(
@@ -222,6 +204,7 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
       manualOnlyRef.current = false;
       arrivalLoggedRef.current = false;
       offRouteLoggedRef.current = false;
+      stepAdvanceEligibleSinceRef.current = null;
     },
     [clearManualTimer]
   );
@@ -306,18 +289,24 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
       }
     }
 
-    // Step transition: we've reached the corner — advance and fire the maneuver cue.
+    // Step transition: near the corner — advance only after dwelling in range.
     if (!isLast && distToCorner < STEP_ADVANCE_RADIUS_M) {
-      const newIdx = idx + 1;
-      stepIndexRef.current = newIdx;
-      setStepIndex(newIdx);
-      headsUpFiredRef.current.add(idx);
-      const next = r.steps[newIdx];
-      if (next) {
-        // Reset gate so the new step is spoken even if we just emitted a heads-up.
-        lastSpokenAtRef.current = 0;
-        fireStepCue(next);
+      if (stepAdvanceEligibleSinceRef.current === null) {
+        stepAdvanceEligibleSinceRef.current = Date.now();
+      } else if (Date.now() - stepAdvanceEligibleSinceRef.current >= STEP_ADVANCE_DWELL_MS) {
+        stepAdvanceEligibleSinceRef.current = null;
+        const newIdx = idx + 1;
+        stepIndexRef.current = newIdx;
+        setStepIndex(newIdx);
+        headsUpFiredRef.current.add(idx);
+        const next = r.steps[newIdx];
+        if (next) {
+          lastSpokenAtRef.current = 0;
+          fireStepCue(next);
+        }
       }
+    } else {
+      stepAdvanceEligibleSinceRef.current = null;
     }
 
     // Off-route check: distance from both ends of the current segment.
@@ -367,6 +356,7 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
       setActive(true);
       arrivalLoggedRef.current = false;
       offRouteLoggedRef.current = false;
+      stepAdvanceEligibleSinceRef.current = null;
 
       const first = r.steps[0];
       if (first) {
@@ -393,8 +383,8 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
         subRef.current = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.BestForNavigation,
-            distanceInterval: 3,
-            timeInterval: 1500,
+            distanceInterval: 5,
+            timeInterval: 2500,
           },
           onLocationUpdate
         );
