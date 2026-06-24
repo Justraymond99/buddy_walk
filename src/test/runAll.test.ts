@@ -5,4 +5,5 @@ import '../utils/savedPlaces.test.ts';
 import '../utils/mtaTime.test.ts';
 import '../utils/trainLine.test.ts';
 import '../utils/webAudioUnlock.test.ts';
+import '../utils/briefAiInstruction.test.ts';
 import '../api/companion.test.ts';

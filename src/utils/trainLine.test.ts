@@ -36,6 +36,6 @@ describe('buildTrainQuestionWithLiveData', () => {
     const out = buildTrainQuestionWithLiveData('when is the 4 train arriving', '4', 'Nearest station: Foo.');
     assert.match(out, /4 train/);
     assert.match(out, /Nearest station: Foo/);
-    assert.match(out, /Do not mention other train lines/);
+    assert.match(out, /1-2 sentences/);
   });
 });

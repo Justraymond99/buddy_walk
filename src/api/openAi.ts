@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { withBriefReplyInstruction } from '../utils/briefAiInstruction';
 import { RequestData, NavRoute } from '../types';
 import { appVersion, getInstallId, platform, sessionId } from '../utils/identity';
 
@@ -14,6 +15,7 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
     const installId = await getInstallId();
     const payload: RequestData = {
       ...data,
+      text: withBriefReplyInstruction(data.text),
       analytics: {
         ...data.analytics,
         installId,

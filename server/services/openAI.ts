@@ -126,6 +126,22 @@ const tools = openAITools
 
 const openAIHistory: history[] = []
 
+function maxTokensForFeature(feature?: string): number {
+  switch (feature) {
+    case 'mta':
+      return 100;
+    case 'location_qa':
+      return 80;
+    case 'directions':
+      return 280;
+    case 'photo_qa':
+    case 'video_qa':
+      return 150;
+    default:
+      return 120;
+  }
+}
+
 export class OpenAIService {
   private _client: OpenAI | null = null;
 
@@ -603,18 +619,20 @@ export class OpenAIService {
       // console.log("openAI history: ", openAIHistory)
       systemContent += `Current Date and Time (Eastern): ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`;
       // console.log("prompt: ", completeAIPrompt)
+      const recentHistory = openAIHistory.slice(-3);
       const combinedSystemMessage = completeAIPrompt
         + "\n\nRelevant data: "
         + systemContent
         + "\n\nChat history: "
-        + openAIHistory.map(history => `User Input: ${history.input}, Open AI Output: ${history.output}, Data Used: ${history.data}`).join('\n');
+        + recentHistory.map(history => `User Input: ${history.input}, Open AI Output: ${history.output}, Data Used: ${history.data}`).join('\n');
       const chatCompletion = await this.client.chat.completions.create({
         messages: [
           { role: 'system', content: combinedSystemMessage },
           { role: 'user', content: userContent }
         ],
         model: 'gpt-4.1-mini',
-        temperature: 0.3
+        temperature: 0.2,
+        max_tokens: maxTokensForFeature(analytics?.feature),
       });
       console.log('OpenAI API response:', chatCompletion.usage?.total_tokens);
       openAIHistory.push({ input: content.text, output: chatCompletion.choices[0].message.content as string, data: relevantData });

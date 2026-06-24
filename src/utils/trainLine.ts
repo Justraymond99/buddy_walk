@@ -76,10 +76,7 @@ export function buildTrainQuestionWithLiveData(
 ): string {
   return (
     `${userText}\n\n` +
-    `[The user asked specifically about the ${route} train. ` +
-    `Use ONLY this live MTA data for the ${route} train. ` +
-    `Do not mention other train lines. ` +
-    `Lead with the nearest station, then direction and minutes until each arrival: ` +
-    `${mtaData}]`
+    `[${route} train only. Live data: ${mtaData}. ` +
+    `Reply in 1-2 sentences: station name, then up to 2 arrivals with direction and minutes. No other lines.]`
   );
 }
