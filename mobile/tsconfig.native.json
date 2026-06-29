@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["App.tsx"],
+  "exclude": [
+    "node_modules",
+    "server",
+    "src/pages",
+    "src/main.tsx",
+    "src/**/*.test.ts",
+    "src/test"
+  ]
+}

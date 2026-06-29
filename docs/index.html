@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Buddy Walk Mobile</title>
+  <meta name="description" content="Accessibility-first mobile app for blind and low-vision travelers — AI Q&A, haptic navigation, saved places, and companion mode." />
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --card: #141414;
+      --border: #2a2a2a;
+      --text: #f2f2f2;
+      --muted: #9a9a9a;
+      --accent: #4a9eff;
+      --green: #4caf50;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    a { color: var(--accent); }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px 64px; }
+    header {
+      text-align: center;
+      padding: 56px 24px 32px;
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 5vw, 2.75rem);
+      letter-spacing: 0.12em;
+      font-weight: 800;
+    }
+    header p {
+      margin: 0 auto;
+      max-width: 560px;
+      color: var(--muted);
+      font-size: 1.1rem;
+    }
+    .badges {
+      margin-top: 20px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+    }
+    .badge {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    section { margin-top: 48px; }
+    h2 {
+      font-size: 1.35rem;
+      margin: 0 0 8px;
+      letter-spacing: 0.04em;
+    }
+    .lead { color: var(--muted); margin: 0 0 24px; max-width: 720px; }
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 20px;
+    }
+    figure {
+      margin: 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 12px;
+      text-align: center;
+    }
+    figure img {
+      width: 100%;
+      max-width: 220px;
+      height: auto;
+      border-radius: 12px;
+      display: block;
+      margin: 0 auto;
+    }
+    figcaption {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .flow {
+      margin-top: 24px;
+      text-align: center;
+    }
+    .flow img {
+      max-width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .feature {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .feature h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+      color: var(--accent);
+    }
+    .feature p { margin: 0; font-size: 0.92rem; color: var(--muted); }
+    .cta {
+      margin-top: 40px;
+      padding: 28px;
+      background: linear-gradient(135deg, #0a1628, #141414);
+      border: 1px solid #1e3a5f;
+      border-radius: 16px;
+      text-align: center;
+    }
+    .cta code {
+      background: #000;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    footer {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BUDDY WALK</h1>
+    <p>Native mobile app for blind and low-vision travelers — one place for camera Q&amp;A, spoken directions, haptic turn-by-turn navigation, and live location sharing.</p>
+    <div class="badges">
+      <span class="badge">Expo / React Native</span>
+      <span class="badge">iOS &amp; Android</span>
+      <span class="badge">Accessibility-first</span>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <section id="screens">
+      <h2>App screens</h2>
+      <p class="lead">Dark, high-contrast UI built for screen readers, voice input, and hands-free feedback.</p>
+      <div class="gallery">
+        <figure>
+          <img src="assets/01-welcome.png" alt="Welcome screen" width="390" height="844" loading="lazy" />
+          <figcaption>Welcome</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/04-main.png" alt="Main screen with camera and voice" width="390" height="844" loading="lazy" />
+          <figcaption>Main — camera &amp; voice</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/05-main-response.png" alt="AI response with haptic navigation prompt" width="390" height="844" loading="lazy" />
+          <figcaption>AI answer + route</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/06-navigation.png" alt="Haptic navigation turn screen" width="390" height="844" loading="lazy" />
+          <figcaption>Haptic navigation</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/07-saved-places.png" alt="Saved places screen" width="390" height="844" loading="lazy" />
+          <figcaption>Saved places</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/08-companion.png" alt="Companion mode sharing screen" width="390" height="844" loading="lazy" />
+          <figcaption>Companion mode</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="flow">
+      <h2>Screen flow</h2>
+      <p class="lead">Onboarding through Firebase auth and permissions, then the main hub branches to navigation, bookmarks, or companion sharing.</p>
+      <div class="flow">
+        <img src="assets/00-flow.png" alt="Diagram: Welcome to Auth to Permissions to Main, with branches to Navigation, Saved Places, and Companion" width="800" height="500" loading="lazy" />
+      </div>
+    </section>
+
+    <section id="features">
+      <h2>Features</h2>
+      <div class="features">
+        <div class="feature">
+          <h3>AI Q&amp;A</h3>
+          <p>Photo or video plus voice or text. Answers use your GPS, heading, and image context.</p>
+        </div>
+        <div class="feature">
+          <h3>Haptic navigation</h3>
+          <p>Walking directions parsed into steps with distinct vibration patterns per turn.</p>
+        </div>
+        <div class="feature">
+          <h3>Saved places</h3>
+          <p>Bookmark nicknames like “home” or “work” for shorter voice questions.</p>
+        </div>
+        <div class="feature">
+          <h3>Companion mode</h3>
+          <p>Share a link so a trusted contact can follow live location in the browser.</p>
+        </div>
+        <div class="feature">
+          <h3>Accessibility</h3>
+          <p>Screen-reader labels, spoken feedback, shake-to-mic, offline warnings, Access-A-Ride dial.</p>
+        </div>
+        <div class="feature">
+          <h3>Tests</h3>
+          <p>19 unit tests for routing, haptics, and navigation math — run with <code>npm test</code> in <code>mobile/</code>.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <h2 style="margin-top:0">Run locally</h2>
+      <p style="color:var(--muted);margin-bottom:16px">Backend on your machine · Expo Go on a phone (same Wi‑Fi)</p>
+      <p><code>cd mobile && npm install && npx expo start</code></p>
+      <p style="margin-top:16px;font-size:0.9rem"><a href="https://github.com/Justraymond99/buddy_walk/blob/main/mobile/README.md">Full setup guide</a> · <a href="https://github.com/Justraymond99/buddy_walk">Repository on GitHub</a></p>
+    </section>
+
+    <footer>
+      Buddy Walk Mobile — Expo SDK 54, React Navigation, Firebase Auth, TypeScript
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Buddy Walk – Live Location</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0e1116;
+      color: #f6f7fb;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 14px 18px;
+      background: #161b22;
+      border-bottom: 1px solid #2a313c;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    header .sub {
+      margin: 0;
+      font-size: 0.85rem;
+      color: #aab1bd;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: #2a313c;
+      color: #f6f7fb;
+    }
+    .pill .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #888;
+    }
+    .pill.live .dot { background: #2ecc71; box-shadow: 0 0 0 4px rgba(46,204,113,0.18); }
+    .pill.stale .dot { background: #f1c40f; }
+    .pill.ended .dot { background: #e74c3c; }
+    #map {
+      flex: 1;
+      width: 100%;
+      background: #1a1f29;
+    }
+    footer {
+      padding: 8px 14px;
+      background: #161b22;
+      border-top: 1px solid #2a313c;
+      font-size: 0.75rem;
+      color: #8a93a3;
+      text-align: center;
+    }
+    footer a { color: #8aa6ff; text-decoration: none; }
+    .empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      padding: 30px;
+      text-align: center;
+      color: #aab1bd;
+      font-size: 1rem;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title">Buddy Walk – Live Location</h1>
+    <p class="sub">
+      <span class="pill" id="status"><span class="dot"></span><span id="status-text">Connecting…</span></span>
+      <span id="updated"></span>
+    </p>
+  </header>
+  <div id="map"></div>
+  <div id="empty" class="empty" style="display:none">
+    Waiting for the first location update from this session…
+  </div>
+  <footer>
+    Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.
+    Refreshes every 5 seconds.
+  </footer>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    (function () {
+      var TOKEN = window.__COMPANION_TOKEN__ || "";
+      var snapshotUrl = "/api/companion/" + encodeURIComponent(TOKEN) + "/snapshot";
+
+      var map = null;
+      var marker = null;
+      var accuracyCircle = null;
+      var hasFitOnce = false;
+      var emptyEl = document.getElementById("empty");
+      var mapEl = document.getElementById("map");
+      var statusEl = document.getElementById("status");
+      var statusTextEl = document.getElementById("status-text");
+      var updatedEl = document.getElementById("updated");
+      var titleEl = document.getElementById("title");
+
+      function ensureMap() {
+        if (map) return map;
+        emptyEl.style.display = "none";
+        mapEl.style.display = "block";
+        map = L.map("map", { zoomControl: true, attributionControl: false }).setView([0, 0], 2);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution: "&copy; OpenStreetMap contributors"
+        }).addTo(map);
+        return map;
+      }
+
+      function showEmpty(text) {
+        if (map) {
+          mapEl.style.display = "none";
+        }
+        emptyEl.textContent = text;
+        emptyEl.style.display = "flex";
+      }
+
+      function setStatus(kind, text) {
+        statusEl.classList.remove("live", "stale", "ended");
+        if (kind) statusEl.classList.add(kind);
+        statusTextEl.textContent = text;
+      }
+
+      function formatRelative(iso) {
+        if (!iso) return "";
+        var t = new Date(iso).getTime();
+        if (isNaN(t)) return "";
+        var diff = Math.max(0, Date.now() - t);
+        var s = Math.floor(diff / 1000);
+        if (s < 60) return s + "s ago";
+        var m = Math.floor(s / 60);
+        if (m < 60) return m + " min ago";
+        var h = Math.floor(m / 60);
+        return h + "h ago";
+      }
+
+      async function poll() {
+        try {
+          var res = await fetch(snapshotUrl, { cache: "no-store" });
+          if (res.status === 404) {
+            setStatus("ended", "Sharing ended");
+            showEmpty("This sharing link has ended or expired.");
+            return;
+          }
+          if (!res.ok) {
+            setStatus("stale", "Connection issue");
+            return;
+          }
+          var data = await res.json();
+
+          if (data.displayName) {
+            titleEl.textContent = data.displayName + " – Live Location";
+          }
+
+          if (!data.active) {
+            setStatus("ended", "Sharing ended");
+            updatedEl.textContent = data.lastUpdate ? "  ·  last seen " + formatRelative(data.lastUpdate) : "";
+            return;
+          }
+
+          if (data.lat == null || data.lon == null) {
+            setStatus("live", "Waiting for first GPS fix");
+            updatedEl.textContent = "";
+            showEmpty("Sharing is live, waiting for the first GPS update…");
+            return;
+          }
+
+          var freshMs = Date.now() - new Date(data.lastUpdate || 0).getTime();
+          if (freshMs > 60_000) setStatus("stale", "Last update " + formatRelative(data.lastUpdate));
+          else setStatus("live", "Live");
+          updatedEl.textContent = "  ·  updated " + formatRelative(data.lastUpdate);
+
+          ensureMap();
+
+          var latlng = [data.lat, data.lon];
+          if (!marker) {
+            marker = L.marker(latlng).addTo(map);
+          } else {
+            marker.setLatLng(latlng);
+          }
+          if (data.accuracy && data.accuracy > 0) {
+            if (!accuracyCircle) {
+              accuracyCircle = L.circle(latlng, {
+                radius: data.accuracy,
+                color: "#2ecc71",
+                fillColor: "#2ecc71",
+                fillOpacity: 0.12,
+                weight: 1
+              }).addTo(map);
+            } else {
+              accuracyCircle.setLatLng(latlng);
+              accuracyCircle.setRadius(data.accuracy);
+            }
+          }
+
+          var popup = (data.displayName ? data.displayName + "<br>" : "") +
+            "Updated " + formatRelative(data.lastUpdate);
+          marker.bindPopup(popup);
+
+          if (!hasFitOnce) {
+            map.setView(latlng, 17);
+            hasFitOnce = true;
+          }
+        } catch (e) {
+          setStatus("stale", "Offline – retrying");
+        }
+      }
+
+      if (!TOKEN) {
+        setStatus("ended", "Invalid link");
+        showEmpty("This link is missing a session token.");
+        return;
+      }
+      poll();
+      setInterval(poll, 5000);
+    })();
+  </script>
+</body>
+</html>

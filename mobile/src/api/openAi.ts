@@ -1,0 +1,45 @@
+import { apiClient } from './client';
+import { withBriefReplyInstruction } from '../utils/briefAiInstruction';
+import { RequestData, NavRoute } from '../types';
+import { appVersion, getInstallId, platform, sessionId } from '../utils/identity';
+
+export interface TextResponse {
+  output: string;
+  /** Optional structured walking route used to drive turn-by-turn haptic navigation. */
+  route?: NavRoute | null;
+}
+
+export async function sendTextRequest(data: RequestData): Promise<TextResponse | undefined> {
+  if (!data.text.trim()) return undefined;
+  try {
+    const installId = await getInstallId();
+    const payload: RequestData = {
+      ...data,
+      text: withBriefReplyInstruction(data.text),
+      analytics: {
+        ...data.analytics,
+        installId,
+        sessionId,
+        platform,
+        appVersion,
+      },
+    };
+    const start = Date.now();
+    const res = await apiClient.post('/text', payload);
+    console.log(`Text request completed in ${Date.now() - start}ms`);
+    return res.data as TextResponse;
+  } catch (e) {
+    console.error('sendTextRequest error:', e);
+    throw e;
+  }
+}
+export async function sendAudioRequest(text: string): Promise<ArrayBuffer | undefined> {
+  if (!text.trim()) return undefined;
+  try {
+    const res = await apiClient.post('/audio', { text }, { responseType: 'arraybuffer' });
+    return res.data;
+  } catch (e) {
+    console.error('sendAudioRequest error:', e);
+    throw e;
+  }
+}

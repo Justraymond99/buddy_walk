@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Buddy Walk — User Testing Template</title>
+  <style>
+    :root { --bg: #fff; --fg: #111; --muted: #555; --accent: #0d6e7a; --border: #bbb; --fill: #fafafa; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.5;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+    h1 { font-size: 1.75rem; margin-bottom: 0.25rem; color: var(--fg); }
+    h2 { font-size: 1.25rem; color: var(--accent); margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.35rem; }
+    h3 { font-size: 1rem; margin-top: 1.25rem; }
+    p, li { font-size: 0.95rem; }
+    .subtitle { color: var(--muted); margin-bottom: 1.5rem; }
+    .link { color: var(--accent); word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 0.75rem 0 1rem; font-size: 0.9rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.65rem; text-align: left; vertical-align: top; }
+    th { background: #eef4f5; color: var(--accent); font-weight: 600; }
+    input[type="text"], textarea {
+      width: 100%;
+      background: var(--bg);
+      border: none;
+      border-bottom: 1px solid #666;
+      color: var(--fg);
+      padding: 0.35rem 0.25rem;
+      font: inherit;
+    }
+    textarea {
+      min-height: 4rem;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 0.5rem;
+      background: var(--fill);
+    }
+    input::placeholder, textarea::placeholder { color: #888; }
+    .check { width: 2.5rem; text-align: center; }
+    .pass-row { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 0.5rem 0; }
+    .pass-row label { display: flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+    .objective {
+      background: var(--fill);
+      border-left: 4px solid var(--accent);
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+    }
+    .note { color: var(--muted); font-size: 0.85rem; font-style: italic; }
+    .run-log { font-size: 0.85rem; }
+    .run-log th { font-size: 0.8rem; }
+    .run-log .check { width: 2.75rem; }
+    .run-log input[type="text"] { font-size: 0.85rem; }
+    .section-note { margin: 0.75rem 0 0.25rem; font-size: 0.9rem; font-weight: 600; }
+    @media print {
+      body { background: #fff; color: #000; max-width: none; padding: 0.5in; }
+      th { background: #eee !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .objective { background: #f5f5f5 !important; border-color: #333; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      input[type="text"], textarea {
+        background: #fff !important;
+        color: #000 !important;
+        border-color: #666 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      textarea { background: #fff !important; }
+      a { color: #000; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>Buddy Walk — User Testing Session Template</h1>
+<p class="subtitle">Use the same script every session. <strong>Run each category 5 times</strong> and log every run below.</p>
+<p><strong>Web beta:</strong> <a class="link" href="https://buddy-walk-mobile.vercel.app">https://buddy-walk-mobile.vercel.app</a><br />
+<strong>Feedback:</strong> raymondsekyere99@gmail.com, dylansch7@gmail.com</p>
+
+<h2>Session info</h2>
+<table>
+  <tr><th style="width:35%">Field</th><th>Your answer</th></tr>
+  <tr><td>Tester name</td><td><input type="text" /></td></tr>
+  <tr><td>Date</td><td><input type="text" /></td></tr>
+  <tr><td>Device</td><td><input type="text" placeholder="e.g. iPhone 14, Safari" /></td></tr>
+  <tr><td>Platform</td><td>
+    <label><input type="checkbox" /> Web</label>
+    <label><input type="checkbox" /> TestFlight / native</label>
+  </td></tr>
+  <tr><td>Screen reader</td><td>
+    <label><input type="checkbox" /> VoiceOver</label>
+    <label><input type="checkbox" /> TalkBack</label>
+    <label><input type="checkbox" /> Off</label>
+  </td></tr>
+  <tr><td>Location</td><td><input type="text" placeholder="Street / intersection, city" /></td></tr>
+</table>
+
+<h2>Pre-session checklist</h2>
+<table>
+  <tr><th class="check">✓</th><th>Step</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Finish permissions: location, camera, microphone (all three).</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Land on main screen (camera, Ask field, Submit).</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Use headphones or turn volume up.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Phone browser for web beta (Safari iOS / Chrome Android).</td></tr>
+</table>
+
+<h2>Test 1A — Photo: storefront</h2>
+<div class="objective"><strong>Objective:</strong> Capture a storefront and get an accurate spoken answer.</div>
+<table>
+  <tr><th class="check">✓</th><th>Do this</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Stand outside a <strong>storefront with a visible sign</strong> (deli, café, bank, pharmacy). Face the entrance or sign.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td><strong>Tap quickly once</strong> on the camera area.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Hear: <em>"Photo captured. Ready to describe the image."</em></td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Ask exactly: <strong>"What business or building is this?"</strong></td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Tap <strong>Submit</strong>. Listen to the full answer.</td></tr>
+</table>
+<p><strong>Pass if:</strong> answer describes the storefront; spoken once, clearly; understandable without reading screen.</p>
+<p class="section-note">Results — run 5 times (different storefronts)</p>
+<table class="run-log">
+  <tr><th>Run</th><th>Storefront / location</th><th class="check">Pass</th><th class="check">Fail</th><th class="check">Part.</th><th>Notes</th></tr>
+  <tr><td>1</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>2</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>3</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>4</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>5</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+</table>
+
+<h2>Test 1B — Video: monument / landmark</h2>
+<div class="objective"><strong>Objective:</strong> Hold-to-record and describe a fixed landmark.</div>
+<table>
+  <tr><th class="check">✓</th><th>Do this</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Point at a <strong>statue, monument plaque, building façade, or subway entrance sign</strong>.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td><strong>Hold</strong> camera area <strong>3–5 seconds</strong>, then release.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Ask: <strong>"Describe what you see in front of me."</strong></td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Tap <strong>Submit</strong>.</td></tr>
+</table>
+<p class="section-note">Results — run 5 times (different landmarks)</p>
+<table class="run-log">
+  <tr><th>Run</th><th>Landmark tried</th><th class="check">Pass</th><th class="check">Fail</th><th class="check">Part.</th><th class="check">Skip</th><th>Notes</th></tr>
+  <tr><td>1</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>2</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>3</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>4</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>5</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+</table>
+
+<h2>Test 1C — Voice: Tap to Ask</h2>
+<table>
+  <tr><th class="check">✓</th><th>Do this</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Tap <strong>Tap to Ask</strong>. Say: <strong>"What street am I on?"</strong></td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Tap <strong>Submit</strong>.</td></tr>
+</table>
+<p class="section-note">Results — run 5 times</p>
+<table class="run-log">
+  <tr><th>Run</th><th>Question spoken</th><th class="check">Pass</th><th class="check">Fail</th><th class="check">Part.</th><th>Notes</th></tr>
+  <tr><td>1</td><td><input type="text" value="What street am I on?" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>2</td><td><input type="text" value="What intersection am I at?" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>3</td><td><input type="text" value="What's near me?" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>4</td><td><input type="text" value="What businesses are around me?" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>5</td><td><input type="text" value="Am I facing north or south?" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+</table>
+
+<h2>Test 2 — Hands-off navigation</h2>
+<div class="objective"><strong>Objective:</strong> Directions start automatically; steps advance while walking; arrival announced.<br />
+<span class="note">Native = vibrations + shake to stop. Web = spoken only; use Stop button.</span></div>
+<p><strong>Destinations (5 runs, 5–10 min walk each):</strong></p>
+<table class="run-log">
+  <tr><th>Run</th><th>Destination</th></tr>
+  <tr><td>1</td><td><input type="text" placeholder="destination 1" /></td></tr>
+  <tr><td>2</td><td><input type="text" placeholder="destination 2" /></td></tr>
+  <tr><td>3</td><td><input type="text" placeholder="destination 3" /></td></tr>
+  <tr><td>4</td><td><input type="text" placeholder="destination 4" /></td></tr>
+  <tr><td>5</td><td><input type="text" placeholder="destination 5" /></td></tr>
+</table>
+<table>
+  <tr><th class="check">✓</th><th>Do this</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Ask: <strong>"How do I get to [destination]?"</strong></td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td><strong>Do not</strong> tap Start — navigation begins on its own.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Walk ≥2 minutes. Hear new steps without pressing Next.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Hear <strong>"You have arrived"</strong> near destination (or close warning).</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Stop: <strong>shake</strong> (native) or <strong>Stop Navigation</strong> (web).</td></tr>
+</table>
+<p class="section-note">Results — repeat navigation script for each run (5 runs)</p>
+<table class="run-log">
+  <tr><th>Run</th><th>Destination</th><th class="check">Pass</th><th class="check">Fail</th><th class="check">Part.</th><th>Notes</th></tr>
+  <tr><td>1</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>2</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>3</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>4</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>5</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+</table>
+
+<h2>Test 3 — VoiceOver / accessibility</h2>
+<p>Enable VoiceOver. Repeat <strong>Test 1A</strong> and <strong>Test 2</strong> (or first 2 nav steps).</p>
+<table>
+  <tr><th class="check">✓</th><th>Pass if</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Buttons reachable and labeled</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>No double speech (app + VoiceOver)</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Completed without seeing the screen</td></tr>
+</table>
+<p class="section-note">Results — run 5 times with VoiceOver on</p>
+<table class="run-log">
+  <tr><th>Run</th><th>Flow repeated</th><th class="check">Pass</th><th class="check">Fail</th><th class="check">Part.</th><th>Notes</th></tr>
+  <tr><td>1</td><td>Test 1A (storefront photo)</td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>2</td><td>Test 2 (navigation)</td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>3</td><td>Submit + Tap to Ask labels</td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>4</td><td>Test 1B (landmark video)</td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>5</td><td>Companion Mode controls</td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+</table>
+
+<h2>Test 4 — Companion Mode</h2>
+<table>
+  <tr><th class="check">✓</th><th>Do this</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Open Companion Mode → create session → copy link.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Open link on another phone/browser.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Walk one block — contact confirms location updates.</td></tr>
+</table>
+<p class="section-note">Results — run 5 times</p>
+<table class="run-log">
+  <tr><th>Run</th><th>Contact / second device</th><th class="check">Pass</th><th class="check">Fail</th><th class="check">Part.</th><th>Notes</th></tr>
+  <tr><td>1</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>2</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>3</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>4</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>5</td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+</table>
+
+<h2>Test 5 — Saved Places</h2>
+<table>
+  <tr><th class="check">✓</th><th>Do this</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Save current location as alias <strong>test-home</strong> (or <strong>home</strong>).</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Ask: <strong>"How do I get to test-home?"</strong> (or <strong>"How do I get home?"</strong>)</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Directions returned; auto-nav on native.</td></tr>
+</table>
+<p class="section-note">Results — run 5 times (different aliases)</p>
+<table class="run-log">
+  <tr><th>Run</th><th>Alias</th><th>Question</th><th class="check">Pass</th><th class="check">Fail</th><th class="check">Part.</th><th>Notes</th></tr>
+  <tr><td>1</td><td><input type="text" placeholder="test-home" /></td><td><input type="text" value="How do I get to test-home?" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>2</td><td><input type="text" placeholder="work" /></td><td><input type="text" value="How do I get to work?" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>3</td><td><input type="text" placeholder="home" /></td><td><input type="text" value="How do I get home?" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>4</td><td><input type="text" /></td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>5</td><td><input type="text" /></td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+</table>
+
+<h2>Test 6 — MTA subway arrival</h2>
+<div class="objective"><strong>Objective:</strong> Live MTA arrival times for the nearest station on the line you ask about.<br />
+<span class="note">NYC only. Stand near a subway entrance (~2 blocks). Location must be enabled.</span></div>
+<p><strong>Your line:</strong> <input type="text" placeholder="e.g. R, 6, A, 7" style="width:4rem" />
+<strong>Nearest station (optional):</strong> <input type="text" placeholder="e.g. 14 St–Union Sq" /></p>
+<table>
+  <tr><th class="check">✓</th><th>Do this</th></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Check the entrance sign for which <strong>line</strong> serves this station.</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Ask exactly: <strong>"When is the next [LINE] train arriving?"</strong> (e.g. <em>"When is the next R train arriving?"</em>)</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Tap <strong>Submit</strong>. Wait for spoken answer (live MTA feed may take a few seconds).</td></tr>
+  <tr><td class="check"><input type="checkbox" /></td><td>Answer should name a <strong>nearby station</strong>, <strong>direction</strong>, and <strong>arrival time(s)</strong>.</td></tr>
+</table>
+<p><strong>Pass if:</strong> plausible station near you; at least one time OR "no trains scheduled"; spoken clearly; not walking directions instead.</p>
+<p class="section-note">Results — run 5 times (different lines when possible)</p>
+<table class="run-log">
+  <tr><th>Run</th><th>Line asked</th><th>Station in answer</th><th class="check">Pass</th><th class="check">Fail</th><th class="check">Part.</th><th>Notes</th></tr>
+  <tr><td>1</td><td><input type="text" /></td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>2</td><td><input type="text" /></td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>3</td><td><input type="text" /></td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>4</td><td><input type="text" /></td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+  <tr><td>5</td><td><input type="text" /></td><td><input type="text" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td class="check"><input type="checkbox" /></td><td><input type="text" /></td></tr>
+</table>
+
+<h2>End-of-session summary</h2>
+<table class="run-log">
+  <tr><th>Test</th><th>Runs logged</th><th>Pass</th><th>Fail</th><th>Partial</th><th>Overall</th></tr>
+  <tr><td>1A Photo</td><td>/5</td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" /></td></tr>
+  <tr><td>1B Video</td><td>/5</td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" /></td></tr>
+  <tr><td>1C Voice</td><td>/5</td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" /></td></tr>
+  <tr><td>2 Navigation</td><td>/5</td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" /></td></tr>
+  <tr><td>3 VoiceOver</td><td>/5</td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" /></td></tr>
+  <tr><td>4 Companion</td><td>/5</td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" /></td></tr>
+  <tr><td>5 Saved Places</td><td>/5</td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" /></td></tr>
+  <tr><td>6 MTA</td><td>/5</td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" style="width:3rem" /></td><td><input type="text" /></td></tr>
+</table>
+<p><strong>Top 3 issues:</strong></p>
+<ol>
+  <li><input type="text" style="margin-bottom:0.5rem" /></li>
+  <li><input type="text" style="margin-bottom:0.5rem" /></li>
+  <li><input type="text" /></li>
+</ol>
+<p><strong>What worked best?</strong></p>
+<textarea></textarea>
+<p><strong>What would block daily use?</strong></p>
+<textarea></textarea>
+<p>Recommend to another blind/low-vision traveler?
+  <label><input type="radio" name="rec" /> Yes</label>
+  <label><input type="radio" name="rec" /> Maybe</label>
+  <label><input type="radio" name="rec" /> No</label>
+</p>
+
+<p class="note" style="margin-top:2rem">Print this page (Ctrl+P) → Save as PDF to submit filled results.</p>
+
+</body>
+</html>
