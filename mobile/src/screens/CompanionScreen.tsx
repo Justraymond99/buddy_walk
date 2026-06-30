@@ -28,19 +28,29 @@ import {
   stopCompanionSession,
 } from '../api/companion';
 import { track, Events } from '../api/telemetry';
+import { buildMapsShareUrl } from '../utils/mapsShareUrl';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Companion'>;
 
 const ACTIVE_SESSION_KEY = '@buddywalk:companionSession:v1';
 const PING_INTERVAL_MS = 15_000;
 
-interface PersistedSession {
+interface LiveSession {
+  mode: 'live';
   token: string;
   ownerSecret: string;
   displayName?: string;
   expiresAt: string;
   startedAt: string;
 }
+
+interface MapsSession {
+  mode: 'maps';
+  displayName?: string;
+  startedAt: string;
+}
+
+type PersistedSession = LiveSession | MapsSession;
 
 function formatTime(iso?: string | null): string {
   if (!iso) return 'never';
@@ -54,20 +64,33 @@ function companionUnavailableMessage(
 ): string {
   if (Platform.OS === 'web') {
     if (reason === 'network') {
-      return 'Could not reach the Companion API. Check your connection and reload this page.';
+      return 'Live map links are unavailable. You can still share a Google Maps pin from this screen.';
     }
-    return 'Companion API is temporarily unavailable. Reload this page in a moment.';
+    return 'Live map links are unavailable right now. You can still share a Google Maps pin.';
   }
   if (reason === 'html_not_api') {
     return (
-      'The configured backend does not expose /api/companion yet. Redeploy the latest server ' +
-      'code or point EXPO_PUBLIC_COMPANION_API_URL at a host that does.'
+      'Live map sharing is not on this server yet. Buddy Walk will share a Google Maps pin ' +
+      'instead — tap Share again after you move for an updated location.'
     );
   }
   return (
-    'Companion backend unreachable. On this PC run npm run serve in mobile/, then set ' +
-    'EXPO_PUBLIC_COMPANION_API_URL to its LAN IP (same Wi-Fi as the phone). Q&A can stay on buddywalk.app.'
+    'Live map server unreachable. Buddy Walk will share a Google Maps pin instead. ' +
+    'For live tracking on a local backend, run npm run serve in mobile/ and set EXPO_PUBLIC_COMPANION_API_URL.'
   );
+}
+
+function isLiveSession(s: PersistedSession): s is LiveSession {
+  return s.mode === 'live' || 'token' in s;
+}
+
+function getShareUrl(session: PersistedSession | null, fix: Location.LocationObject | null): string | null {
+  if (!session) return null;
+  if (!isLiveSession(session)) {
+    if (!fix) return null;
+    return buildMapsShareUrl(fix.coords.latitude, fix.coords.longitude, session.displayName);
+  }
+  return buildShareUrl(session.token);
 }
 
 export default function CompanionScreen({ navigation }: Props) {
@@ -104,15 +127,41 @@ export default function CompanionScreen({ navigation }: Props) {
       try {
         const raw = await AsyncStorage.getItem(ACTIVE_SESSION_KEY);
         if (!raw) return;
-        const parsed = JSON.parse(raw) as PersistedSession;
-        if (!parsed?.token) return;
-        if (new Date(parsed.expiresAt).getTime() < Date.now()) {
+        const parsed = JSON.parse(raw) as {
+          mode?: 'live' | 'maps';
+          token?: string;
+          ownerSecret?: string;
+          displayName?: string;
+          expiresAt?: string;
+          startedAt?: string;
+        };
+        if (parsed.mode === 'maps') {
+          const mapsSession: MapsSession = {
+            mode: 'maps',
+            displayName: parsed.displayName,
+            startedAt: parsed.startedAt ?? new Date().toISOString(),
+          };
+          setSession(mapsSession);
+          if (mapsSession.displayName) setDisplayName(mapsSession.displayName);
+          await beginMapsTracking();
+          return;
+        }
+        if (!parsed.token) return;
+        const live: LiveSession = {
+          mode: 'live',
+          token: parsed.token,
+          ownerSecret: parsed.ownerSecret!,
+          displayName: parsed.displayName,
+          expiresAt: parsed.expiresAt!,
+          startedAt: parsed.startedAt ?? new Date().toISOString(),
+        };
+        if (new Date(live.expiresAt).getTime() < Date.now()) {
           await AsyncStorage.removeItem(ACTIVE_SESSION_KEY);
           return;
         }
-        setSession(parsed);
-        if (parsed.displayName) setDisplayName(parsed.displayName);
-        await beginTracking(parsed);
+        setSession(live);
+        if (live.displayName) setDisplayName(live.displayName);
+        await beginTracking(live);
       } catch (e) {
         console.warn('Failed to restore companion session:', e);
       }
@@ -127,7 +176,7 @@ export default function CompanionScreen({ navigation }: Props) {
   // the app comes back to the foreground.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && sessionRef.current) {
+      if (state === 'active' && sessionRef.current && isLiveSession(sessionRef.current)) {
         sendPingNow().catch(() => {});
       }
     });
@@ -137,7 +186,7 @@ export default function CompanionScreen({ navigation }: Props) {
 
   const sendPingNow = useCallback(async () => {
     const current = sessionRef.current;
-    if (!current) return;
+    if (!current || !isLiveSession(current)) return;
     let fix = lastFixRef.current;
     if (!fix) {
       try {
@@ -165,7 +214,39 @@ export default function CompanionScreen({ navigation }: Props) {
     }
   }, []);
 
-  async function beginTracking(persisted: PersistedSession) {
+  async function beginMapsTracking() {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(
+        'Location permission needed',
+        'Buddy Walk needs location access to share your position with your contact.'
+      );
+      return;
+    }
+
+    locationSubRef.current?.remove();
+    locationSubRef.current = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.BestForNavigation,
+        distanceInterval: 5,
+        timeInterval: 5_000,
+      },
+      (loc) => {
+        lastFixRef.current = loc;
+      }
+    );
+
+    try {
+      const fix = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      lastFixRef.current = fix;
+    } catch {
+      /* watch will deliver a fix */
+    }
+  }
+
+  async function beginTracking(persisted: LiveSession) {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert(
@@ -211,27 +292,58 @@ export default function CompanionScreen({ navigation }: Props) {
     lastFixRef.current = null;
   }
 
+  async function startMapsSharing() {
+    await beginMapsTracking();
+    if (!lastFixRef.current) {
+      throw new Error('Could not get your location. Check that location access is allowed.');
+    }
+    const persisted: MapsSession = {
+      mode: 'maps',
+      displayName: displayName.trim() || undefined,
+      startedAt: new Date().toISOString(),
+    };
+    await AsyncStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(persisted));
+    setSession(persisted);
+    sessionRef.current = persisted;
+    setLastPingAt(new Date().toISOString());
+    setPingError(null);
+    Speech.speak('Sharing started. Share your maps link with your contact.', { language: 'en-US' });
+    AccessibilityInfo.announceForAccessibility('Sharing started. Share your maps link.');
+    void track(Events.CompanionSessionCreated, {
+      hasDisplayName: Boolean(persisted.displayName),
+    });
+  }
+
   async function handleStart() {
     setWorking(true);
     try {
-      const created = await createCompanionSession(displayName);
-      const persisted: PersistedSession = {
-        token: created.token,
-        ownerSecret: created.ownerSecret,
-        displayName: created.displayName ?? displayName.trim() ?? undefined,
-        expiresAt: created.expiresAt,
-        startedAt: new Date().toISOString(),
-      };
-      await AsyncStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(persisted));
-      setSession(persisted);
-      setLastPingAt(null);
-      setPingError(null);
-      Speech.speak('Sharing started.', { language: 'en-US' });
-      AccessibilityInfo.announceForAccessibility('Sharing started.');
-      await beginTracking(persisted);
-      void track(Events.CompanionSessionCreated, {
-        hasDisplayName: Boolean(persisted.displayName),
-      });
+      if (companionAvailable !== false) {
+        try {
+          const created = await createCompanionSession(displayName);
+          const persisted: LiveSession = {
+            mode: 'live',
+            token: created.token,
+            ownerSecret: created.ownerSecret,
+            displayName: created.displayName ?? displayName.trim() ?? undefined,
+            expiresAt: created.expiresAt,
+            startedAt: new Date().toISOString(),
+          };
+          await AsyncStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(persisted));
+          setSession(persisted);
+          setLastPingAt(null);
+          setPingError(null);
+          Speech.speak('Sharing started.', { language: 'en-US' });
+          AccessibilityInfo.announceForAccessibility('Sharing started.');
+          await beginTracking(persisted);
+          void track(Events.CompanionSessionCreated, {
+            hasDisplayName: Boolean(persisted.displayName),
+          });
+          return;
+        } catch (e) {
+          console.warn('Live companion unavailable; using maps link fallback:', e);
+        }
+      }
+      await startMapsSharing();
     } catch (e: unknown) {
       console.error('Failed to start companion session:', e);
       Alert.alert('Could not start sharing', describeApiError(e, 'companion'));
@@ -248,7 +360,7 @@ export default function CompanionScreen({ navigation }: Props) {
     setLastPingAt(null);
     setPingError(null);
     await AsyncStorage.removeItem(ACTIVE_SESSION_KEY);
-    if (current) {
+    if (current && isLiveSession(current)) {
       try {
         await stopCompanionSession(current.token, current.ownerSecret);
       } catch (e) {
@@ -264,12 +376,19 @@ export default function CompanionScreen({ navigation }: Props) {
 
   async function handleShareLink() {
     if (!session) return;
-    const url = buildShareUrl(session.token);
+    const url = getShareUrl(session, lastFixRef.current);
+    if (!url) {
+      Alert.alert('Location not ready', 'Wait a moment for GPS, then try sharing again.');
+      return;
+    }
     try {
+      const isMaps = !isLiveSession(session);
       await Share.share({
-        message: `Follow my live location on Buddy Walk:\n${url}`,
+        message: isMaps
+          ? `Here is my location on Buddy Walk:\n${url}\n\nAsk me to share again if I have moved.`
+          : `Follow my live location on Buddy Walk:\n${url}`,
         url: Platform.OS === 'ios' ? url : undefined,
-        title: 'Buddy Walk — live location',
+        title: 'Buddy Walk — location',
       });
       void track(Events.CompanionLinkShared);
     } catch (e) {
@@ -277,7 +396,8 @@ export default function CompanionScreen({ navigation }: Props) {
     }
   }
 
-  const url = session ? buildShareUrl(session.token) : null;
+  const url = getShareUrl(session, lastFixRef.current);
+  const isMapsMode = session != null && !isLiveSession(session);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -300,9 +420,9 @@ export default function CompanionScreen({ navigation }: Props) {
           browser — no app or account needed.
         </Text>
 
-        {companionAvailable === false && (
+        {companionAvailable === false && !session && (
           <View style={styles.warnBox} accessibilityRole="alert">
-            <Text style={styles.warnTitle}>Companion API not on this server yet</Text>
+            <Text style={styles.warnTitle}>Using maps link sharing</Text>
             <Text style={styles.warnText}>
               {companionUnavailableMessage(companionUnavailableReason)}
             </Text>
@@ -327,7 +447,7 @@ export default function CompanionScreen({ navigation }: Props) {
 
             <Pressable
               onPress={handleStart}
-              disabled={working || companionAvailable === false}
+              disabled={working}
               style={({ pressed }) => [
                 styles.primaryButton,
                 pressed && styles.primaryButtonPressed,
@@ -352,13 +472,15 @@ export default function CompanionScreen({ navigation }: Props) {
           <View style={styles.card}>
             <View style={styles.statusRow}>
               <View style={styles.liveDot} />
-              <Text style={styles.statusText}>Sharing live</Text>
+              <Text style={styles.statusText}>
+                {isMapsMode ? 'Sharing maps pin' : 'Sharing live'}
+              </Text>
             </View>
 
-            <Text style={styles.label}>Shareable link</Text>
-            <View style={styles.linkBox} accessible accessibilityLabel={`Shareable link: ${url}`}>
+            <Text style={styles.label}>{isMapsMode ? 'Maps link' : 'Live map link'}</Text>
+            <View style={styles.linkBox} accessible accessibilityLabel={`Shareable link: ${url ?? 'waiting for GPS'}`}>
               <Text style={styles.linkText} selectable>
-                {url}
+                {url ?? 'Waiting for GPS…'}
               </Text>
             </View>
 
@@ -368,20 +490,24 @@ export default function CompanionScreen({ navigation }: Props) {
                 styles.primaryButton,
                 pressed && styles.primaryButtonPressed,
               ]}
-              accessibilityLabel="Share live location link"
+              accessibilityLabel={isMapsMode ? 'Share maps location link' : 'Share live location link'}
               accessibilityRole="button"
             >
               <Text style={styles.primaryButtonLabel}>SHARE LINK</Text>
             </Pressable>
 
             <View style={styles.detailsRow}>
-              <Text style={styles.detailLabel}>Last update sent</Text>
+              <Text style={styles.detailLabel}>Last location</Text>
               <Text style={styles.detailValue}>{formatTime(lastPingAt)}</Text>
             </View>
-            <View style={styles.detailsRow}>
-              <Text style={styles.detailLabel}>Expires</Text>
-              <Text style={styles.detailValue}>{formatTime(session.expiresAt)}</Text>
-            </View>
+            {!isMapsMode && (
+              <View style={styles.detailsRow}>
+                <Text style={styles.detailLabel}>Expires</Text>
+                <Text style={styles.detailValue}>
+                  {formatTime((session as LiveSession).expiresAt)}
+                </Text>
+              </View>
+            )}
 
             {pingError ? (
               <Text style={styles.errorText} accessibilityLiveRegion="polite">
@@ -401,8 +527,9 @@ export default function CompanionScreen({ navigation }: Props) {
             </Button>
 
             <Text style={styles.fineprint}>
-              Live updates only flow while Buddy Walk is open on this device. Switching
-              apps or locking the screen will pause updates until you come back.
+              {isMapsMode
+                ? 'Your contact opens the link in Google Maps. Tap Share again after you move for an updated pin.'
+                : 'Live updates only flow while Buddy Walk is open on this device. Switching apps or locking the screen will pause updates until you come back.'}
             </Text>
           </View>
         )}

@@ -106,7 +106,8 @@
       }
 
       var TOKEN = readToken();
-      var snapshotUrl = "/api/companion/snapshot?token=" + encodeURIComponent(TOKEN);
+      var API_ROOT = "https://buddywalk.app";
+      var snapshotUrl = API_ROOT + "/api/companion/snapshot?token=" + encodeURIComponent(TOKEN);
 
       var map = null;
       var marker = null;

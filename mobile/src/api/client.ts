@@ -75,6 +75,10 @@ export function resolveCompanionShareBaseUrl(): string {
   const custom = readEnvRoot('EXPO_PUBLIC_COMPANION_SHARE_URL');
   if (custom) return custom;
   if (Platform.OS === 'web') return resolveApiRoot();
+  const fromDefault = (defaultApi as { companionShareBaseUrl?: string }).companionShareBaseUrl;
+  if (typeof fromDefault === 'string' && fromDefault.trim().length > 0) {
+    return normalizeApiRoot(fromDefault.trim());
+  }
   const apiRoot = resolveCompanionApiRoot();
   if (/^https?:\/\//i.test(apiRoot) && !isPrivateDevHost(apiRoot)) {
     return apiRoot;
