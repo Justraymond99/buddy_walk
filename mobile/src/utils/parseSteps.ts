@@ -8,9 +8,8 @@ import { metersToFeetText } from './navigationMath';
  *
  * Returns `null` if no plausible "Step N) ..." style enumeration is detected.
  *
- * The resulting steps have placeholder coordinates (0,0). They can still drive
- * spoken / haptic playback, but proximity-based step advancement is disabled
- * for these (the navigator falls back to manual "Next" / "Repeat").
+ * Supplemental only — MainScreen speaks full AI directions; use this when you
+ * need step structure for optional assist UI, not as a full maps replacement.
  */
 export function parseStepsFromText(text: string): NavRoute | null {
   if (!text) return null;

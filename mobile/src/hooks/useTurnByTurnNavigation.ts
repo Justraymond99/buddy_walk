@@ -1,3 +1,9 @@
+/**
+ * Supplemental turn-by-turn guidance — optional GPS + haptic cues for parsed
+ * walking steps. Not wired into MainScreen as a Google Maps replacement;
+ * spoken AI directions remain the primary experience. Import when building
+ * lighter assist features (e.g. manual step-by-step help).
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';

@@ -1,3 +1,8 @@
+/**
+ * Vibration patterns for turn cues (left, right, arrive, etc.).
+ * Used by useTurnByTurnNavigation for optional supplemental guidance — not
+ * the primary navigation path in the app.
+ */
 const SHORT = 120;
 const GAP = 90;
 const HEADS_UP = 220;

@@ -5,7 +5,7 @@ import { appVersion, getInstallId, platform, sessionId } from '../utils/identity
 
 export interface TextResponse {
   output: string;
-  /** Optional structured walking route used to drive turn-by-turn haptic navigation. */
+  /** Optional structured walking route from the backend (used for distance sanity checks). */
   route?: NavRoute | null;
 }
 

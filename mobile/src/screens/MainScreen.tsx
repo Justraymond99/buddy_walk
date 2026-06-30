@@ -39,11 +39,7 @@ import { transcribeAudio } from '../api/transcribe';
 import { useAuthSession } from '../navigation/authSession';
 import { RequestData, CustomCoords, RootStackParamList, NavRoute } from '../types';
 import { expandSavedAliases } from '../utils/savedPlaces';
-import { geocodeNearUser } from '../utils/geocodeNearUser';
-import { parseStepsFromText, extractDestinationQuery } from '../utils/parseSteps';
-import { hasUsableDestination } from '../utils/navigationMath';
-import { tap, tapMedium, iconForManeuver, notifySuccess } from '../utils/haptics';
-import { useTurnByTurnNavigation } from '../hooks/useTurnByTurnNavigation';
+import { tap, tapMedium, notifySuccess } from '../utils/haptics';
 import { ensureMicrophonePermission } from '../utils/microphonePermission';
 import { prepareAudioForRecording, resetAudioForPlayback } from '../utils/audioSession';
 import { stopSpeaking, isSpeaking } from '../utils/speakText';
@@ -72,7 +68,6 @@ const PHOTO_CAPTURED_VIBRATION = [0, 50] as const;
 const NO_SPEECH_VIBRATION_PATTERN = [0, 180, 120, 180];
 const NO_INTERNET_VIBRATION_PATTERN = [0, 250, 150, 250];
 const SPEECH_CAPTURED_VIBRATION_PATTERN = [0, 80];
-const NAV_STOPPED_VIBRATION_PATTERN = [0, 60, 80, 60];
 
 // Walking routes longer than this are almost always a bad geocode (e.g. a
 // Brooklyn park that resolved out-of-state) and are never practical for our
@@ -150,13 +145,6 @@ export default function MainScreen({ navigation }: Props) {
   const [userInput, setUserInput] = useState('');
   const [displayQuestion, setDisplayQuestion] = useState('');
   const [aiResponse, setAiResponse] = useState('');
-  const [aiRoute, setAiRoute] = useState<NavRoute | null>(null);
-  const nav = useTurnByTurnNavigation();
-  const aiRouteRef = useRef<NavRoute | null>(null);
-  const navStartRef = useRef(nav.start);
-  const navStopRef = useRef(nav.stop);
-  const navActiveRef = useRef(false);
-  const autoStartedRouteRef = useRef<NavRoute | null>(null);
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -243,31 +231,6 @@ export default function MainScreen({ navigation }: Props) {
       clearRecordingTimer();
     };
   }, []);
-  useEffect(() => { aiRouteRef.current = aiRoute; }, [aiRoute]);
-  useEffect(() => { navStartRef.current = nav.start; }, [nav.start]);
-  useEffect(() => { navStopRef.current = nav.stop; }, [nav.stop]);
-  useEffect(() => { navActiveRef.current = nav.active; }, [nav.active]);
-
-  // Hands-off: the instant directions arrive, begin haptic navigation
-  // automatically so blind users never have to find and press a button.
-  useEffect(() => {
-    if (aiRoute && aiRoute.steps.length > 0) {
-      if (autoStartedRouteRef.current !== aiRoute) {
-        autoStartedRouteRef.current = aiRoute;
-        void stopSpeaking();
-        void track(Events.NavigationStarted, {
-          steps: aiRoute.steps.length,
-          travelMode: aiRoute.travelMode ?? 'unknown',
-          autoStarted: true,
-        });
-        void navStartRef.current(aiRoute);
-      }
-    } else {
-      autoStartedRouteRef.current = null;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiRoute]);
-
   // ─── Setup: location, compass, Azure token ───────────────────────────────
 
   useEffect(() => {
@@ -401,17 +364,6 @@ export default function MainScreen({ navigation }: Props) {
         lastShakeRef.current = now;
         firstSpikeAtRef.current = 0;
 
-        // Priority: while navigating, a shake ends navigation hands-off so the
-        // user never has to find the Stop button. This must work even if the
-        // Azure token isn't ready (it's only needed for voice input).
-        if (navActiveRef.current) {
-          void navStopRef.current();
-          Vibration.vibrate(NAV_STOPPED_VIBRATION_PATTERN);
-          AccessibilityInfo.announceForAccessibility('Navigation stopped.');
-          return;
-        }
-
-        // Otherwise fall back to shake-to-ask voice input, unless busy.
         if (
           isListeningRef.current ||
           isTranscribingRef.current ||
@@ -473,12 +425,7 @@ export default function MainScreen({ navigation }: Props) {
     }
     if (lastAutoSpokenRef.current !== aiResponse) {
       lastAutoSpokenRef.current = aiResponse;
-      // When the response is a route, haptic navigation speaks the steps as we
-      // go — reading the full directions text too would talk over those cues.
-      if (!aiRouteRef.current) {
-        // Safari blocks async MP3 playback after mic capture — use device speech.
-        speak(aiResponse, { preferDevice: true });
-      }
+      speak(aiResponse, { preferDevice: true });
     }
 
     const loc = locationRef.current;
@@ -1169,8 +1116,6 @@ export default function MainScreen({ navigation }: Props) {
           if (isMtaOnlyQuestion) {
             const message =
               'Could not load live subway arrival times. Check your internet connection and try again.';
-            setAiRoute(null);
-            aiRouteRef.current = null;
             setAiResponse(message);
             lastAutoSpokenRef.current = message;
             speak(message, { preferDevice: true });
@@ -1190,8 +1135,6 @@ export default function MainScreen({ navigation }: Props) {
       }
 
       if (mtaDirectAnswer && isMtaOnlyQuestion) {
-        setAiRoute(null);
-        aiRouteRef.current = null;
         setAiResponse(mtaDirectAnswer);
         lastAutoSpokenRef.current = mtaDirectAnswer;
         speak(mtaDirectAnswer, { preferDevice: true });
@@ -1219,14 +1162,9 @@ export default function MainScreen({ navigation }: Props) {
 
       const res = await sendTextRequest(data);
       if (res?.output) {
-        // Prefer structured directions from the backend; otherwise try to
-        // recover steps from the AI text itself so haptic navigation still works.
         const structured =
           res.route && res.route.steps && res.route.steps.length > 0 ? res.route : null;
 
-        // Safety net: never hand the user a convoluted, far-flung walking route
-        // (e.g. a Brooklyn destination that geocoded out-of-state). Suppress the
-        // haptic route and the bloated step-by-step text, and nudge to transit.
         if (structured && isUnreasonableWalk(structured)) {
           const miles = (routeTotalMeters(structured) * 0.00062137).toFixed(1);
           const dest =
@@ -1241,7 +1179,6 @@ export default function MainScreen({ navigation }: Props) {
           setCapturedImage(null);
           setCapturedVideoUri(null);
           setWebVideoFrames(null);
-          setAiRoute(null);
           void track(Events.AnswerRejected, {
             reason: 'unreasonable_walk',
             feature: 'directions',
@@ -1250,57 +1187,17 @@ export default function MainScreen({ navigation }: Props) {
           return;
         }
 
-        const fallback = structured ? null : parseStepsFromText(res.output);
-        const finalRoute = structured ?? fallback ?? null;
-
-        // Text-parsed routes arrive without a destination coordinate, so GPS
-        // can't confirm exact arrival. Geocode one on-device from the query in
-        // the background; the live navigator (which holds this same route
-        // object) picks up the coordinate as soon as it resolves.
-        if (!structured && finalRoute && !hasUsableDestination(finalRoute)) {
-          const destStr = extractDestinationQuery(resolvedText);
-          if (destStr) {
-            const userCoords = coords
-              ? { lat: coords.latitude, lng: coords.longitude }
-              : locationRef.current
-                ? {
-                    lat: locationRef.current.coords.latitude,
-                    lng: locationRef.current.coords.longitude,
-                  }
-                : null;
-            void (async () => {
-              const point = await geocodeNearUser(destStr, userCoords);
-              if (point) {
-                finalRoute.destination = {
-                  ...finalRoute.destination,
-                  ...point,
-                  name: destStr,
-                };
-              }
-            })();
-          }
-        }
-
-        // Set the ref synchronously *before* the response so the auto-speak
-        // effect knows a route is present and lets navigation narrate the steps
-        // instead of reading the full directions text over the voice cues.
-        aiRouteRef.current = finalRoute;
         setAiResponse(res.output);
-        if (!finalRoute) {
-          lastAutoSpokenRef.current = res.output;
-          speak(res.output, { preferDevice: true });
-        }
         setUserInput('');
         setCapturedImage(null);
         setCapturedVideoUri(null);
         setWebVideoFrames(null);
-        setAiRoute(finalRoute);
         void track(Events.AnswerReceived, {
           requestId,
           feature,
           latencyMs: Date.now() - requestStartedAt,
-          hasRoute: !!finalRoute,
-          routeSource: structured ? 'structured' : fallback ? 'text_parsed' : 'none',
+          hasRoute: !!structured,
+          routeSource: structured ? 'structured' : 'none',
           outputLength: res.output.length,
         });
       }
@@ -1316,10 +1213,7 @@ export default function MainScreen({ navigation }: Props) {
         !isTimeout &&
         (!maybeAxiosError?.response || maybeAxiosError?.message === 'Network Error');
 
-      setAiRoute(null);
       if (isTimeout) {
-        // We reached the network but the server was too slow — distinct from
-        // being offline, so don't tell the user their connection is down.
         setAiResponse('That took too long to answer. The server may be busy. Please try again.');
       } else if (isOffline) {
         notifyNoInternetConnection();
@@ -1609,96 +1503,7 @@ export default function MainScreen({ navigation }: Props) {
                 {aiResponse}
               </Text>
 
-              {aiRoute && aiRoute.steps.length > 0 && !nav.active && !nav.arrived && (
-                <Pressable
-                  onPressIn={() => tapMedium()}
-                  onPress={() => {
-                    void stopSpeaking();
-                    void track(Events.NavigationStarted, {
-                      steps: aiRoute.steps.length,
-                      travelMode: aiRoute.travelMode ?? 'unknown',
-                      autoStarted: false,
-                    });
-                    void nav.start(aiRoute);
-                  }}
-                  style={({ pressed }) => [
-                    styles.hapticNavButton,
-                    pressed && styles.hapticNavButtonPressed,
-                  ]}
-                  accessibilityLabel={`Resume haptic turn-by-turn navigation. ${aiRoute.steps.length} steps. Directions advance automatically as you walk.`}
-                  accessibilityRole="button"
-                >
-                  <Text style={styles.hapticNavIcon}>📳</Text>
-                  <View style={styles.hapticNavText}>
-                    <Text style={styles.hapticNavTitle}>Resume Haptic Navigation</Text>
-                    <Text style={styles.hapticNavSubtitle}>
-                      {aiRoute.steps.length} step{aiRoute.steps.length === 1 ? '' : 's'}
-                      {aiRoute.totalDistance?.text ? ` · ${aiRoute.totalDistance.text}` : ''}
-                      {aiRoute.totalDuration?.text ? ` · ${aiRoute.totalDuration.text}` : ''}
-                    </Text>
-                  </View>
-                </Pressable>
-              )}
-
               <AnswerFeedback answer={aiResponse} question={submittedInputRef.current} />
-            </View>
-          )}
-
-          {/* ── Live haptic navigation (auto-advances by GPS) ── */}
-          {(nav.active || nav.arrived) && (
-            <View
-              style={styles.liveNavCard}
-              accessible
-              accessibilityLiveRegion={nav.arrived || nav.offRoute ? 'assertive' : 'polite'}
-              accessibilityLabel={
-                nav.arrived
-                  ? 'You have arrived at your destination.'
-                  : `Navigating. Step ${(nav.stepIndex ?? 0) + 1} of ${nav.totalSteps}. ${
-                      nav.currentStep?.instruction ?? ''
-                    }`
-              }
-            >
-              {nav.arrived ? (
-                <Text style={styles.liveNavBanner}>🏁 You have arrived</Text>
-              ) : nav.offRoute ? (
-                <Text style={[styles.liveNavBanner, styles.liveNavOffRoute]}>
-                  ⚠️ You may be off-route
-                </Text>
-              ) : (
-                <Text style={styles.liveNavStepCount}>
-                  Step {(nav.stepIndex ?? 0) + 1} of {nav.totalSteps} · navigating automatically
-                </Text>
-              )}
-
-              {!nav.arrived && nav.currentStep && (
-                <View style={styles.liveNavStepRow}>
-                  <Text style={styles.liveNavIcon}>
-                    {iconForManeuver(nav.currentStep.maneuver)}
-                  </Text>
-                  <Text style={styles.liveNavInstruction}>
-                    {nav.currentStep.instruction}
-                  </Text>
-                </View>
-              )}
-
-              <Pressable
-                onPressIn={() => tap()}
-                onPress={() => {
-                  void nav.stop();
-                  AccessibilityInfo.announceForAccessibility('Navigation stopped.');
-                }}
-                style={({ pressed }) => [
-                  styles.liveNavStop,
-                  pressed && styles.liveNavStopPressed,
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel={nav.arrived ? 'Dismiss navigation' : 'Stop navigation'}
-                accessibilityHint={nav.arrived ? undefined : 'You can also shake the phone to stop'}
-              >
-                <Text style={styles.liveNavStopLabel}>
-                  {nav.arrived ? 'DISMISS' : 'STOP NAVIGATION'}
-                </Text>
-              </Pressable>
             </View>
           )}
         </View>
@@ -2104,84 +1909,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     lineHeight: 26,
-  },
-
-  // ─── Haptic Navigation CTA inside response card ───
-  hapticNavButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 14,
-    marginTop: 12,
-  },
-  hapticNavButtonPressed: { backgroundColor: '#e0e0e0' },
-  hapticNavIcon: { fontSize: 28 },
-  hapticNavText: { flex: 1 },
-  hapticNavTitle: {
-    color: '#000',
-    fontSize: 16,
-    fontWeight: 'bold',
-    letterSpacing: 0.5,
-  },
-  hapticNavSubtitle: {
-    color: '#444',
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 2,
-    opacity: 0.9,
-  },
-
-  // ─── Live haptic navigation banner (auto-advances by GPS) ───
-  liveNavCard: {
-    backgroundColor: '#161b22',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#2a313c',
-    padding: 16,
-    gap: 12,
-    marginTop: 12,
-  },
-  liveNavBanner: {
-    color: '#2ecc71',
-    fontSize: 18,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  liveNavOffRoute: { color: '#ffb86b' },
-  liveNavStepCount: {
-    color: '#aab1bd',
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  liveNavStepRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  liveNavIcon: { fontSize: 34 },
-  liveNavInstruction: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '600',
-    flex: 1,
-    lineHeight: 24,
-  },
-  liveNavStop: {
-    backgroundColor: '#7c2d12',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  liveNavStopPressed: { backgroundColor: '#5a1f0d' },
-  liveNavStopLabel: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: 'bold',
-    letterSpacing: 1,
   },
 
   // ─── Tools Section (Companion + Saved Places) ───
