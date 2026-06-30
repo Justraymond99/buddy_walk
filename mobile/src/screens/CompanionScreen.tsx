@@ -266,11 +266,11 @@ export default function CompanionScreen({ navigation }: Props) {
     if (!session) return;
     const url = buildShareUrl(session.token);
     try {
-      await Share.share(
-        Platform.OS === 'ios'
-          ? { url, message: 'Follow my live location on Buddy Walk:' }
-          : { message: `Follow my live location on Buddy Walk: ${url}` }
-      );
+      await Share.share({
+        message: `Follow my live location on Buddy Walk:\n${url}`,
+        url: Platform.OS === 'ios' ? url : undefined,
+        title: 'Buddy Walk — live location',
+      });
       void track(Events.CompanionLinkShared);
     } catch (e) {
       console.warn('share failed:', e);

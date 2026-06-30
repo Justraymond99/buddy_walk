@@ -1,4 +1,4 @@
 {
   "apiRoot": "https://buddywalk.app",
-  "companionApiRoot": "https://buddy-walk-mobile.vercel.app"
+  "companionApiRoot": "https://buddywalk.app"
 }

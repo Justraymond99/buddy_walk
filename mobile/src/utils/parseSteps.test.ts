@@ -63,6 +63,8 @@ describe('parseStepsFromText', () => {
         },
       ]
     );
+    assert.equal(route.steps[1].distance.value, 37);
+    assert.ok(route.steps[1].distance.text.includes('feet'));
   });
 
   it('falls back to numbered direction lists when Step labels are absent', () => {

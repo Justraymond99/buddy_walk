@@ -21,6 +21,7 @@ import {
   listSavedPlaces,
   savePlace,
 } from '../utils/savedPlaces';
+import { geocodeNearUser } from '../utils/geocodeNearUser';
 import { track, Events } from '../api/telemetry';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SavedPlaces'>;
@@ -91,6 +92,29 @@ export default function SavedPlacesScreen({ navigation }: Props) {
     }
   }
 
+  async function resolveCoordsForAddress(
+    addressTrim: string,
+    existing?: { lat: number; lon: number } | null
+  ): Promise<{ lat: number; lon: number } | null> {
+    if (existing) return existing;
+
+    let userCoords: { lat: number; lng: number } | null = null;
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const fix = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        userCoords = { lat: fix.coords.latitude, lng: fix.coords.longitude };
+      }
+    } catch {
+      /* geocode without user bias */
+    }
+
+    const geo = await geocodeNearUser(addressTrim, userCoords);
+    return geo ? { lat: geo.lat, lon: geo.lng } : null;
+  }
+
   async function handleSave() {
     const aliasTrim = alias.trim();
     const addressTrim = address.trim();
@@ -100,18 +124,22 @@ export default function SavedPlacesScreen({ navigation }: Props) {
     }
     setBusy(true);
     try {
+      const resolved = await resolveCoordsForAddress(addressTrim, coords);
       const saved = await savePlace({
         alias: aliasTrim,
         address: addressTrim,
-        lat: coords?.lat,
-        lon: coords?.lon,
+        lat: resolved?.lat,
+        lon: resolved?.lon,
       });
       setAlias('');
       setAddress('');
       setCoords(null);
       await reload();
-      Speech.speak(`Saved ${saved.alias}.`, { language: 'en-US' });
-      AccessibilityInfo.announceForAccessibility(`Saved ${saved.alias}.`);
+      const locationNote = resolved
+        ? `Saved ${saved.alias} near your current area.`
+        : `Saved ${saved.alias}, but the address could not be verified on a map. Directions may be wrong.`;
+      Speech.speak(locationNote, { language: 'en-US' });
+      AccessibilityInfo.announceForAccessibility(locationNote);
       void track(Events.SavedPlaceCreated, { aliasLength: saved.alias.length });
     } catch (e: any) {
       Alert.alert('Could not save', e?.message ?? 'Please try again.');
@@ -254,21 +282,40 @@ export default function SavedPlacesScreen({ navigation }: Props) {
             </Text>
           ) : (
             places.map((p) => (
-              <View key={p.id} style={styles.placeRow} accessible accessibilityLabel={`${p.alias}, ${p.address}`}>
+              <View
+                key={p.id}
+                style={styles.placeRow}
+                accessible
+                accessibilityLabel={`${p.alias}, ${p.address}`}
+                accessibilityHint="Use the Remove button to delete this saved place"
+                accessibilityActions={[{ name: 'delete', label: `Remove ${p.alias}` }]}
+                onAccessibilityAction={(event) => {
+                  if (event.nativeEvent.actionName === 'delete') confirmDelete(p);
+                }}
+              >
                 <View style={styles.placeText}>
                   <Text style={styles.placeAlias}>{p.alias}</Text>
                   <Text style={styles.placeAddress} numberOfLines={3}>
                     {p.address}
                   </Text>
+                  {p.lat != null && p.lon != null ? (
+                    <Text style={styles.placeCoords} accessibilityElementsHidden>
+                      Verified on map
+                    </Text>
+                  ) : null}
                 </View>
-                <IconButton
-                  icon="trash-can-outline"
-                  iconColor="#ff8a8a"
-                  size={24}
+                <Pressable
                   onPress={() => confirmDelete(p)}
+                  style={({ pressed }) => [
+                    styles.removeButton,
+                    pressed && styles.removeButtonPressed,
+                  ]}
+                  accessibilityRole="button"
                   accessibilityLabel={`Remove saved place ${p.alias}`}
                   accessibilityHint="Deletes this saved place from your list"
-                />
+                >
+                  <Text style={styles.removeButtonLabel}>Remove</Text>
+                </Pressable>
               </View>
             ))
           )}
@@ -371,4 +418,17 @@ const styles = StyleSheet.create({
   placeText: { flex: 1 },
   placeAlias: { color: '#fff', fontSize: 17, fontWeight: '700' },
   placeAddress: { color: '#aab1bd', fontSize: 14, marginTop: 2 },
+  placeCoords: { color: '#6b9e6b', fontSize: 12, marginTop: 4 },
+  removeButton: {
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#3a1f1f',
+    borderWidth: 1,
+    borderColor: '#ff8a8a',
+    minWidth: 88,
+    alignItems: 'center',
+  },
+  removeButtonPressed: { opacity: 0.75 },
+  removeButtonLabel: { color: '#ff8a8a', fontSize: 14, fontWeight: '700' },
 });

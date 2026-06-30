@@ -13,7 +13,6 @@ const MTA_FEEDS: Record<string, string> = {
   "7": "nyct%2Fgtfs-7",
 };
 
-const NYC_TZ = "America/New_York";
 const MAX_STATION_KM = 2.5;
 const MAX_ARRIVALS = 4;
 /** Ignore scheduled trips far in the future — they are not useful "next train" answers. */
@@ -72,8 +71,19 @@ export function epochSeconds(timeField: unknown): number | null {
     const parsed = Number.parseInt(timeField, 10);
     return Number.isFinite(parsed) ? epochSeconds(parsed) : null;
   }
-  const t = timeField as { toNumber?: () => number; low?: number; high?: number };
+  const t = timeField as {
+    toNumber?: () => number;
+    toString?: () => string;
+    low?: number;
+    high?: number;
+    seconds?: number | bigint | { low?: number; high?: number };
+  };
   if (typeof t.toNumber === "function") return epochSeconds(t.toNumber());
+  if (t.seconds != null) return epochSeconds(t.seconds);
+  if (typeof t.toString === "function") {
+    const parsed = Number.parseInt(t.toString(), 10);
+    if (Number.isFinite(parsed) && parsed > 1e9) return epochSeconds(parsed);
+  }
   if (t.low != null) {
     const high = t.high ?? 0;
     return epochSeconds(high * 0x100000000 + (t.low >>> 0));
@@ -95,13 +105,9 @@ function formatMinutesUntil(arrivalSec: number, nowSec: number) {
   return `in ${mins} minutes`;
 }
 
-function formatClockET(arrivalSec: number) {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: NYC_TZ,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(new Date(arrivalSec * 1000));
+/** Minutes-only phrasing for TTS — clock times confused testers and the AI. */
+function formatArrivalPhrase(arrivalSec: number, nowSec: number) {
+  return formatMinutesUntil(arrivalSec, nowSec);
 }
 
 function findNearestParentStop(lat: number, lon: number) {
@@ -186,10 +192,9 @@ export async function getSubwayArrivals(routeId: string, userLat: number, userLo
   }
 
   const lines = upcoming.map((a) => {
-    const mins = formatMinutesUntil(a.arrivalSec, nowSec);
-    const clock = formatClockET(a.arrivalSec);
+    const mins = formatArrivalPhrase(a.arrivalSec, nowSec);
     const express = a.routeLabel !== route ? ` (${a.routeLabel})` : "";
-    return `${a.direction}${express}: ${mins} (${clock} Eastern)`;
+    return `${a.direction}${express}: ${mins}`;
   });
 
   return `Nearest station: ${stationName}. Upcoming ${route} trains: ${lines.join("; ")}.`;

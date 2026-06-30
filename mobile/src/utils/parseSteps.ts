@@ -1,4 +1,5 @@
 import type { NavRoute, NavStep } from '../types';
+import { metersToFeetText } from './navigationMath';
 
 /**
  * Best-effort regex parser for AI responses that include walking directions
@@ -56,15 +57,21 @@ export function parseStepsFromText(text: string): NavRoute | null {
     .sort((a, b) => a[0] - b[0])
     .map(([, instruction], i) => ({ index: i, instruction }));
 
-  const steps: NavStep[] = ordered.map((s) => ({
-    index: s.index,
-    instruction: s.instruction,
-    distance: { text: '', value: 0 },
-    duration: { text: '', value: 0 },
-    maneuver: inferManeuverFromText(s.instruction),
-    startLocation: { lat: 0, lng: 0 },
-    endLocation: { lat: 0, lng: 0 },
-  }));
+  const steps: NavStep[] = ordered.map((s) => {
+    const { instruction, distanceMeters } = parseInstructionAndDistance(s.instruction);
+    return {
+      index: s.index,
+      instruction,
+      distance: {
+        text: distanceMeters > 0 ? metersToFeetText(distanceMeters) : '',
+        value: distanceMeters,
+      },
+      duration: { text: '', value: 0 },
+      maneuver: inferManeuverFromText(instruction),
+      startLocation: { lat: 0, lng: 0 },
+      endLocation: { lat: 0, lng: 0 },
+    };
+  });
 
   // Make sure the last step looks like an arrival so the long-buzz fires.
   const last = steps[steps.length - 1];
@@ -106,12 +113,31 @@ export function extractDestinationQuery(query: string): string | null {
   return null;
 }
 
+function parseInstructionAndDistance(raw: string): { instruction: string; distanceMeters: number } {
+  let distanceMeters = 0;
+  let text = raw.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+
+  const patterns: { re: RegExp; toMeters: (n: number) => number }[] = [
+    { re: /\s+for\s+([\d.]+)\s*(?:ft|feet)\b\.?$/i, toMeters: (n) => n * 0.3048 },
+    { re: /\s+for\s+([\d.]+)\s*(?:m|meters?)\b\.?$/i, toMeters: (n) => n },
+    { re: /\s+for\s+([\d.]+)\s*(?:mi|miles?)\b\.?$/i, toMeters: (n) => n * 1609.34 },
+    { re: /\s+for\s+([\d.]+)\s*(?:km|kilometers?)\b\.?$/i, toMeters: (n) => n * 1000 },
+  ];
+
+  for (const { re, toMeters } of patterns) {
+    const m = text.match(re);
+    if (m) {
+      distanceMeters = Math.round(toMeters(parseFloat(m[1])));
+      text = text.replace(re, '').trim();
+      break;
+    }
+  }
+
+  return { instruction: text, distanceMeters };
+}
+
 function cleanInstruction(raw: string): string {
-  return raw
-    .replace(/<[^>]+>/g, '')
-    .replace(/\s+for\s+[\d.]+\s*(?:ft|feet|m|meters|km|mi|miles)\s*\.?$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return parseInstructionAndDistance(raw).instruction;
 }
 
 const DIRECTION_HINT =

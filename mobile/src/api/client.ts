@@ -48,20 +48,17 @@ export function resolveCompanionApiRoot(): string {
 
 /**
  * Base URL for caretaker share links (`/companion/:token` viewer page).
- * On web, the Vercel deployment serves the viewer on the same origin.
+ * Must match the host that stores companion sessions (same as COMPANION_API_ROOT).
  */
 export function resolveCompanionShareBaseUrl(): string {
   const custom = readEnvRoot('EXPO_PUBLIC_COMPANION_SHARE_URL');
   if (custom) return custom;
   if (Platform.OS === 'web') return resolveApiRoot();
-  const fromDefault = (defaultApi as { companionApiRoot?: string }).companionApiRoot;
-  if (typeof fromDefault === 'string' && fromDefault.trim().length > 0) {
-    return normalizeApiRoot(fromDefault.trim());
-  }
   const apiRoot = resolveCompanionApiRoot();
   if (/^https?:\/\//i.test(apiRoot) && !isPrivateDevHost(apiRoot)) {
     return apiRoot;
   }
+  // Local dev: share links need a public URL — set EXPO_PUBLIC_COMPANION_SHARE_URL.
   return normalizeApiRoot(defaultApi.apiRoot);
 }
 

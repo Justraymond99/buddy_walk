@@ -77,6 +77,7 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
   const arrivalLoggedRef = useRef(false);
   const offRouteLoggedRef = useRef(false);
   const headsUpFiredRef = useRef<Set<number>>(new Set());
+  const verbalPreviewForStepRef = useRef<Set<number>>(new Set());
   const lastSpokenAtRef = useRef<number>(0);
   const manualOnlyRef = useRef(false);
   const stepAdvanceEligibleSinceRef = useRef<number | null>(null);
@@ -104,12 +105,27 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
   }, []);
 
   const fireStepCue = useCallback(
-    (step: NavStep, prefix?: string) => {
+    (step: NavStep, prefix?: string, options?: { hapticOnly?: boolean }) => {
+      cancelPulse();
       pulse(patternForManeuver(step.maneuver));
-      speakStep(step, prefix);
+      if (options?.hapticOnly) return;
+      setTimeout(() => speakStep(step, prefix), 380);
     },
     [speakStep]
   );
+
+  const maneuverPreview = useCallback((step: NavStep): string => {
+    const m = step.maneuver;
+    if (m.includes('uturn')) return 'make a U-turn';
+    if (m.includes('sharp-left')) return 'turn sharp left';
+    if (m.includes('sharp-right')) return 'turn sharp right';
+    if (m.includes('slight-left')) return 'bear left';
+    if (m.includes('slight-right')) return 'bear right';
+    if (m.includes('turn-left')) return 'turn left';
+    if (m.includes('turn-right')) return 'turn right';
+    if (m.includes('arrive')) return 'arrive at your destination';
+    return 'continue';
+  }, []);
 
   const logArrival = useCallback(() => {
     if (arrivalLoggedRef.current) return;
@@ -168,7 +184,8 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
       const next = r.steps[newIdx];
       if (next) {
         lastSpokenAtRef.current = 0;
-        fireStepCue(next);
+        const previewed = verbalPreviewForStepRef.current.has(newIdx);
+        fireStepCue(next, undefined, previewed ? { hapticOnly: true } : undefined);
       }
       runManualAdvanceRef.current();
     }, estimateStepDurationMs(cur));
@@ -200,6 +217,7 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
       offRouteRef.current = false;
       offRouteSinceRef.current = null;
       headsUpFiredRef.current.clear();
+      verbalPreviewForStepRef.current.clear();
       lastSpokenAtRef.current = 0;
       manualOnlyRef.current = false;
       arrivalLoggedRef.current = false;
@@ -280,9 +298,11 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
       headsUpFiredRef.current.add(idx);
       const next = r.steps[idx + 1];
       if (next) {
+        cancelPulse();
         pulse(PATTERNS.HEADS_UP);
+        verbalPreviewForStepRef.current.add(idx + 1);
         Speech.speak(
-          `In ${metersToFeetText(distToCorner)}, ${next.instruction}`,
+          `In ${metersToFeetText(distToCorner)}, ${maneuverPreview(next)}.`,
           { language: 'en-US' }
         );
         lastSpokenAtRef.current = Date.now();
@@ -302,7 +322,8 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
         const next = r.steps[newIdx];
         if (next) {
           lastSpokenAtRef.current = 0;
-          fireStepCue(next);
+          const previewed = verbalPreviewForStepRef.current.has(newIdx);
+          fireStepCue(next, undefined, previewed ? { hapticOnly: true } : undefined);
         }
       }
     } else {
@@ -338,7 +359,7 @@ export function useTurnByTurnNavigation(): UseTurnByTurnResult {
         setOffRoute(false);
       }
     }
-  }, [clearManualTimer, fireStepCue]);
+  }, [clearManualTimer, fireStepCue, maneuverPreview]);
 
   const start = useCallback(
     async (r: NavRoute) => {

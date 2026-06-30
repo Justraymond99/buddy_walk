@@ -4,11 +4,13 @@ import * as Speech from 'expo-speech';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { sendAudioRequest } from '../api/openAi';
-import { resetAudioForPlayback } from './audioSession';
+import { ensurePlaybackThroughSpeaker, resetAudioForPlayback } from './audioSession';
 import { isSafariBrowser, unlockWebAudioForPlayback } from './webAudioUnlock';
 
 const MAX_TTS_CHARS = 800;
+const NATIVE_TTS_VOLUME = 1.0;
 const isWeb = Platform.OS === 'web';
+const isNative = !isWeb;
 
 let activeSound: ExpoAudio.Sound | null = null;
 let activeWebAudio: HTMLAudioElement | null = null;
@@ -103,9 +105,14 @@ async function playMp3Buffer(buffer: ArrayBuffer, generation: number): Promise<b
   if (generation !== speakGeneration) return false;
 
   await stopPlayback();
+  await ensurePlaybackThroughSpeaker();
 
-  const { sound } = await ExpoAudio.Sound.createAsync({ uri }, { shouldPlay: true, volume: 1.0 });
+  const { sound } = await ExpoAudio.Sound.createAsync(
+    { uri },
+    { shouldPlay: true, volume: NATIVE_TTS_VOLUME, isMuted: false }
+  );
   activeSound = sound;
+  await sound.setVolumeAsync(NATIVE_TTS_VOLUME);
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -230,6 +237,8 @@ function speakWithExpoSpeech(text: string, generation: number): Promise<void> {
     Speech.speak(text, {
       language: 'en-US',
       rate: 1.0,
+      pitch: 1.05,
+      volume: NATIVE_TTS_VOLUME,
       onDone: () => {
         if (generation === speakGeneration) resolve();
       },
@@ -276,11 +285,12 @@ export async function speakText(text: string, options?: { preferDevice?: boolean
   if (isWeb) {
     unlockWebAudioForPlayback();
   } else {
-    await resetAudioForPlayback();
+    await ensurePlaybackThroughSpeaker();
   }
   if (generation !== speakGeneration) return;
 
-  const preferDevice = options?.preferDevice ?? (isWeb && isSafariBrowser());
+  const preferDevice =
+    options?.preferDevice ?? (isNative || (isWeb && isSafariBrowser()));
 
   if (preferDevice) {
     await speakWithExpoSpeech(trimmed, generation);

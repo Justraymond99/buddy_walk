@@ -63,9 +63,25 @@ export function resetAudioForPlayback(): Promise<void> {
   return enqueue('playback');
 }
 
-export function prepareAudioForRecording(): Promise<void> {
-  // Recording mode must always be (re)applied right before capture, even if it
-  // was the last mode set, so the OS re-activates the input route.
+/**
+ * iOS routes TTS to the earpiece when the session was recently in recording mode.
+ * Force a fresh playback configuration so answers play through the loudspeaker.
+ */
+export async function ensurePlaybackThroughSpeaker(): Promise<void> {
   lastApplied = null;
-  return enqueue('recording');
+  await enqueue('playback');
+  await sleep(80);
+  lastApplied = null;
+  await enqueue('playback');
+}
+
+export async function prepareAudioForRecording(): Promise<void> {
+  // Drop back to playback briefly so iOS releases the mic route after TTS, then
+  // re-open recording. Without the gap, createAsync often fails on the 2nd tap.
+  lastApplied = null;
+  await enqueue('playback');
+  await sleep(120);
+  lastApplied = null;
+  await enqueue('recording');
+  await sleep(80);
 }

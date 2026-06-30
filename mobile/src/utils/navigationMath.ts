@@ -38,11 +38,11 @@ export function hasUsableDestination(route: NavRoute | null | undefined): boolea
 }
 
 /** Minimum pause between auto-timed steps (text-parsed routes without GPS corners). */
-export const NAV_MIN_AUTO_STEP_MS = 18_000;
-export const NAV_MAX_AUTO_STEP_MS = 120_000;
+export const NAV_MIN_AUTO_STEP_MS = 10_000;
+export const NAV_MAX_AUTO_STEP_MS = 90_000;
 /** Blind users need more time than Google's optimistic walk estimate. */
-export const NAV_AUTO_STEP_MULTIPLIER = 1.5;
-const NAV_WALK_SPEED_MPS = 1.1;
+export const NAV_AUTO_STEP_MULTIPLIER = 1.35;
+const NAV_WALK_SPEED_MPS = 1.0;
 
 /**
  * Estimated time to walk a step for timer-based advancement when steps lack GPS.
@@ -58,7 +58,7 @@ export function estimateStepDurationMs(step: NavStep | undefined): number {
       ms = (meters / NAV_WALK_SPEED_MPS) * 1000;
     }
   }
-  if (!ms) ms = 25_000;
+  if (!ms) ms = 20_000;
   ms *= NAV_AUTO_STEP_MULTIPLIER;
   return Math.min(Math.max(ms, NAV_MIN_AUTO_STEP_MS), NAV_MAX_AUTO_STEP_MS);
 }

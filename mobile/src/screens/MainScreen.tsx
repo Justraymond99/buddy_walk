@@ -39,6 +39,7 @@ import { transcribeAudio } from '../api/transcribe';
 import { useAuthSession } from '../navigation/authSession';
 import { RequestData, CustomCoords, RootStackParamList, NavRoute } from '../types';
 import { expandSavedAliases } from '../utils/savedPlaces';
+import { geocodeNearUser } from '../utils/geocodeNearUser';
 import { parseStepsFromText, extractDestinationQuery } from '../utils/parseSteps';
 import { hasUsableDestination } from '../utils/navigationMath';
 import { tap, tapMedium, iconForManeuver, notifySuccess } from '../utils/haptics';
@@ -61,8 +62,10 @@ import {
 } from '../utils/webSpeechRecognition';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-const HOLD_THRESHOLD_MS = 600;
+const HOLD_THRESHOLD_MS = 750;
+const MIN_VIDEO_RECORD_MS = 900;
 const MAX_VIDEO_DURATION_MS = 30000;
+const MTA_LOOKUP_MS = 8000;
 const LOCATION_WAIT_MS = 1000;
 const SLOW_RESPONSE_HINT_MS = 4500;
 const VIDEO_RECORDING_START_VIBRATION = [0, 120, 80, 120] as const;
@@ -204,6 +207,7 @@ export default function MainScreen({ navigation }: Props) {
   const locationRef = useRef<Location.LocationObject | null>(null);
   const headingRef = useRef<number>(0);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressInAtRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
@@ -215,6 +219,7 @@ export default function MainScreen({ navigation }: Props) {
   const azureTokenRef = useRef<{ token: string; region: string } | null>(null);
   const cameraReadyRef = useRef(false);
   const videoRecordStartedRef = useRef(false);
+  const videoRecordingStartedAtRef = useRef<number | null>(null);
   // Snapshot of the question actually sent, so the chat log records it even
   // after userInput is cleared on submit.
   const submittedInputRef = useRef('');
@@ -225,10 +230,12 @@ export default function MainScreen({ navigation }: Props) {
   const lastShakeRef = useRef(0);
   const firstSpikeAtRef = useRef(0);
   const isListeningRef = useRef(false);
+  const isTranscribingRef = useRef(false);
   const loadingRef = useRef(false);
   const recordingModeRef = useRef<RecordingMode>('idle');
 
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
+  useEffect(() => { isTranscribingRef.current = isTranscribing; }, [isTranscribing]);
   useEffect(() => { userInputRef.current = userInput; }, [userInput]);
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { recordingModeRef.current = recordingMode; }, [recordingMode]);
@@ -244,6 +251,7 @@ export default function MainScreen({ navigation }: Props) {
   function beginRecordingFeedback(): void {
     setIsHoldingForVideo(false);
     setRecordingMode('recording-video');
+    videoRecordingStartedAtRef.current = Date.now();
     clearRecordingTimer();
     recordingTimerRef.current = setInterval(() => {
       setRecordingElapsedSec((s) => s + 1);
@@ -456,6 +464,7 @@ export default function MainScreen({ navigation }: Props) {
         // Otherwise fall back to shake-to-ask voice input, unless busy.
         if (
           isListeningRef.current ||
+          isTranscribingRef.current ||
           loadingRef.current ||
           recordingModeRef.current !== 'idle' ||
           !azureTokenRef.current
@@ -577,19 +586,52 @@ export default function MainScreen({ navigation }: Props) {
     return false;
   }
 
+  async function waitForVideoRecordingStart(timeoutMs = 1200): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (recordingModeRef.current === 'recording-video' || videoRecordStartedRef.current) {
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return recordingModeRef.current === 'recording-video' || videoRecordStartedRef.current;
+  }
+
   async function handleReleaseCapture() {
+    const heldMs = pressInAtRef.current ? Date.now() - pressInAtRef.current : 0;
+    pressInAtRef.current = null;
+
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
       setIsHoldingForVideo(false);
-      await takePhoto();
-    } else if (recordingModeRef.current === 'recording-video') {
+      if (heldMs < HOLD_THRESHOLD_MS - 80) {
+        await takePhoto();
+      } else {
+        const started = await waitForVideoRecordingStart();
+        if (started) {
+          await stopVideoRecording();
+        } else {
+          speak('Video did not start. Hold a little longer, then release.');
+        }
+      }
+      return;
+    }
+
+    if (recordingModeRef.current === 'recording-video' || videoRecordStartedRef.current) {
       await stopVideoRecording();
+      return;
+    }
+
+    if (heldMs >= HOLD_THRESHOLD_MS) {
+      const started = await waitForVideoRecordingStart();
+      if (started) await stopVideoRecording();
     }
   }
 
   function handlePressIn() {
     tap();
+    pressInAtRef.current = Date.now();
     setIsHoldingForVideo(true);
     holdTimerRef.current = setTimeout(() => {
       holdTimerRef.current = null;
@@ -723,9 +765,11 @@ export default function MainScreen({ navigation }: Props) {
 
   function finishVideoRecording(): void {
     videoRecordStartedRef.current = false;
+    videoRecordingStartedAtRef.current = null;
     setRecordingMode('idle');
     setIsHoldingForVideo(false);
     clearRecordingTimer();
+    void resetAudioForPlayback();
   }
 
   async function stopVideoRecording() {
@@ -751,6 +795,14 @@ export default function MainScreen({ navigation }: Props) {
         speak('Could not capture video');
       }
       return;
+    }
+
+    const startedAt = videoRecordingStartedAtRef.current;
+    if (startedAt != null) {
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < MIN_VIDEO_RECORD_MS) {
+        await new Promise((r) => setTimeout(r, MIN_VIDEO_RECORD_MS - elapsed));
+      }
     }
     cameraRef.current?.stopRecording();
   }
@@ -789,7 +841,41 @@ export default function MainScreen({ navigation }: Props) {
     ? 'audio/wav; codecs=audio/pcm; samplerate=16000'
     : 'audio/aac';
 
-  const MIN_VOICE_RECORDING_MS = 400;
+  const MIN_VOICE_RECORDING_MS = 1200;
+  const LISTENING_PLACEHOLDER = '🎙 Listening… speak your question';
+  const TRANSCRIBING_PLACEHOLDER = '⏳ Transcribing your question…';
+
+  function isVoiceStatusText(text: string): boolean {
+    const t = text.trim();
+    return t === LISTENING_PLACEHOLDER || t === TRANSCRIBING_PLACEHOLDER;
+  }
+
+  async function cleanupVoiceCapture(): Promise<void> {
+    webAudioSessionRef.current?.abort();
+    webAudioSessionRef.current = null;
+    webSpeechSessionRef.current?.abort();
+    webSpeechSessionRef.current = null;
+    voiceTranscriptRef.current = '';
+
+    if (audioRecordingRef.current) {
+      try {
+        await audioRecordingRef.current.stopAndUnloadAsync();
+      } catch {
+        /* recording may already be stopped */
+      }
+      audioRecordingRef.current = null;
+    }
+    voiceRecordingStartedAtRef.current = null;
+    await resetAudioForPlayback();
+  }
+
+  async function resetVoiceUiState(): Promise<void> {
+    setIsListening(false);
+    setIsTranscribing(false);
+    isListeningRef.current = false;
+    isTranscribingRef.current = false;
+    await cleanupVoiceCapture();
+  }
 
   async function submitVoiceQuestion(transcript: string): Promise<void> {
     const trimmed = transcript.trim();
@@ -809,11 +895,11 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   async function toggleListening() {
-    if (isListening) {
+    if (isListeningRef.current) {
       await stopListening();
-    } else {
-      await startListening();
+      return;
     }
+    await startListening();
   }
 
   async function transcribeWithAzure(audioBody: Blob | ArrayBuffer, contentType: string): Promise<string | null> {
@@ -829,6 +915,20 @@ export default function MainScreen({ navigation }: Props) {
 
   async function startListening() {
     if (Platform.OS === 'web') unlockWebAudioForPlayback();
+
+    if (loadingRef.current) {
+      speak('Still loading your last answer. Wait a moment, then try again.');
+      return;
+    }
+    if (isTranscribingRef.current) {
+      speak('Still transcribing your last question. Wait a moment.');
+      return;
+    }
+    if (isListeningRef.current) return;
+
+    await stopSpeaking();
+    await cleanupVoiceCapture();
+
     if (!azureTokenRef.current) {
       await refreshAzureToken();
     }
@@ -849,9 +949,6 @@ export default function MainScreen({ navigation }: Props) {
     }
 
     if (Platform.OS === 'web') {
-      webAudioSessionRef.current?.abort();
-      webSpeechSessionRef.current?.abort();
-      voiceTranscriptRef.current = '';
       try {
         const session = await startWebAudioCapture();
         if (!session) {
@@ -880,14 +977,16 @@ export default function MainScreen({ navigation }: Props) {
         }
 
         voiceRecordingStartedAtRef.current = Date.now();
+        isListeningRef.current = true;
         setIsListening(true);
-        setUserInput('');
+        setUserInput(LISTENING_PLACEHOLDER);
         void track(Events.VoiceStarted);
         AccessibilityInfo.announceForAccessibility(
           'Listening. Tap again when finished speaking.'
         );
       } catch (e) {
         console.error('startListening web error:', e);
+        await resetVoiceUiState();
         speak('Could not start microphone');
       }
       return;
@@ -898,14 +997,17 @@ export default function MainScreen({ navigation }: Props) {
       const { recording } = await Audio.Recording.createAsync(AZURE_RECORDING_OPTIONS);
       audioRecordingRef.current = recording;
       voiceRecordingStartedAtRef.current = Date.now();
+      isListeningRef.current = true;
       setIsListening(true);
-      setUserInput('');
+      setUserInput(LISTENING_PLACEHOLDER);
       Vibration.vibrate(60);
       void track(Events.VoiceStarted);
       AccessibilityInfo.announceForAccessibility('Listening. Tap again when finished speaking.');
     } catch (e) {
       console.error('startListening error:', e);
-      speak('Could not start microphone');
+      await resetVoiceUiState();
+      await resetAudioForPlayback();
+      speak('Could not start microphone. Tap again in a moment.');
     }
   }
 
@@ -917,6 +1019,7 @@ export default function MainScreen({ navigation }: Props) {
       const speech = webSpeechSessionRef.current;
       webAudioSessionRef.current = null;
       webSpeechSessionRef.current = null;
+      isListeningRef.current = false;
       setIsListening(false);
 
       const startedAt = voiceRecordingStartedAtRef.current;
@@ -924,11 +1027,16 @@ export default function MainScreen({ navigation }: Props) {
       if (startedAt != null && Date.now() - startedAt < MIN_VOICE_RECORDING_MS) {
         speech?.abort();
         if (session) await session.stop();
+        setUserInput('');
+        setIsTranscribing(false);
+        isTranscribingRef.current = false;
         speak('Hold Tap to Ask a little longer while you speak, then tap again.');
         return;
       }
 
+      isTranscribingRef.current = true;
       setIsTranscribing(true);
+      setUserInput(TRANSCRIBING_PLACEHOLDER);
       void track(Events.VoiceStopped);
       AccessibilityInfo.announceForAccessibility('Processing speech');
 
@@ -949,6 +1057,8 @@ export default function MainScreen({ navigation }: Props) {
           voiceTranscriptRef.current.trim() ||
           userInputRef.current.trim();
 
+        if (isVoiceStatusText(text)) text = '';
+
         if (!text && blob && blob.size > 0) {
           const transcript = await transcribeWithAzure(blob, contentTypeForWebBlob(blob));
           if (transcript === null) {
@@ -959,8 +1069,10 @@ export default function MainScreen({ navigation }: Props) {
         }
 
         voiceTranscriptRef.current = '';
-        if (text) {
+        if (text && !isVoiceStatusText(text)) {
           setUserInput(text);
+          setIsTranscribing(false);
+          isTranscribingRef.current = false;
           await submitVoiceQuestion(text);
         } else {
           notifyNoSpeechHeard();
@@ -970,12 +1082,17 @@ export default function MainScreen({ navigation }: Props) {
         speak('Voice recognition failed');
       } finally {
         setIsTranscribing(false);
+        isTranscribingRef.current = false;
       }
       return;
     }
 
-    if (!audioRecordingRef.current) return;
+    if (!audioRecordingRef.current) {
+      await resetVoiceUiState();
+      return;
+    }
     try {
+      isListeningRef.current = false;
       setIsListening(false);
       const startedAt = voiceRecordingStartedAtRef.current;
       voiceRecordingStartedAtRef.current = null;
@@ -983,10 +1100,15 @@ export default function MainScreen({ navigation }: Props) {
         await audioRecordingRef.current.stopAndUnloadAsync();
         audioRecordingRef.current = null;
         await resetAudioForPlayback();
+        setIsTranscribing(false);
+        isTranscribingRef.current = false;
+        setUserInput('');
         speak('Hold Tap to Ask a little longer while you speak, then tap again.');
         return;
       }
       setIsTranscribing(true);
+      isTranscribingRef.current = true;
+      setUserInput(TRANSCRIBING_PLACEHOLDER);
       void track(Events.VoiceStopped);
       const recording = audioRecordingRef.current;
       const uri = recording.getURI();
@@ -1011,8 +1133,12 @@ export default function MainScreen({ navigation }: Props) {
         speak('Speech service error. Please try again.');
         return;
       }
-      if (transcript.trim()) {
-        await submitVoiceQuestion(transcript);
+      const cleaned = transcript.trim();
+      if (cleaned && !isVoiceStatusText(cleaned)) {
+        setUserInput(cleaned);
+        setIsTranscribing(false);
+        isTranscribingRef.current = false;
+        await submitVoiceQuestion(cleaned);
       } else {
         notifyNoSpeechHeard();
       }
@@ -1021,17 +1147,19 @@ export default function MainScreen({ navigation }: Props) {
       speak('Voice recognition failed');
     } finally {
       setIsTranscribing(false);
+      isTranscribingRef.current = false;
     }
   }
 
   // ─── Submit to backend ────────────────────────────────────────────────────
 
   async function handleSubmit(questionOverride?: string) {
-    const question = (questionOverride ?? userInput).trim();
-    if (!question) {
+    const raw = (questionOverride ?? userInput).trim();
+    if (!raw || isVoiceStatusText(raw)) {
       speak('Please enter a question first');
       return;
     }
+    const question = raw;
     setUserInput(question);
     setDisplayQuestion(question);
     submittedInputRef.current = question;
@@ -1129,21 +1257,68 @@ export default function MainScreen({ navigation }: Props) {
       }
 
       let textToSend = resolvedText;
-      if (coords && isTrainArrivalQuestion(resolvedText)) {
-        const trainLine = extractTrainLineFromText(resolvedText);
-        if (trainLine) {
-          try {
-            const arrivals = await Promise.race([
-              fetchMtaArrivals(trainLine, coords.latitude, coords.longitude),
-              new Promise<string>((_, reject) =>
-                setTimeout(() => reject(new Error('mta_timeout')), 1500)
-              ),
-            ]);
-            textToSend = buildTrainQuestionWithLiveData(resolvedText, trainLine, arrivals);
-          } catch (e) {
-            console.warn('MTA prefetch failed, sending question without live data', e);
+      let mtaDirectAnswer: string | null = null;
+      const trainLine =
+        coords && isTrainArrivalQuestion(resolvedText)
+          ? extractTrainLineFromText(resolvedText)
+          : null;
+      const isMtaOnlyQuestion =
+        !!trainLine && !capturedImage && !capturedVideoUri && !(webVideoFrames && webVideoFrames.length > 0);
+
+      if (trainLine && coords) {
+        try {
+          const arrivals = await Promise.race([
+            fetchMtaArrivals(trainLine, coords.latitude, coords.longitude),
+            new Promise<string>((_, reject) =>
+              setTimeout(() => reject(new Error('mta_timeout')), MTA_LOOKUP_MS)
+            ),
+          ]);
+          mtaDirectAnswer = arrivals;
+          textToSend = buildTrainQuestionWithLiveData(resolvedText, trainLine, arrivals);
+        } catch (e) {
+          console.warn('MTA prefetch failed', e);
+          if (isMtaOnlyQuestion) {
+            const message =
+              'Could not load live subway arrival times. Check your internet connection and try again.';
+            setAiRoute(null);
+            aiRouteRef.current = null;
+            setAiResponse(message);
+            lastAutoSpokenRef.current = message;
+            speak(message, { preferDevice: true });
+            setUserInput('');
+            setCapturedImage(null);
+            setCapturedVideoUri(null);
+            setWebVideoFrames(null);
+            void track(Events.AnswerFailed, {
+              requestId,
+              feature: 'mta',
+              latencyMs: Date.now() - requestStartedAt,
+              reason: 'mta_fetch_failed',
+            });
+            return;
           }
         }
+      }
+
+      if (mtaDirectAnswer && isMtaOnlyQuestion) {
+        setAiRoute(null);
+        aiRouteRef.current = null;
+        setAiResponse(mtaDirectAnswer);
+        lastAutoSpokenRef.current = mtaDirectAnswer;
+        speak(mtaDirectAnswer, { preferDevice: true });
+        setUserInput('');
+        setCapturedImage(null);
+        setCapturedVideoUri(null);
+        setWebVideoFrames(null);
+        void track(Events.AnswerReceived, {
+          requestId,
+          feature: 'mta',
+          latencyMs: Date.now() - requestStartedAt,
+          hasRoute: false,
+          routeSource: 'none',
+          outputLength: mtaDirectAnswer.length,
+        });
+        return;
       }
 
       const data: RequestData = {
@@ -1196,18 +1371,22 @@ export default function MainScreen({ navigation }: Props) {
         if (!structured && finalRoute && !hasUsableDestination(finalRoute)) {
           const destStr = extractDestinationQuery(resolvedText);
           if (destStr) {
+            const userCoords = coords
+              ? { lat: coords.latitude, lng: coords.longitude }
+              : locationRef.current
+                ? {
+                    lat: locationRef.current.coords.latitude,
+                    lng: locationRef.current.coords.longitude,
+                  }
+                : null;
             void (async () => {
-              try {
-                const geo = await Location.geocodeAsync(destStr);
-                if (Array.isArray(geo) && geo.length > 0) {
-                  finalRoute.destination = {
-                    ...finalRoute.destination,
-                    lat: geo[0].latitude,
-                    lng: geo[0].longitude,
-                  };
-                }
-              } catch {
-                // Best-effort: fall back to the timer-based arrival estimate.
+              const point = await geocodeNearUser(destStr, userCoords);
+              if (point) {
+                finalRoute.destination = {
+                  ...finalRoute.destination,
+                  ...point,
+                  name: destStr,
+                };
               }
             })();
           }
@@ -1513,7 +1692,7 @@ export default function MainScreen({ navigation }: Props) {
             style={styles.textInput}
             multiline
             returnKeyType="done"
-            editable={!isListening && !isTranscribing && !loading}
+            editable={!isListening && !loading}
             accessibilityLabel="Question input field"
             accessibilityHint="Type or speak your question"
           />
@@ -1524,7 +1703,7 @@ export default function MainScreen({ navigation }: Props) {
               if (Platform.OS === 'web') unlockWebAudioForPlayback();
             }}
             onPress={() => void toggleListening()}
-            disabled={loading || isTranscribing}
+            disabled={loading && !isListening}
             style={[
               styles.voiceButton,
               isListening && styles.voiceButtonActive,
