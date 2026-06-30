@@ -7,11 +7,16 @@ import './index.css'
 import { createBrowserRouter, RouterProvider} from "react-router-dom";
 import Waiver from "./pages/Waiver/index.tsx";
 import Welcome from './pages/home/Welcome.tsx';
+import CompanionLinkRedirect from './pages/companion/CompanionLinkRedirect.tsx';
 
 const router = createBrowserRouter([
   {
     path: "/",
     element: <Welcome/>
+  },
+  {
+    path: "/companion/:token",
+    element: <CompanionLinkRedirect />
   },
   {
     path: "/enable",

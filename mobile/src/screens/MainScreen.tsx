@@ -172,6 +172,8 @@ export default function MainScreen({ navigation }: Props) {
   // Snapshot of the question actually sent, so the chat log records it even
   // after userInput is cleared on submit.
   const submittedInputRef = useRef('');
+  /** Only persist chat logs after a successful backend answer (not error placeholders). */
+  const chatLogEligibleRef = useRef(false);
   // Fires a spoken "still working" cue if a response is taking a while.
   const slowResponseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -438,6 +440,8 @@ export default function MainScreen({ navigation }: Props) {
         lon: loc?.coords.longitude ?? 0,
       },
     };
+
+    if (!chatLogEligibleRef.current) return;
 
     (async () => {
       try {
@@ -999,6 +1003,7 @@ export default function MainScreen({ navigation }: Props) {
     setUserInput(question);
     setDisplayQuestion(question);
     submittedInputRef.current = question;
+    chatLogEligibleRef.current = false;
     const requestStartedAt = Date.now();
     const requestId = createRequestId();
     const hasWebVideo = !!(webVideoFrames && webVideoFrames.length > 0);
@@ -1135,6 +1140,7 @@ export default function MainScreen({ navigation }: Props) {
       }
 
       if (mtaDirectAnswer && isMtaOnlyQuestion) {
+        chatLogEligibleRef.current = true;
         setAiResponse(mtaDirectAnswer);
         lastAutoSpokenRef.current = mtaDirectAnswer;
         speak(mtaDirectAnswer, { preferDevice: true });
@@ -1174,6 +1180,7 @@ export default function MainScreen({ navigation }: Props) {
           const message =
             `${dest} is about ${miles} miles away, which is too far to walk. ` +
             `It may not be the nearby place you meant — try a closer destination or use public transit.`;
+          chatLogEligibleRef.current = true;
           setAiResponse(message);
           setUserInput('');
           setCapturedImage(null);
@@ -1187,6 +1194,7 @@ export default function MainScreen({ navigation }: Props) {
           return;
         }
 
+        chatLogEligibleRef.current = true;
         setAiResponse(res.output);
         setUserInput('');
         setCapturedImage(null);

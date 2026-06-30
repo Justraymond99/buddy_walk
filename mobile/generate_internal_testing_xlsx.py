@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 RUNS = 5
-WEB_URL = "https://buddy-walk-mobile.vercel.app"
+WEB_URL = "https://buddywalk.app"
 FEEDBACK = "raymondsekyere99@gmail.com, dylansch7@gmail.com"
 OUT = "exports/BUDDY_WALK_INTERNAL_TESTING.xlsx"
 

@@ -14,7 +14,7 @@ from generate_slides import (
     title_slide,
 )
 
-VERCEL_URL = "https://buddy-walk-mobile.vercel.app"
+WEB_URL = "https://buddywalk.app"
 
 
 def build():
@@ -38,7 +38,7 @@ def build():
 
     content_slide(prs, "How to Access the Beta", [
         (0, "**Web beta (available now)**", "good"),
-        (1, VERCEL_URL, ""),
+        (1, WEB_URL, ""),
         (1, "Open in **Safari (iPhone)** or **Chrome** — allow camera, mic, and location when prompted.", ""),
         (0, "**iOS app (TestFlight)**", ""),
         (1, "Install via TestFlight when your build is approved in App Store Connect.", ""),
@@ -114,7 +114,7 @@ def build():
 
     content_slide(prs, "Quick Reference", [
         (0, "**Web beta:**", "good"),
-        (1, VERCEL_URL, ""),
+        (1, WEB_URL, ""),
         (0, "**Camera:** tap = photo, hold = video", ""),
         (0, "**Directions:** ask naturally → navigation auto-starts (native)", ""),
         (0, "**Stop navigation:** shake phone (native) or Stop button (web)", ""),
@@ -123,7 +123,7 @@ def build():
 
     content_slide(prs, "Thank You", [
         (0, "Your feedback directly shapes Buddy Walk for blind and low-vision travelers.", ""),
-        (0, f"Try the beta: **{VERCEL_URL}**", "good"),
+        (0, f"Try the beta: **{WEB_URL}**", "good"),
         (0, "Questions & discussion.", "muted"),
     ])
 

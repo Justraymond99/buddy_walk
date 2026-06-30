@@ -14,12 +14,12 @@ Use this script for every session so results are comparable across testers.
 | **Tester name** | |
 | **Date** | |
 | **Device** | e.g. iPhone 14 / Android / laptop + browser |
-| **Platform** | ☐ Web (`https://buddy-walk-mobile.vercel.app`) ☐ TestFlight / native app |
+| **Platform** | ☐ Web (`https://buddywalk.app`) ☐ TestFlight / native app |
 | **Screen reader** | ☐ VoiceOver ☐ TalkBack ☐ Off |
 | **Location** | e.g. Manhattan — street name or intersection |
 | **Session lead / note-taker** | |
 
-**Web beta:** https://buddy-walk-mobile.vercel.app  
+**Web beta:** https://buddywalk.app  
 **Feedback:** raymondsekyere99@gmail.com, dylansch7@gmail.com
 
 ---
@@ -369,4 +369,4 @@ Pick **5 different destinations** (~5–10 min walk each). Write them before you
 
 ---
 
-*Template version: June 2026 · Buddy Walk · Web: https://buddy-walk-mobile.vercel.app*
+*Template version: June 2026 · Buddy Walk · Web: https://buddywalk.app*

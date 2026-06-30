@@ -8,8 +8,29 @@ function isPrivateDevHost(url: string): boolean {
   return /localhost|127\.|192\.168\.|10\.|100\.|\b172\.(1[6-9]|2\d|3[01])\./i.test(url);
 }
 
+function isLoopbackHost(url: string): boolean {
+  return /localhost|127\.0\.0\.1/i.test(url);
+}
+
 function normalizeApiRoot(raw: string): string {
   return raw.replace(/\/+$/, '').replace(/\/api$/i, '');
+}
+
+const PRODUCTION_API_ROOT = normalizeApiRoot(defaultApi.apiRoot);
+
+/** Physical phones cannot reach a dev machine via localhost — use production or a LAN IP. */
+function applyPhysicalDeviceApiRootFix(root: string): string {
+  if (Platform.OS === 'web' || !Constants.isDevice || !isLoopbackHost(root)) {
+    return root;
+  }
+  if (__DEV__) {
+    console.warn(
+      '[Buddy Walk] EXPO_PUBLIC_API_URL points to localhost on a physical device; ' +
+        `using ${PRODUCTION_API_ROOT} instead. For a local backend, set your computer's LAN IP ` +
+        '(e.g. http://192.168.1.50:8000).'
+    );
+  }
+  return PRODUCTION_API_ROOT;
 }
 
 function readEnvRoot(name: string): string | undefined {
@@ -22,15 +43,16 @@ function readEnvRoot(name: string): string | undefined {
 
 /** Backend API root for Q&A, audio, tokens (see buddy-walk-default-api.json). */
 function resolveApiRoot(): string {
-  // Web uses same-origin /api (static host proxies to buddywalk.app).
-  if (Platform.OS === 'web') return '';
   const inlined = readEnvRoot('EXPO_PUBLIC_API_URL');
-  if (inlined) return inlined;
+  if (inlined) {
+    return Platform.OS === 'web' ? inlined : applyPhysicalDeviceApiRootFix(inlined);
+  }
   const fromExtra = Constants.expoConfig?.extra?.buddyWalkApiUrl;
   if (typeof fromExtra === 'string' && fromExtra.trim().length > 0) {
-    return normalizeApiRoot(fromExtra.trim());
+    const root = normalizeApiRoot(fromExtra.trim());
+    return Platform.OS === 'web' ? root : applyPhysicalDeviceApiRootFix(root);
   }
-  return normalizeApiRoot(defaultApi.apiRoot);
+  return PRODUCTION_API_ROOT;
 }
 
 /** Companion API root — defaults to API_ROOT; set EXPO_PUBLIC_COMPANION_API_URL for local companion only. */
