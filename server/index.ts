@@ -1,4 +1,4 @@
-import express, { Application } from 'express';
+import express, { Application, Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import path from 'path';
@@ -48,8 +48,8 @@ dotenv.config();
     }
   }
 
-  app.get('/companion/:token', (req, res) => {
-    const token = (req.params.token || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  function sendCompanionViewer(res: Response, rawToken: string): void {
+    const token = rawToken.replace(/[^a-zA-Z0-9_-]/g, '');
     if (!companionViewerTemplate) {
       res.status(500).send('Companion viewer is not available right now.');
       return;
@@ -60,6 +60,14 @@ dotenv.config();
     );
     res.set('Cache-Control', 'no-store');
     res.type('html').send(html);
+  }
+
+  app.get('/companion-viewer.html', (req, res) => {
+    sendCompanionViewer(res, String(req.query.token ?? ''));
+  });
+
+  app.get('/companion/:token', (req, res) => {
+    sendCompanionViewer(res, req.params.token ?? '');
   });
 
   // Internal usage dashboard. The page is a shell; the data it loads is gated by
