@@ -84,9 +84,14 @@ function isLiveSession(s: PersistedSession): s is LiveSession {
   return s.mode === 'live' || 'token' in s;
 }
 
-function getShareUrl(session: PersistedSession | null, fix: Location.LocationObject | null): string | null {
+function getShareUrl(
+  session: PersistedSession | null,
+  fix: Location.LocationObject | null,
+  liveApiReady: boolean
+): string | null {
   if (!session) return null;
-  if (!isLiveSession(session)) {
+  const useMaps = !isLiveSession(session) || !liveApiReady;
+  if (useMaps) {
     if (!fix) return null;
     return buildMapsShareUrl(fix.coords.latitude, fix.coords.longitude, session.displayName);
   }
@@ -115,15 +120,9 @@ export default function CompanionScreen({ navigation }: Props) {
   }, [session]);
 
   useEffect(() => {
-    checkCompanionApiAvailability().then(({ available, reason }) => {
-      setCompanionAvailable(available);
-      setCompanionUnavailableReason(available ? null : reason === 'ok' ? null : reason);
-    });
-  }, []);
+    let cancelled = false;
 
-  // Restore an in-progress sharing session if the user backed out of the screen.
-  useEffect(() => {
-    (async () => {
+    async function restoreSession(apiAvailable: boolean) {
       try {
         const raw = await AsyncStorage.getItem(ACTIVE_SESSION_KEY);
         if (!raw) return;
@@ -147,6 +146,20 @@ export default function CompanionScreen({ navigation }: Props) {
           return;
         }
         if (!parsed.token) return;
+
+        if (!apiAvailable) {
+          const mapsSession: MapsSession = {
+            mode: 'maps',
+            displayName: parsed.displayName,
+            startedAt: parsed.startedAt ?? new Date().toISOString(),
+          };
+          await AsyncStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(mapsSession));
+          setSession(mapsSession);
+          if (mapsSession.displayName) setDisplayName(mapsSession.displayName);
+          await beginMapsTracking();
+          return;
+        }
+
         const live: LiveSession = {
           mode: 'live',
           token: parsed.token,
@@ -165,8 +178,18 @@ export default function CompanionScreen({ navigation }: Props) {
       } catch (e) {
         console.warn('Failed to restore companion session:', e);
       }
+    }
+
+    (async () => {
+      const { available, reason } = await checkCompanionApiAvailability();
+      if (cancelled) return;
+      setCompanionAvailable(available);
+      setCompanionUnavailableReason(available ? null : reason === 'ok' ? null : reason);
+      await restoreSession(available);
     })();
+
     return () => {
+      cancelled = true;
       stopTracking();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -317,7 +340,7 @@ export default function CompanionScreen({ navigation }: Props) {
   async function handleStart() {
     setWorking(true);
     try {
-      if (companionAvailable !== false) {
+      if (companionAvailable === true) {
         try {
           const created = await createCompanionSession(displayName);
           const persisted: LiveSession = {
@@ -376,15 +399,15 @@ export default function CompanionScreen({ navigation }: Props) {
 
   async function handleShareLink() {
     if (!session) return;
-    const url = getShareUrl(session, lastFixRef.current);
+    const url = getShareUrl(session, lastFixRef.current, companionAvailable === true);
     if (!url) {
       Alert.alert('Location not ready', 'Wait a moment for GPS, then try sharing again.');
       return;
     }
     try {
-      const isMaps = !isLiveSession(session);
+      const useMaps = !isLiveSession(session) || companionAvailable !== true;
       await Share.share({
-        message: isMaps
+        message: useMaps
           ? `Here is my location on Buddy Walk:\n${url}\n\nAsk me to share again if I have moved.`
           : `Follow my live location on Buddy Walk:\n${url}`,
         url: Platform.OS === 'ios' ? url : undefined,
@@ -396,8 +419,9 @@ export default function CompanionScreen({ navigation }: Props) {
     }
   }
 
-  const url = getShareUrl(session, lastFixRef.current);
-  const isMapsMode = session != null && !isLiveSession(session);
+  const liveApiReady = companionAvailable === true;
+  const url = getShareUrl(session, lastFixRef.current, liveApiReady);
+  const isMapsMode = session != null && (!isLiveSession(session) || !liveApiReady);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -447,7 +471,7 @@ export default function CompanionScreen({ navigation }: Props) {
 
             <Pressable
               onPress={handleStart}
-              disabled={working}
+              disabled={working || companionAvailable === null}
               style={({ pressed }) => [
                 styles.primaryButton,
                 pressed && styles.primaryButtonPressed,
@@ -456,7 +480,7 @@ export default function CompanionScreen({ navigation }: Props) {
               accessibilityLabel="Start sharing my live location"
               accessibilityRole="button"
             >
-              {working ? (
+              {working || companionAvailable === null ? (
                 <ActivityIndicator color="#000" />
               ) : (
                 <Text style={styles.primaryButtonLabel}>START SHARING</Text>

@@ -199,8 +199,11 @@ export default function CompanionViewer() {
         }
       } catch {
         if (!cancelled) {
-          setStatus('Offline – retrying');
-          setStatusKind('stale');
+          setStatus('Cannot reach server');
+          setEmpty(
+            'This live map link cannot reach Buddy Walk right now. ' +
+              'Ask them to open Companion Mode in the app and share a new Google Maps link.'
+          );
         }
       }
     }

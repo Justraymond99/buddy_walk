@@ -232,7 +232,11 @@
             hasFitOnce = true;
           }
         } catch (e) {
-          setStatus("stale", "Offline – retrying");
+          setStatus("stale", "Cannot reach server");
+          showEmpty(
+            "This live map link cannot reach Buddy Walk right now. " +
+            "Ask them to open Companion Mode in the app and share a new Google Maps link."
+          );
         }
       }
 

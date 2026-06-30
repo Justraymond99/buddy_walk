@@ -15,19 +15,39 @@ function isHealthyPayload(data: unknown): boolean {
   return typeof data === 'object' && data !== null && (data as { ok?: boolean }).ok === true;
 }
 
-/** True when GET /api/companion/health succeeds on the companion backend. */
+function looksLikeHtmlPayload(data: unknown): boolean {
+  if (typeof data !== 'string') return false;
+  const lower = data.toLowerCase();
+  return lower.includes('<!doctype html') || lower.includes('<html');
+}
+
+/** True when the companion API returns JSON (not the SPA HTML shell). */
 export async function checkCompanionApiAvailability(): Promise<CompanionAvailabilityResult> {
   try {
-    const res = await companionApiClient.get('/companion/health', { timeout: 8000 });
-    if (res.status !== 200) {
-      return { available: false, reason: 'bad_response' };
-    }
-    if (typeof res.data === 'string') {
+    const health = await companionApiClient.get('/companion/health', {
+      timeout: 8000,
+      validateStatus: () => true,
+    });
+    if (health.status !== 200 || looksLikeHtmlPayload(health.data)) {
       return { available: false, reason: 'html_not_api' };
     }
-    return isHealthyPayload(res.data)
-      ? { available: true, reason: 'ok' }
-      : { available: false, reason: 'bad_response' };
+    if (!isHealthyPayload(health.data)) {
+      return { available: false, reason: 'bad_response' };
+    }
+
+    const snapshot = await companionApiClient.get('/companion/snapshot', {
+      params: { token: 'healthcheck' },
+      timeout: 8000,
+      validateStatus: () => true,
+    });
+    if (looksLikeHtmlPayload(snapshot.data)) {
+      return { available: false, reason: 'html_not_api' };
+    }
+    if (typeof snapshot.data !== 'object' || snapshot.data === null) {
+      return { available: false, reason: 'bad_response' };
+    }
+
+    return { available: true, reason: 'ok' };
   } catch {
     return { available: false, reason: 'network' };
   }
