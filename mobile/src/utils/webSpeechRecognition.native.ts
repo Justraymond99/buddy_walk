@@ -8,7 +8,7 @@ export interface WebSpeechSession {
   abort: () => void;
 }
 
-/** Native builds use expo-av recording + /api/transcribe — browser speech APIs are web-only. */
+/** Native builds use expo-av recording + Azure STT — browser speech APIs are web-only. */
 export function startWebSpeechRecognition(): WebSpeechSession | null {
   return null;
 }

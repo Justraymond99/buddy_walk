@@ -1,58 +1,76 @@
-import { API_ROOT, apiClient } from './client';
-
-const VERCEL_TRANSCRIBE = 'https://buddy-walk-mobile.vercel.app/api/transcribe';
+import { getToken } from './token';
 
 export interface TranscribeResult {
   transcript: string;
   status: string;
 }
 
-async function parseTranscribeResponse(response: Response): Promise<TranscribeResult | null> {
+async function callAzureSpeechToText(
+  audioBody: Blob | ArrayBuffer,
+  contentType: string,
+  token: string,
+  region: string
+): Promise<TranscribeResult | null> {
+  const response = await fetch(
+    `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': contentType,
+        Accept: 'application/json',
+      },
+      body: audioBody,
+    }
+  );
+
+  const raw = await response.text();
   if (!response.ok) {
-    console.error('transcribe HTTP error:', response.status, await response.text());
+    console.error(`Azure STT HTTP error: ${response.status} ${raw.slice(0, 200)}`);
     return null;
   }
-  const data = (await response.json()) as TranscribeResult & {
-    RecognitionStatus?: string;
+
+  const result = JSON.parse(raw) as {
+    RecognitionStatus: string;
     DisplayText?: string;
     NBest?: { Display: string }[];
   };
-  if (data.transcript != null && data.status) {
-    return data;
-  }
-  if (data.RecognitionStatus) {
+
+  if (result.RecognitionStatus === 'Success') {
     return {
-      status: data.RecognitionStatus,
-      transcript: data.NBest?.[0]?.Display ?? data.DisplayText ?? '',
+      transcript: result.NBest?.[0]?.Display ?? result.DisplayText ?? '',
+      status: 'Success',
     };
   }
-  return null;
+
+  return { transcript: '', status: result.RecognitionStatus };
 }
 
+/**
+ * Transcribe recorded audio via Azure Speech (token from buddywalk.app).
+ * Does not call /api/transcribe — avoids 404s when that route is missing on a host.
+ */
 export async function transcribeAudio(
   audioBody: Blob | ArrayBuffer,
   contentType: string
 ): Promise<TranscribeResult | null> {
-  const endpoints = [
-    `${apiClient.defaults.baseURL}/transcribe`,
-    ...(API_ROOT.replace(/\/$/, '') !== 'https://buddy-walk-mobile.vercel.app'
-      ? [VERCEL_TRANSCRIBE]
-      : []),
-  ];
-
-  for (const url of endpoints) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': contentType },
-        body: audioBody,
-      });
-      const parsed = await parseTranscribeResponse(response);
-      if (parsed) return parsed;
-    } catch (error) {
-      console.warn(`transcribe failed for ${url}:`, error);
-    }
+  const empty =
+    (audioBody instanceof Blob && audioBody.size === 0) ||
+    (audioBody instanceof ArrayBuffer && audioBody.byteLength === 0);
+  if (empty) {
+    return { transcript: '', status: 'EmptyAudio' };
   }
 
-  return null;
+  try {
+    const creds = await getToken();
+    return await callAzureSpeechToText(
+      audioBody,
+      contentType,
+      creds.token,
+      creds.region
+    );
+  } catch (error) {
+    console.error('transcribe error:', error);
+    return null;
+  }
 }

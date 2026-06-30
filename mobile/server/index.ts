@@ -9,6 +9,7 @@ import tokenRoute from "./routes/token"
 import companionRoute from "./routes/companion"
 import telemetryRoute from "./routes/telemetry"
 import feedbackRoute from "./routes/feedback"
+import mtaRoute from "./routes/mta"
 import mongoose from "mongoose";
 import {databaseLink, config} from "./database";
 import { setCompanionMemoryStore } from "./database/companionStoreMode";
@@ -49,6 +50,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   app.use("/api/companion", companionRoute)
   app.use("/api/telemetry", telemetryRoute)
   app.use("/api/feedback", feedbackRoute)
+  app.use("/api", mtaRoute)
 
   // Public companion viewer page. Loads a tiny HTML shell with the token
   // injected as a global so the page can poll the snapshot endpoint.

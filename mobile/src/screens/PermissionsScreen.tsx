@@ -61,7 +61,7 @@ export default function PermissionsScreen({ navigation }: Props) {
       } else {
         const message =
           Platform.OS === 'web' && isBraveBrowser()
-            ? 'Location was not enabled. In Brave, open the lion icon in the address bar and allow Location for this site, or turn off Shields for buddy-walk-mobile.vercel.app.'
+            ? 'Location was not enabled. In Brave, open the lion icon in the address bar and allow Location for this site, or turn off Shields for buddywalk.app.'
             : Platform.OS === 'web'
               ? 'Location was not enabled. Tap Allow when prompted, or check your browser site settings.'
               : 'Location is required for navigation features.';

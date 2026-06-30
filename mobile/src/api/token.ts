@@ -1,21 +1,22 @@
 import { apiClient, API_ROOT } from './client';
 
-const FALLBACK_TOKEN_ROOT = 'https://buddywalk.app';
+const PRODUCTION_API = 'https://buddywalk.app';
 
-export async function getToken(): Promise<{ token: string; region: string } | undefined> {
+export async function getToken(): Promise<{ token: string; region: string }> {
   try {
     const response = await apiClient.get('/token/getToken');
     if (response.data?.token && response.data?.region) {
       return { token: response.data.token, region: response.data.region };
     }
   } catch (e) {
-    console.warn('getToken: primary endpoint failed, trying fallback', e);
+    console.warn('getToken: primary endpoint failed', e);
   }
 
-  // Vercel may not have Azure keys configured; buddywalk.app issues STT tokens.
-  if (API_ROOT.replace(/\/$/, '') !== FALLBACK_TOKEN_ROOT) {
+  // Local dev (LAN IP): fall back to production tokens when the local server has no Azure keys.
+  const root = API_ROOT.replace(/\/$/, '');
+  if (root !== PRODUCTION_API) {
     try {
-      const response = await fetch(`${FALLBACK_TOKEN_ROOT}/api/token/getToken`);
+      const response = await fetch(`${PRODUCTION_API}/api/token/getToken`);
       if (response.ok) {
         const data = (await response.json()) as { token?: string; region?: string };
         if (data.token && data.region) {
@@ -23,9 +24,9 @@ export async function getToken(): Promise<{ token: string; region: string } | un
         }
       }
     } catch (e) {
-      console.error('getToken fallback error:', e);
+      console.error('getToken: production fallback failed', e);
     }
   }
 
-  throw new Error('Failed to fetch token');
+  throw new Error('Failed to fetch speech token');
 }
