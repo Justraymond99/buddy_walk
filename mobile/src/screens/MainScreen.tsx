@@ -62,7 +62,6 @@ import {
 } from '../utils/webSpeechRecognition';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-const HOLD_THRESHOLD_MS = 750;
 const MIN_VIDEO_RECORD_MS = 900;
 const MAX_VIDEO_DURATION_MS = 30000;
 const MTA_LOOKUP_MS = 8000;
@@ -111,12 +110,10 @@ function formatRecordingTime(totalSeconds: number): string {
 
 function getCaptureUiState(
   recordingMode: RecordingMode,
-  isHoldingForVideo: boolean,
   hasPhotoCapture: boolean,
   hasVideoCapture: boolean
 ): CaptureUiState {
   if (recordingMode === 'recording-video') return 'recording';
-  if (isHoldingForVideo) return 'holding';
   if (hasVideoCapture) return 'video-ready';
   if (hasPhotoCapture) return 'photo-ready';
   return 'idle';
@@ -127,45 +124,13 @@ function captureStatusLabel(state: CaptureUiState): string {
     case 'holding':
       return 'Keep holding — video starting…';
     case 'recording':
-      return 'Recording video — release to stop';
+      return 'Recording video — tap Stop Video';
     case 'photo-ready':
       return 'Photo captured — tap Retake to replace';
     case 'video-ready':
       return 'Video captured — tap Retake to replace';
     default:
-      return Platform.OS === 'web'
-        ? 'Take Photo  ·  Record Video'
-        : 'Tap for Photo  ·  Hold for Video';
-  }
-}
-
-function captureButtonLabel(state: CaptureUiState): string {
-  switch (state) {
-    case 'holding':
-      return 'KEEP HOLDING FOR VIDEO';
-    case 'recording':
-      return 'RELEASE TO STOP VIDEO';
-    case 'photo-ready':
-      return 'PHOTO READY';
-    case 'video-ready':
-      return 'VIDEO READY';
-    default:
-      return 'TAP = PHOTO  ·  HOLD = VIDEO';
-  }
-}
-
-function captureAccessibilityLabel(state: CaptureUiState): string {
-  switch (state) {
-    case 'holding':
-      return 'Keep holding the camera button to start video recording';
-    case 'recording':
-      return 'Video recording in progress. Release to stop recording';
-    case 'photo-ready':
-      return 'Photo captured. Tap retake to capture again';
-    case 'video-ready':
-      return 'Video captured. Tap retake to capture again';
-    default:
-      return 'Camera button. Tap quickly for a photo. Hold to record video';
+      return 'Take Photo  ·  Record Video';
   }
 }
 
@@ -195,9 +160,7 @@ export default function MainScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [screenReaderEnabled, setScreenReaderEnabled] = useState(false);
   const [recordingMode, setRecordingMode] = useState<RecordingMode>('idle');
-  const [isHoldingForVideo, setIsHoldingForVideo] = useState(false);
   const [recordingElapsedSec, setRecordingElapsedSec] = useState(0);
 
   const [currentChatId, setCurrentChatId] = useState('');
@@ -206,8 +169,6 @@ export default function MainScreen({ navigation }: Props) {
 
   const locationRef = useRef<Location.LocationObject | null>(null);
   const headingRef = useRef<number>(0);
-  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pressInAtRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
@@ -249,7 +210,6 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   function beginRecordingFeedback(): void {
-    setIsHoldingForVideo(false);
     setRecordingMode('recording-video');
     videoRecordingStartedAtRef.current = Date.now();
     clearRecordingTimer();
@@ -280,7 +240,6 @@ export default function MainScreen({ navigation }: Props) {
 
   useEffect(() => {
     return () => {
-      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
       clearRecordingTimer();
     };
   }, []);
@@ -409,15 +368,6 @@ export default function MainScreen({ navigation }: Props) {
       console.warn('Network state listener unavailable:', e);
       return undefined;
     }
-  }, []);
-
-  useEffect(() => {
-    AccessibilityInfo.isScreenReaderEnabled().then(setScreenReaderEnabled);
-    const sub = AccessibilityInfo.addEventListener(
-      'screenReaderChanged',
-      setScreenReaderEnabled
-    );
-    return () => sub.remove();
   }, []);
 
   useEffect(() => {
@@ -586,63 +536,6 @@ export default function MainScreen({ navigation }: Props) {
     return false;
   }
 
-  async function waitForVideoRecordingStart(timeoutMs = 1200): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (recordingModeRef.current === 'recording-video' || videoRecordStartedRef.current) {
-        return true;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    return recordingModeRef.current === 'recording-video' || videoRecordStartedRef.current;
-  }
-
-  async function handleReleaseCapture() {
-    const heldMs = pressInAtRef.current ? Date.now() - pressInAtRef.current : 0;
-    pressInAtRef.current = null;
-
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-      setIsHoldingForVideo(false);
-      if (heldMs < HOLD_THRESHOLD_MS - 80) {
-        await takePhoto();
-      } else {
-        const started = await waitForVideoRecordingStart();
-        if (started) {
-          await stopVideoRecording();
-        } else {
-          speak('Video did not start. Hold a little longer, then release.');
-        }
-      }
-      return;
-    }
-
-    if (recordingModeRef.current === 'recording-video' || videoRecordStartedRef.current) {
-      await stopVideoRecording();
-      return;
-    }
-
-    if (heldMs >= HOLD_THRESHOLD_MS) {
-      const started = await waitForVideoRecordingStart();
-      if (started) await stopVideoRecording();
-    }
-  }
-
-  function handlePressIn() {
-    tap();
-    pressInAtRef.current = Date.now();
-    setIsHoldingForVideo(true);
-    holdTimerRef.current = setTimeout(() => {
-      holdTimerRef.current = null;
-      void startVideoRecording();
-    }, HOLD_THRESHOLD_MS);
-  }
-
-  async function handlePressOut() {
-    await handleReleaseCapture();
-  }
-
   async function toggleVideoCapture() {
     if (recordingModeRef.current === 'recording-video') {
       await stopVideoRecording();
@@ -707,7 +600,6 @@ export default function MainScreen({ navigation }: Props) {
     if (Platform.OS === 'web') {
       const session = startWebFrameCapture();
       if (!session) {
-        setIsHoldingForVideo(false);
         speak('Camera is still starting. Try again in a moment.');
         return;
       }
@@ -723,14 +615,12 @@ export default function MainScreen({ navigation }: Props) {
 
     const micOk = await ensureMicrophonePermission();
     if (!micOk) {
-      setIsHoldingForVideo(false);
       speak('Microphone permission is required to record video.');
       return;
     }
     const ready = await waitForCameraReady();
     if (!ready) {
-      setIsHoldingForVideo(false);
-      speak('Camera is still starting. Hold a little longer next time.');
+      speak('Camera is still starting. Try again in a moment.');
       return;
     }
     try {
@@ -752,7 +642,7 @@ export default function MainScreen({ navigation }: Props) {
       console.error('startVideoRecording error:', e);
       const msg = e instanceof Error ? e.message : '';
       if (/not ready/i.test(msg)) {
-        speak('Camera not ready. Wait a second, then hold again.');
+        speak('Camera not ready. Wait a second, then try again.');
       } else {
         speak('Could not capture video');
       }
@@ -767,7 +657,6 @@ export default function MainScreen({ navigation }: Props) {
     videoRecordStartedRef.current = false;
     videoRecordingStartedAtRef.current = null;
     setRecordingMode('idle');
-    setIsHoldingForVideo(false);
     clearRecordingTimer();
     void resetAudioForPlayback();
   }
@@ -1482,14 +1371,10 @@ export default function MainScreen({ navigation }: Props) {
   const hasCapture = hasPhotoCapture || hasVideoCapture;
   const captureUiState = getCaptureUiState(
     recordingMode,
-    isHoldingForVideo,
     hasPhotoCapture,
     hasVideoCapture
   );
   const captureLabel = captureStatusLabel(captureUiState);
-  const cameraButtonLabel = captureButtonLabel(captureUiState);
-  const cameraA11yLabel = captureAccessibilityLabel(captureUiState);
-  const useExplicitCaptureControls = Platform.OS === 'web' || screenReaderEnabled;
   const isRecordingVideo = captureUiState === 'recording';
 
   const cameraPreview = (
@@ -1507,23 +1392,6 @@ export default function MainScreen({ navigation }: Props) {
         mode="video"
         onCameraReady={onCameraReady}
       />
-      <Pressable
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        onTouchEnd={() => void handleReleaseCapture()}
-        onPointerUp={() => void handleReleaseCapture()}
-        onPointerCancel={() => void handleReleaseCapture()}
-        style={({ pressed }) => [
-          styles.cameraTouchOverlay,
-          pressed && styles.cameraButtonPressed,
-        ]}
-        accessibilityLabel={cameraA11yLabel}
-        accessibilityRole="button"
-        accessibilityHint="Tap quickly to take a photo. Hold to record video."
-        accessibilityState={{
-          busy: captureUiState === 'recording',
-        }}
-      />
       {captureUiState === 'holding' ? (
         <View style={styles.captureOverlayHolding} pointerEvents="none">
           <Text style={styles.captureOverlayTitle}>KEEP HOLDING</Text>
@@ -1538,9 +1406,7 @@ export default function MainScreen({ navigation }: Props) {
               REC {formatRecordingTime(recordingElapsedSec)}
             </Text>
           </View>
-          <Text style={styles.recHint}>
-            {useExplicitCaptureControls ? 'Tap Stop Video below' : 'Release to stop'}
-          </Text>
+          <Text style={styles.recHint}>Tap Stop Video below</Text>
         </View>
       ) : null}
     </View>
@@ -1557,86 +1423,44 @@ export default function MainScreen({ navigation }: Props) {
           </Text>
 
           {!hasCapture && cameraReady ? (
-            useExplicitCaptureControls ? (
-              <View style={styles.cameraCaptureBlock}>
-                {cameraPreview}
-                <View style={styles.captureActionRow}>
-                  <Button
-                    mode="contained"
-                    onPressIn={() => tap()}
-                    onPress={() => void takePhoto()}
-                    disabled={isRecordingVideo}
-                    style={[styles.captureActionButton, styles.capturePhotoButton]}
-                    labelStyle={styles.captureActionLabel}
-                    accessibilityLabel="Take photo"
-                    accessibilityHint="Captures a still photo from the camera"
-                  >
-                    Take Photo
-                  </Button>
-                  <Button
-                    mode="contained"
-                    onPressIn={() => tapMedium()}
-                    onPress={() => void toggleVideoCapture()}
-                    style={[
-                      styles.captureActionButton,
-                      isRecordingVideo ? styles.captureStopButton : styles.captureVideoButton,
-                    ]}
-                    labelStyle={
-                      isRecordingVideo ? styles.captureActionLabelOnDark : styles.captureActionLabel
-                    }
-                    accessibilityLabel={isRecordingVideo ? 'Stop video recording' : 'Record video'}
-                    accessibilityHint={
-                      isRecordingVideo
-                        ? 'Stops the current video recording'
-                        : 'Starts recording video from the camera'
-                    }
-                    accessibilityState={{ busy: isRecordingVideo }}
-                  >
-                    {isRecordingVideo ? 'Stop Video' : 'Record Video'}
-                  </Button>
-                </View>
-              </View>
-            ) : (
-              <View>
-                <View
-                  style={[
-                    styles.cameraButton,
-                    captureUiState === 'holding' && styles.cameraButtonHolding,
-                    captureUiState === 'recording' && styles.cameraButtonRecording,
-                  ]}
-                  accessible
-                  accessibilityLabel={cameraA11yLabel}
-                  accessibilityHint="Tap quickly to take a photo. Hold to record video."
+            <View style={styles.cameraCaptureBlock}>
+              {cameraPreview}
+              <View style={styles.captureActionRow}>
+                <Button
+                  mode="contained"
+                  onPressIn={() => tap()}
+                  onPress={() => void takePhoto()}
+                  disabled={isRecordingVideo}
+                  style={[styles.captureActionButton, styles.capturePhotoButton]}
+                  labelStyle={styles.captureActionLabel}
+                  accessibilityLabel="Take photo"
+                  accessibilityHint="Captures a still photo from the camera"
                 >
-                  {cameraPreview}
-                  <View style={styles.cameraLabelBar}>
-                    <Text
-                      style={[
-                        styles.cameraButtonLabel,
-                        captureUiState === 'holding' && styles.cameraButtonLabelHolding,
-                        captureUiState === 'recording' && styles.cameraButtonLabelRecording,
-                      ]}
-                      importantForAccessibility="no"
-                    >
-                      {cameraButtonLabel}
-                    </Text>
-                  </View>
-                </View>
-                {isRecordingVideo ? (
-                  <Button
-                    mode="contained"
-                    onPressIn={() => tapMedium()}
-                    onPress={() => void stopVideoRecording()}
-                    style={styles.stopVideoButton}
-                    labelStyle={styles.captureActionLabelOnDark}
-                    accessibilityLabel="Stop video recording"
-                    accessibilityHint="Stops the current video recording immediately"
-                  >
-                    Stop Video
-                  </Button>
-                ) : null}
+                  Take Photo
+                </Button>
+                <Button
+                  mode="contained"
+                  onPressIn={() => tapMedium()}
+                  onPress={() => void toggleVideoCapture()}
+                  style={[
+                    styles.captureActionButton,
+                    isRecordingVideo ? styles.captureStopButton : styles.captureVideoButton,
+                  ]}
+                  labelStyle={
+                    isRecordingVideo ? styles.captureActionLabelOnDark : styles.captureActionLabel
+                  }
+                  accessibilityLabel={isRecordingVideo ? 'Stop video recording' : 'Record video'}
+                  accessibilityHint={
+                    isRecordingVideo
+                      ? 'Stops the current video recording'
+                      : 'Starts recording video from the camera'
+                  }
+                  accessibilityState={{ busy: isRecordingVideo }}
+                >
+                  {isRecordingVideo ? 'Stop Video' : 'Record Video'}
+                </Button>
               </View>
-            )
+            </View>
           ) : hasCapture ? (
             <Button
               mode="contained"
@@ -2057,10 +1881,12 @@ const styles = StyleSheet.create({
   },
   cameraPreviewWrapper: {
     width: '100%',
-    height: 240,
-    backgroundColor: '#111',
+    height: 260,
+    minHeight: 260,
+    backgroundColor: '#1a1a1a',
     position: 'relative',
     overflow: 'hidden',
+    borderRadius: 16,
   },
   cameraPreviewHolding: {
     borderBottomWidth: 4,
@@ -2071,7 +1897,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#888',
   },
   cameraPreview: {
-    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
   },
   captureOverlayHolding: {
     ...StyleSheet.absoluteFillObject,
