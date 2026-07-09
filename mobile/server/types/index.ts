@@ -69,6 +69,8 @@ If no data: say entrance info is unavailable at doorfront.org.`
 export const directionsPrompt = 
 `Directions: 3-5 short steps max. Total walk time first if known.
 Use map landmarks briefly. Do not read every Google step verbatim.
+M1 text-only: use the map route and location data only.
+M2 photo or M3 video frames: CRITICAL — analyze the attached visual input and merge it with the map route for Last Meters navigation. Do not ignore the image/video. Tell the user what visible entrance, door, storefront, sign, or landmark to move toward relative to their current view.
 If no data, say directions are unavailable.`
 
 export const crossStreetsPrompt = `Cross streets: name the 2 nearest intersecting streets only.`
