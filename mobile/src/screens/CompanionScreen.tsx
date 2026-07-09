@@ -20,6 +20,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { RootStackParamList } from '../types';
 import { describeApiError } from '../api/apiErrors';
+import { isLocalCompanionApi } from '../api/client';
 import { checkCompanionApiAvailability } from '../api/companionAvailability';
 import {
   buildShareUrl,
@@ -33,7 +34,10 @@ import { buildMapsShareUrl } from '../utils/mapsShareUrl';
 type Props = NativeStackScreenProps<RootStackParamList, 'Companion'>;
 
 const ACTIVE_SESSION_KEY = '@buddywalk:companionSession:v1';
+/** Heartbeat when standing still — keeps the session marked active. */
 const PING_INTERVAL_MS = 15_000;
+/** Minimum gap between movement-triggered pings so GPS chatter doesn't flood the server. */
+const MOVEMENT_PING_MS = 4_000;
 
 interface LiveSession {
   mode: 'live';
@@ -113,6 +117,8 @@ export default function CompanionScreen({ navigation }: Props) {
   const lastFixRef = useRef<Location.LocationObject | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionRef = useRef<PersistedSession | null>(null);
+  const lastPingSentAtRef = useRef(0);
+  const pingInFlightRef = useRef(false);
 
   // Keep the ref in sync so the polling loop can read the latest session
   useEffect(() => {
@@ -210,6 +216,7 @@ export default function CompanionScreen({ navigation }: Props) {
   const sendPingNow = useCallback(async () => {
     const current = sessionRef.current;
     if (!current || !isLiveSession(current)) return;
+    if (pingInFlightRef.current) return;
     let fix = lastFixRef.current;
     if (!fix) {
       try {
@@ -221,6 +228,7 @@ export default function CompanionScreen({ navigation }: Props) {
         return;
       }
     }
+    pingInFlightRef.current = true;
     try {
       await pingCompanionSession(current.token, current.ownerSecret, {
         lat: fix.coords.latitude,
@@ -229,11 +237,14 @@ export default function CompanionScreen({ navigation }: Props) {
         heading: fix.coords.heading,
         speed: fix.coords.speed,
       });
+      lastPingSentAtRef.current = Date.now();
       setLastPingAt(new Date().toISOString());
       setPingError(null);
     } catch (e: any) {
       console.warn('companion ping failed:', e?.message || e);
       setPingError('Could not reach the sharing server');
+    } finally {
+      pingInFlightRef.current = false;
     }
   }, []);
 
@@ -284,13 +295,19 @@ export default function CompanionScreen({ navigation }: Props) {
       {
         accuracy: Location.Accuracy.BestForNavigation,
         distanceInterval: 5,
-        timeInterval: 5_000,
+        timeInterval: 3_000,
       },
       (loc) => {
         lastFixRef.current = loc;
+        // Real-time: push the new position immediately when the wearer moves,
+        // throttled so GPS chatter doesn't flood the server.
+        if (Date.now() - lastPingSentAtRef.current >= MOVEMENT_PING_MS) {
+          sendPingNow().catch(() => {});
+        }
       }
     );
 
+    // Heartbeat keeps the session fresh while standing still.
     if (intervalRef.current) clearInterval(intervalRef.current);
     intervalRef.current = setInterval(() => {
       sendPingNow().catch(() => {});
@@ -335,6 +352,7 @@ export default function CompanionScreen({ navigation }: Props) {
     void track(Events.CompanionSessionCreated, {
       hasDisplayName: Boolean(persisted.displayName),
     });
+    void promptShareAfterStart(persisted, false);
   }
 
   async function handleStart() {
@@ -361,6 +379,7 @@ export default function CompanionScreen({ navigation }: Props) {
           void track(Events.CompanionSessionCreated, {
             hasDisplayName: Boolean(persisted.displayName),
           });
+          void promptShareAfterStart(persisted, true);
           return;
         } catch (e) {
           console.warn('Live companion unavailable; using maps link fallback:', e);
@@ -397,15 +416,15 @@ export default function CompanionScreen({ navigation }: Props) {
     }
   }
 
-  async function handleShareLink() {
-    if (!session) return;
-    const url = getShareUrl(session, lastFixRef.current, companionAvailable === true);
-    if (!url) {
-      Alert.alert('Location not ready', 'Wait a moment for GPS, then try sharing again.');
-      return;
-    }
+  async function shareSessionLink(
+    current: PersistedSession,
+    fix: Location.LocationObject | null,
+    liveApiReady: boolean
+  ) {
+    const url = getShareUrl(current, fix, liveApiReady);
+    if (!url) return false;
+    const useMaps = !isLiveSession(current) || !liveApiReady;
     try {
-      const useMaps = !isLiveSession(session) || companionAvailable !== true;
       await Share.share({
         message: useMaps
           ? `Here is my location on Buddy Walk:\n${url}\n\nAsk me to share again if I have moved.`
@@ -414,14 +433,45 @@ export default function CompanionScreen({ navigation }: Props) {
         title: 'Buddy Walk — location',
       });
       void track(Events.CompanionLinkShared);
+      return true;
     } catch (e) {
       console.warn('share failed:', e);
+      return false;
     }
+  }
+
+  async function promptShareAfterStart(
+    current: PersistedSession,
+    liveApiReady: boolean,
+    delayMs = 600
+  ) {
+    await new Promise((r) => setTimeout(r, delayMs));
+    if (!sessionRef.current || sessionRef.current !== current) return;
+    let fix = lastFixRef.current;
+    const useMaps = !isLiveSession(current) || !liveApiReady;
+    if (useMaps && !fix) {
+      await new Promise((r) => setTimeout(r, 2000));
+      fix = lastFixRef.current;
+    }
+    if (!getShareUrl(current, fix, liveApiReady)) return;
+    await shareSessionLink(current, fix, liveApiReady);
+  }
+
+  async function handleShareLink() {
+    if (!session) return;
+    const ready = companionAvailable === true;
+    const shareUrl = getShareUrl(session, lastFixRef.current, ready);
+    if (!shareUrl) {
+      Alert.alert('Location not ready', 'Wait a moment for GPS, then try sharing again.');
+      return;
+    }
+    await shareSessionLink(session, lastFixRef.current, ready);
   }
 
   const liveApiReady = companionAvailable === true;
   const url = getShareUrl(session, lastFixRef.current, liveApiReady);
   const isMapsMode = session != null && (!isLiveSession(session) || !liveApiReady);
+  const localCompanion = isLocalCompanionApi();
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -453,6 +503,16 @@ export default function CompanionScreen({ navigation }: Props) {
           </View>
         )}
 
+        {localCompanion && companionAvailable === true && !session && (
+          <View style={styles.infoBox} accessibilityRole="text">
+            <Text style={styles.infoTitle}>Local live map server</Text>
+            <Text style={styles.infoText}>
+              Your contact must be on the same Wi‑Fi or Tailscale network to open the live map
+              link. Anyone else can still use the Google Maps pin when maps mode is used.
+            </Text>
+          </View>
+        )}
+
         {!session ? (
           <View style={styles.card}>
             <Text style={styles.label}>Your name (optional)</Text>
@@ -463,7 +523,7 @@ export default function CompanionScreen({ navigation }: Props) {
               value={displayName}
               onChangeText={setDisplayName}
               placeholder="e.g. Alex"
-              placeholderTextColor="#888"
+              placeholderTextColor="rgba(255,255,255,0.75)"
               maxLength={60}
               style={styles.input}
               accessibilityLabel="Optional display name"
@@ -553,7 +613,9 @@ export default function CompanionScreen({ navigation }: Props) {
             <Text style={styles.fineprint}>
               {isMapsMode
                 ? 'Your contact opens the link in Google Maps. Tap Share again after you move for an updated pin.'
-                : 'Live updates only flow while Buddy Walk is open on this device. Switching apps or locking the screen will pause updates until you come back.'}
+                : localCompanion
+                  ? 'Live updates flow while Buddy Walk is open. Your contact must be on the same Wi‑Fi or Tailscale network as this server.'
+                  : 'Live updates only flow while Buddy Walk is open on this device. Switching apps or locking the screen will pause updates until you come back.'}
             </Text>
           </View>
         )}
@@ -602,6 +664,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
   },
+  infoBox: {
+    backgroundColor: '#1a2433',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#2a4a6e',
+    gap: 8,
+  },
+  infoTitle: {
+    color: '#8aa6ff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  infoText: {
+    color: '#fff',
+    fontSize: 14,
+    lineHeight: 21,
+  },
   warnMono: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     color: '#fff',
@@ -620,18 +700,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   helper: {
-    color: '#aab1bd',
+    color: '#fff',
     fontSize: 13,
     lineHeight: 20,
     marginTop: -4,
   },
   input: {
-    backgroundColor: '#fff',
-    color: '#000',
+    backgroundColor: '#0e1116',
+    color: '#fff',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#2a313c',
   },
   primaryButton: {
     backgroundColor: '#fff',
@@ -650,7 +732,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
   fineprint: {
-    color: '#8a93a3',
+    color: '#fff',
     fontSize: 13,
     lineHeight: 20,
     marginTop: 6,
@@ -687,7 +769,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 4,
   },
-  detailLabel: { color: '#aab1bd', fontSize: 14 },
+  detailLabel: { color: '#fff', fontSize: 14 },
   detailValue: { color: '#fff', fontSize: 14, fontWeight: '600' },
   errorText: { color: '#ff8a8a', fontSize: 14 },
   stopButton: {

@@ -1,4 +1,4 @@
-import { resolveCompanionShareBaseUrl } from './client';
+import { resolveCompanionApiRoot, resolveCompanionShareBaseUrl } from './client';
 import { companionApiClient } from './companionClient';
 import { buildCompanionShareUrl } from './companionUrl';
 
@@ -19,7 +19,7 @@ export interface CompanionPing {
 
 /** Public URL the wearer shares with their caretaker. */
 export function buildShareUrl(token: string, baseUrl = resolveCompanionShareBaseUrl()): string {
-  return buildCompanionShareUrl(token, baseUrl);
+  return buildCompanionShareUrl(token, baseUrl, resolveCompanionApiRoot());
 }
 
 export async function createCompanionSession(displayName?: string): Promise<CompanionSession> {

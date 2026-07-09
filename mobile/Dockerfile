@@ -12,6 +12,8 @@ RUN npm ci --omit=optional || npm install --omit=optional
 
 COPY tsconfig*.json ./
 COPY server ./server
+# Shared client util imported by server/services/openAI.ts
+COPY src/utils/trainLine.ts ./src/utils/trainLine.ts
 
 EXPOSE 8000
 

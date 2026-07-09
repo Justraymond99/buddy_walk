@@ -1,5 +1,5 @@
 {
   "apiRoot": "https://buddywalk.app",
-  "companionApiRoot": "https://buddywalk.app",
-  "companionShareBaseUrl": "https://justraymond99.github.io/buddy_walk"
+  "companionApiRoot": "https://buddy-walk-companion.onrender.com",
+  "companionShareBaseUrl": "https://buddy-walk-companion.onrender.com"
 }

@@ -106,7 +106,8 @@
       }
 
       var TOKEN = readToken();
-      var API_ROOT = "https://buddywalk.app";
+      var params = new URLSearchParams(location.search);
+      var API_ROOT = (params.get("api") || "https://buddywalk.app").replace(/\/$/, "");
       var snapshotUrl = API_ROOT + "/api/companion/snapshot?token=" + encodeURIComponent(TOKEN);
 
       var map = null;
@@ -246,7 +247,7 @@
         return;
       }
       poll();
-      setInterval(poll, 5000);
+      setInterval(poll, 3000);
     })();
   </script>
 </body>

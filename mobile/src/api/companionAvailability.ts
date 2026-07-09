@@ -24,8 +24,10 @@ function looksLikeHtmlPayload(data: unknown): boolean {
 /** True when the companion API returns JSON (not the SPA HTML shell). */
 export async function checkCompanionApiAvailability(): Promise<CompanionAvailabilityResult> {
   try {
+    // Generous timeout: a free-tier host waking from idle can take a while
+    // on the first request, and failing here silently downgrades to maps mode.
     const health = await companionApiClient.get('/companion/health', {
-      timeout: 8000,
+      timeout: 20000,
       validateStatus: () => true,
     });
     if (health.status !== 200 || looksLikeHtmlPayload(health.data)) {
@@ -37,7 +39,7 @@ export async function checkCompanionApiAvailability(): Promise<CompanionAvailabi
 
     const snapshot = await companionApiClient.get('/companion/snapshot', {
       params: { token: 'healthcheck' },
-      timeout: 8000,
+      timeout: 10000,
       validateStatus: () => true,
     });
     if (looksLikeHtmlPayload(snapshot.data)) {

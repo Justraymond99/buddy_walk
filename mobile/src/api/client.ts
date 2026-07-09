@@ -4,8 +4,14 @@ import Constants from 'expo-constants';
 
 import defaultApi from '../../buddy-walk-default-api.json';
 
-function isPrivateDevHost(url: string): boolean {
+export function isPrivateDevHost(url: string): boolean {
   return /localhost|127\.|192\.168\.|10\.|100\.|\b172\.(1[6-9]|2\d|3[01])\./i.test(url);
+}
+
+/** True when companion sessions are stored on a LAN / Tailscale host (not public buddywalk.app). */
+export function isLocalCompanionApi(): boolean {
+  if (readEnvRoot('EXPO_PUBLIC_COMPANION_API_URL')) return true;
+  return isPrivateDevHost(resolveCompanionApiRoot());
 }
 
 function isLoopbackHost(url: string): boolean {
@@ -68,23 +74,32 @@ export function resolveCompanionApiRoot(): string {
 }
 
 /**
- * Base URL for caretaker share links (`/companion/:token` viewer page).
- * Must match the host that stores companion sessions (same as COMPANION_API_ROOT).
+ * Base URL for caretaker share links (`/companion-viewer.html?token=…`).
+ * LAN / Tailscale companion servers serve the viewer on the same host as the API.
+ * Public production uses GitHub Pages (see buddy-walk-default-api.json).
  */
 export function resolveCompanionShareBaseUrl(): string {
   const custom = readEnvRoot('EXPO_PUBLIC_COMPANION_SHARE_URL');
   if (custom) return custom;
   if (Platform.OS === 'web') return resolveApiRoot();
+
+  const companionApi = resolveCompanionApiRoot();
+  const companionOverride = readEnvRoot('EXPO_PUBLIC_COMPANION_API_URL');
+
+  // Express serves companion-viewer.html on the same host as /api/companion/*.
+  if (companionOverride || isPrivateDevHost(companionApi)) {
+    return companionApi;
+  }
+
   const fromDefault = (defaultApi as { companionShareBaseUrl?: string }).companionShareBaseUrl;
   if (typeof fromDefault === 'string' && fromDefault.trim().length > 0) {
     return normalizeApiRoot(fromDefault.trim());
   }
-  const apiRoot = resolveCompanionApiRoot();
-  if (/^https?:\/\//i.test(apiRoot) && !isPrivateDevHost(apiRoot)) {
-    return apiRoot;
+
+  if (/^https?:\/\//i.test(companionApi)) {
+    return companionApi;
   }
-  // Local dev: share links need a public URL — set EXPO_PUBLIC_COMPANION_SHARE_URL.
-  return normalizeApiRoot(defaultApi.apiRoot);
+  return PRODUCTION_API_ROOT;
 }
 
 /** Root of the Buddy Walk backend (no `/api` suffix). */

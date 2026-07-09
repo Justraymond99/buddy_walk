@@ -1,0 +1,25 @@
+# Render Blueprint — live companion API for Buddy Walk.
+#
+# One-time setup: https://dashboard.render.com → New → Blueprint → pick this
+# repo. Render reads this file and creates the service. The public URL becomes
+# https://buddy-walk-companion.onrender.com (must match companionApiRoot in
+# mobile/buddy-walk-default-api.json).
+#
+# Only companion sharing runs here — Q&A/TTS stay on buddywalk.app, so no
+# AI/Maps/Azure keys are needed. Sessions live in memory (no MongoDB) and
+# expire on their own; a restart just ends active share links early.
+services:
+  - type: web
+    name: buddy-walk-companion
+    runtime: docker
+    plan: free
+    rootDir: mobile
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/companion/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8000"
+      - key: ALLOWED_ORIGINS
+        value: https://buddywalk.app,https://justraymond99.github.io,https://buddy-walk-companion.onrender.com

@@ -1,0 +1,17 @@
+# Render's free tier spins the service down after ~15 min of no traffic, and a
+# cold start (~30-60s) makes the app silently fall back to Google Maps pin
+# sharing. Pinging the health endpoint keeps the live companion API warm.
+name: Keep companion API warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping companion health endpoint
+        run: |
+          curl -fsS --max-time 30 "https://buddy-walk-companion.onrender.com/api/companion/health" || echo "Ping failed (service may still be deploying)"
