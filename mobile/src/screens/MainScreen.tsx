@@ -11,6 +11,7 @@ import {
   Alert,
   Vibration,
   Animated,
+  AppState,
 } from 'react-native';
 import { Text, Button, IconButton } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -44,6 +45,7 @@ import { ensureMicrophonePermission } from '../utils/microphonePermission';
 import { prepareAudioForRecording, resetAudioForPlayback } from '../utils/audioSession';
 import { stopSpeaking, isSpeaking } from '../utils/speakText';
 import { announce } from '../utils/announce';
+import { rotateConversationId } from '../utils/conversationSession';
 import { unlockWebAudioForPlayback, isSafariBrowser } from '../utils/webAudioUnlock';
 import { extractVideoFrames } from '../utils/extractVideoFrames';
 import { startWebFrameCapture, WebFrameSession } from '../utils/webFrameCapture';
@@ -690,6 +692,56 @@ export default function MainScreen({ navigation }: Props) {
     return t === LISTENING_PLACEHOLDER || t === TRANSCRIBING_PLACEHOLDER;
   }
 
+  /** Clear the on-screen Q&A/capture state and start a fresh server AI session. */
+  const resetConversationState = useCallback(
+    (options?: { announceReset?: boolean }) => {
+      rotateConversationId();
+      void stopSpeaking();
+      if (slowResponseTimerRef.current) {
+        clearTimeout(slowResponseTimerRef.current);
+        slowResponseTimerRef.current = null;
+      }
+      setLoading(false);
+      setUserInput('');
+      setDisplayQuestion('');
+      submittedInputRef.current = '';
+      setAiResponse('');
+      setCapturedImage(null);
+      setCapturedVideoUri(null);
+      setWebVideoFrames(null);
+      setCurrentChatId('');
+      setCurrentMessageId('');
+      chatLogEligibleRef.current = false;
+      lastAutoSpokenRef.current = '';
+      cameraReadyRef.current = false;
+      if (options?.announceReset) {
+        AccessibilityInfo.announceForAccessibility(
+          'New test started. Previous question, answer, and AI memory cleared.'
+        );
+        announce('New test started.');
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  async function startNewTest(): Promise<void> {
+    await cleanupVoiceCapture();
+    resetConversationState({ announceReset: true });
+    void track(Events.NewTestStarted);
+  }
+
+  // Force a clean AI session when the app is backgrounded/closed so a new
+  // launch never inherits the previous session's chat history.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'background' || state === 'inactive') {
+        rotateConversationId();
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   async function cleanupVoiceCapture(): Promise<void> {
     webAudioSessionRef.current?.abort();
     webAudioSessionRef.current = null;
@@ -1255,6 +1307,8 @@ export default function MainScreen({ navigation }: Props) {
         style: 'destructive',
         onPress: async () => {
           try {
+            // Force a clean AI session so the next user never inherits this chat history.
+            resetConversationState();
             await signOut();
           } catch (e) {
             console.error('Sign out error:', e);
@@ -1414,7 +1468,7 @@ export default function MainScreen({ navigation }: Props) {
                   ? 'Transcribing your question…'
                   : 'Example: What is in front of me?'
             }
-            placeholderTextColor="#888"
+            placeholderTextColor="rgba(255,255,255,0.75)"
             style={styles.textInput}
             multiline
             returnKeyType="done"
@@ -1518,6 +1572,22 @@ export default function MainScreen({ navigation }: Props) {
 
         {/* ── Companion + Saved Places ── */}
         <View style={styles.toolsSection}>
+          <Pressable
+            onPressIn={() => tap()}
+            onPress={() => void startNewTest()}
+            style={({ pressed }) => [styles.toolButton, pressed && styles.toolButtonPressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Start a new test. Clears the question, answer, photo or video, and AI chat memory."
+          >
+            <Text style={styles.toolButtonIcon}>🔄</Text>
+            <View style={styles.toolButtonText}>
+              <Text style={styles.toolButtonTitle}>New Test</Text>
+              <Text style={styles.toolButtonSubtitle}>
+                Clear screen and AI memory before the next test run
+              </Text>
+            </View>
+          </Pressable>
+
           <Pressable
             onPressIn={() => tap()}
             onPress={() => {
@@ -1818,12 +1888,14 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   textInput: {
-    backgroundColor: '#fff',
+    backgroundColor: '#0e1116',
     borderRadius: 12,
     padding: 14,
     fontSize: 16,
-    color: '#000',
+    color: '#fff',
     minHeight: 56,
+    borderWidth: 1,
+    borderColor: '#2a313c',
   },
   voiceButton: {
     backgroundColor: '#fff',
@@ -1884,7 +1956,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   pendingQuestion: {
-    color: '#ccc',
+    color: '#fff',
     fontSize: 15,
     textAlign: 'center',
     paddingHorizontal: 8,
@@ -1893,7 +1965,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   questionEcho: {
-    color: '#ccc',
+    color: '#fff',
     fontSize: 15,
     fontWeight: '600',
     lineHeight: 22,
@@ -1953,7 +2025,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   toolButtonSubtitle: {
-    color: '#aab1bd',
+    color: '#fff',
     fontSize: 13,
     marginTop: 2,
     lineHeight: 18,

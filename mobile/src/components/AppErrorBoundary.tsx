@@ -58,7 +58,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   content: { padding: 24, gap: 16, paddingTop: 80 },
   title: { color: '#fff', fontSize: 24, fontWeight: 'bold' },
-  message: { color: '#ccc', fontSize: 16, lineHeight: 24 },
+  message: { color: '#fff', fontSize: 16, lineHeight: 24 },
   button: {
     backgroundColor: '#fff',
     borderRadius: 14,
@@ -67,5 +67,5 @@ const styles = StyleSheet.create({
   },
   buttonPressed: { backgroundColor: '#e0e0e0' },
   buttonLabel: { color: '#000', fontSize: 16, fontWeight: 'bold', letterSpacing: 1 },
-  detail: { color: '#777', fontSize: 12, marginTop: 16 },
+  detail: { color: '#fff', fontSize: 12, marginTop: 16 },
 });

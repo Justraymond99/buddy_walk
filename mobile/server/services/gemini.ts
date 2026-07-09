@@ -1,6 +1,11 @@
 import axios from "axios";
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold, Part, FunctionDeclaration, Tool } from "@google/generative-ai";
 import { textRequestBody, history, AIPrompt, AppContext, openAITools, nearbyPlacesPrompt, entrancePrompt, directionsPrompt, imagePrompt, videoPrompt, crossStreetsPrompt } from "../types";
+import {
+  appendConversationHistory,
+  formatHistoryForPrompt,
+  getConversationHistory,
+} from "../utils/conversationHistory";
 import dotenv from "dotenv";
 import GtfsRealtimeBindings from "gtfs-realtime-bindings";
 import fetch from "node-fetch";
@@ -175,9 +180,6 @@ const geminiTools: Tool[] = [
     })
   }
 ];
-
-const MAX_HISTORY = 20;
-const openAIHistory: history[] = []
 
 export class GeminiService {
   genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || "");
@@ -462,11 +464,12 @@ export class GeminiService {
     try {
       systemContent += `Current Date and Time: ${new Date().toLocaleString()}`;
       
+      const priorHistory = getConversationHistory(content.analytics);
       const combinedSystemMessage = completeAIPrompt
         + "\n\nRelevant data: "
         + systemContent
         + "\n\nChat history: "
-        + openAIHistory.map(history => `User Input: ${history.input}, AI Output: ${history.output}, Data Used: ${history.data}`).join('\n');
+        + formatHistoryForPrompt(priorHistory);
       
       // We pass the System Instruction and then the User parts (Text + Images)
       const finalResult = await this.model.generateContent({
@@ -478,9 +481,12 @@ export class GeminiService {
       const responseText = finalResult.response.text();
       console.log('Gemini API response token count (approx):', finalResult.response.usageMetadata?.totalTokenCount);
       
-      openAIHistory.push({ input: content.text, output: responseText, data: relevantData });
-      if (openAIHistory.length > MAX_HISTORY) openAIHistory.shift();
-      res.status(200).json({ output: responseText, history: openAIHistory });
+      const updatedHistory = appendConversationHistory(content.analytics, {
+        input: content.text,
+        output: responseText,
+        data: relevantData,
+      });
+      res.status(200).json({ output: responseText, history: updatedHistory });
     }
     catch (e: any) {
       console.error('Error with Gemini API request:', e);

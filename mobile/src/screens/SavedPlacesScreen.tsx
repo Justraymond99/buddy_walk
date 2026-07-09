@@ -199,7 +199,7 @@ export default function SavedPlacesScreen({ navigation }: Props) {
               setAlias(text);
             }}
             placeholder="e.g. home"
-            placeholderTextColor="#888"
+            placeholderTextColor="rgba(255,255,255,0.75)"
             style={styles.input}
             autoCapitalize="none"
             maxLength={40}
@@ -227,7 +227,7 @@ export default function SavedPlacesScreen({ navigation }: Props) {
               setCoords(null);
             }}
             placeholder="123 Main Street, Brooklyn, NY"
-            placeholderTextColor="#888"
+            placeholderTextColor="rgba(255,255,255,0.75)"
             style={[styles.input, styles.multiline]}
             multiline
             accessibilityLabel="Street address"
@@ -362,12 +362,14 @@ const styles = StyleSheet.create({
   },
   label: { color: '#fff', fontSize: 14, fontWeight: '700', marginTop: 4 },
   input: {
-    backgroundColor: '#fff',
-    color: '#000',
+    backgroundColor: '#0e1116',
+    color: '#fff',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#2a313c',
   },
   multiline: { minHeight: 70, textAlignVertical: 'top' },
   suggestionRow: {
@@ -404,7 +406,7 @@ const styles = StyleSheet.create({
   primaryButtonPressed: { backgroundColor: '#e0e0e0' },
   primaryButtonDisabled: { opacity: 0.6 },
   primaryButtonLabel: { color: '#000', fontSize: 17, fontWeight: 'bold', letterSpacing: 1.2 },
-  empty: { color: '#aab1bd', fontSize: 15, lineHeight: 22 },
+  empty: { color: '#fff', fontSize: 15, lineHeight: 22 },
   placeRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -417,7 +419,7 @@ const styles = StyleSheet.create({
   },
   placeText: { flex: 1 },
   placeAlias: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  placeAddress: { color: '#aab1bd', fontSize: 14, marginTop: 2 },
+  placeAddress: { color: '#fff', fontSize: 14, marginTop: 2 },
   placeCoords: { color: '#6b9e6b', fontSize: 12, marginTop: 4 },
   removeButton: {
     borderRadius: 10,

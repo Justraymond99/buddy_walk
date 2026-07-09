@@ -70,7 +70,7 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   body: {
-    color: '#ccc',
+    color: '#fff',
     fontSize: 15,
     lineHeight: 24,
   },

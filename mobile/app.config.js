@@ -4,6 +4,16 @@ require('dotenv').config();
 const appJson = require('./app.json');
 const { apiRoot: defaultApiRoot } = require('./buddy-walk-default-api.json');
 
+const easProfile = process.env.EAS_BUILD_PROFILE;
+const isStoreBuild = easProfile === 'production' || easProfile === 'preview';
+
+// EAS TestFlight builds must not bake in a developer's LAN/Tailscale .env overrides.
+if (process.env.EAS_BUILD === 'true' && isStoreBuild) {
+  delete process.env.EXPO_PUBLIC_API_URL;
+  delete process.env.EXPO_PUBLIC_COMPANION_API_URL;
+  delete process.env.EXPO_PUBLIC_COMPANION_SHARE_URL;
+}
+
 const resolvedApiRoot =
   (typeof process.env.EXPO_PUBLIC_API_URL === 'string' &&
     process.env.EXPO_PUBLIC_API_URL.trim()) ||

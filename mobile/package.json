@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
-    "test": "node --experimental-strip-types src/test/runAll.test.ts",
+    "test": "tsx src/test/runAll.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.native.json",
     "typecheck:server": "tsc --noEmit -p tsconfig.node.json",
     "qa": "npm run typecheck && npm test",

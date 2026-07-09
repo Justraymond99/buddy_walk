@@ -125,7 +125,7 @@ export default function FeedbackModal({
                   multiline
                   numberOfLines={4}
                   placeholder="What worked well? What was confusing?"
-                  placeholderTextColor="#888"
+                  placeholderTextColor="rgba(255,255,255,0.75)"
                   style={styles.input}
                   accessibilityLabel="Feedback comment"
                 />
@@ -202,7 +202,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   label: {
-    color: '#ddd',
+    color: '#fff',
     fontSize: 18,
     marginTop: 12,
     marginBottom: 8,
@@ -265,7 +265,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   optOutSubtitle: {
-    color: '#999',
+    color: '#fff',
     fontSize: 13,
     marginTop: 2,
   },

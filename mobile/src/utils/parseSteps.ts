@@ -20,7 +20,8 @@ export function parseStepsFromText(text: string): NavRoute | null {
   let match: RegExpExecArray | null;
   while ((match = stepRegex.exec(text)) !== null) {
     const idx = parseInt(match[1], 10) - 1;
-    const instruction = cleanInstruction(match[2]);
+    // Keep the trailing "for 120 ft" here — distance is extracted in the steps mapping below.
+    const instruction = normalizeLine(match[2]);
     if (instruction) collected.push({ idx, instruction });
   }
 
@@ -29,7 +30,7 @@ export function parseStepsFromText(text: string): NavRoute | null {
     const numbered = /(?:^|\n)\s*(\d+)\s*[\.\):]\s*([^\n]+)/g;
     while ((match = numbered.exec(text)) !== null) {
       const idx = parseInt(match[1], 10) - 1;
-      const instruction = cleanInstruction(match[2]);
+      const instruction = normalizeLine(match[2]);
       if (instruction && looksLikeDirectionLine(instruction)) {
         collected.push({ idx, instruction });
       }
@@ -135,8 +136,8 @@ function parseInstructionAndDistance(raw: string): { instruction: string; distan
   return { instruction: text, distanceMeters };
 }
 
-function cleanInstruction(raw: string): string {
-  return parseInstructionAndDistance(raw).instruction;
+function normalizeLine(raw: string): string {
+  return raw.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 }
 
 const DIRECTION_HINT =

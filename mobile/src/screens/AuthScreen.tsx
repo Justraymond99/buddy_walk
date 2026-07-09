@@ -196,7 +196,7 @@ export default function AuthScreen({ navigation }: Props) {
           activeOutlineColor="#fff"
           textColor="#fff"
           style={styles.input}
-          placeholderTextColor="#888"
+          placeholderTextColor="rgba(255,255,255,0.75)"
         />
         <TextInput
           label="Password"
@@ -210,7 +210,7 @@ export default function AuthScreen({ navigation }: Props) {
           activeOutlineColor="#fff"
           textColor="#fff"
           style={styles.input}
-          placeholderTextColor="#888"
+          placeholderTextColor="rgba(255,255,255,0.75)"
         />
         <HelperText type="info" style={styles.helpText}>
           Password must be at least 6 characters.
@@ -272,7 +272,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   subtitle: {
-    color: '#bbb',
+    color: '#fff',
     textAlign: 'center',
     marginBottom: 20,
   },
@@ -304,7 +304,7 @@ const styles = StyleSheet.create({
     height: 1,
   },
   dividerText: {
-    color: '#aaa',
+    color: '#fff',
     paddingHorizontal: 12,
   },
   input: {
@@ -317,7 +317,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   helpText: {
-    color: '#bbb',
+    color: '#fff',
     marginBottom: 8,
   },
   primaryButton: {

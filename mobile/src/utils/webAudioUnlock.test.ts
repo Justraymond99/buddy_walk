@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isBraveBrowser, isSafariBrowser } from './webAudioUnlock.ts';
+import { isBraveBrowser, isSafariBrowser } from './webAudioUnlock.web.ts';
 
 describe('isSafariBrowser', () => {
   it('detects Safari user agents', () => {

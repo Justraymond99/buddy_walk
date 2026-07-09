@@ -8,6 +8,8 @@ import {
   stepHasUsableCoords,
   estimateStepDurationMs,
   NAV_MIN_AUTO_STEP_MS,
+  NAV_MAX_AUTO_STEP_MS,
+  NAV_AUTO_STEP_MULTIPLIER,
 } from './navigationMath.ts';
 import type { NavRoute, NavStep } from '../types';
 
@@ -79,6 +81,9 @@ describe('navigationMath', () => {
       ...navStep({ lat: 40.1, lng: -73.1 }, { lat: 40.2, lng: -73.2 }),
       duration: { text: '1 min', value: 60 },
     });
-    assert.equal(timed, 90_000);
+    assert.equal(
+      timed,
+      Math.min(60_000 * NAV_AUTO_STEP_MULTIPLIER, NAV_MAX_AUTO_STEP_MS)
+    );
   });
 });

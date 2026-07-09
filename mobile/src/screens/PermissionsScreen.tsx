@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   waiverText: {
-    color: '#ccc',
+    color: '#fff',
     fontSize: 14,
     lineHeight: 22,
   },

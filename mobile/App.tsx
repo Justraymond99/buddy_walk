@@ -13,6 +13,11 @@ const theme = {
     surface: '#1a1a1a',
     primary: '#ffffff',
     onPrimary: '#000000',
+    onBackground: '#ffffff',
+    onSurface: '#ffffff',
+    onSurfaceVariant: '#ffffff',
+    outline: '#ffffff',
+    outlineVariant: '#ffffff',
   },
 };
 

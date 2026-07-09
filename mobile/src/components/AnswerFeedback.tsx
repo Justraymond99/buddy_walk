@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   label: {
-    color: '#ddd',
+    color: '#fff',
     fontSize: 16,
     marginRight: 12,
   },

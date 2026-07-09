@@ -9,6 +9,11 @@ import { getSubwayArrivals } from "./mta";
 import { extractTrainLineFromText } from "../../src/utils/trainLine";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
+import {
+  appendConversationHistory,
+  formatHistoryForPrompt,
+  getConversationHistory,
+} from "../utils/conversationHistory";
 dotenv.config();
 
 async function geocodeCoordinates(latitude: number, longitude: number) {
@@ -123,8 +128,6 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
 }
 
 const tools = openAITools
-
-const openAIHistory: history[] = []
 
 function maxTokensForFeature(feature?: string): number {
   switch (feature) {
@@ -584,7 +587,7 @@ export class OpenAIService {
           completeAIPrompt += trainPrompt;
           const parsedArgs = JSON.parse(parsedRequest.choices[0].message.tool_calls![0].function.arguments);
           const extractedRoute = extractTrainLineFromText(content.text);
-          const route = extractedRoute ?? parsedArgs.routeId?.toUpperCase() || "A";
+          const route = extractedRoute ?? (parsedArgs.routeId?.toUpperCase() || "A");
           console.log(`[MTA] AI requested data for the ${route} train.`);
 
           const trainData = await getSubwayArrivals(
@@ -619,12 +622,13 @@ export class OpenAIService {
       // console.log("openAI history: ", openAIHistory)
       systemContent += `Current Date and Time (Eastern): ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`;
       // console.log("prompt: ", completeAIPrompt)
-      const recentHistory = openAIHistory.slice(-3);
+      const priorHistory = getConversationHistory(analytics);
+      const recentHistory = priorHistory.slice(-3);
       const combinedSystemMessage = completeAIPrompt
         + "\n\nRelevant data: "
         + systemContent
         + "\n\nChat history: "
-        + recentHistory.map(history => `User Input: ${history.input}, Open AI Output: ${history.output}, Data Used: ${history.data}`).join('\n');
+        + formatHistoryForPrompt(recentHistory);
       const chatCompletion = await this.client.chat.completions.create({
         messages: [
           { role: 'system', content: combinedSystemMessage },
@@ -635,21 +639,25 @@ export class OpenAIService {
         max_tokens: maxTokensForFeature(analytics?.feature),
       });
       console.log('OpenAI API response:', chatCompletion.usage?.total_tokens);
-      openAIHistory.push({ input: content.text, output: chatCompletion.choices[0].message.content as string, data: relevantData });
+      const outputText = chatCompletion.choices[0].message.content as string;
+      const updatedHistory = appendConversationHistory(analytics, {
+        input: content.text,
+        output: outputText,
+        data: relevantData,
+      });
 
       // 3. Only update if both conditions are met AND we have a valid ID
       if (panoramaId) {
           console.log("Generating new description for DF database...");
           
           // We pass the panorama _id and the AI's generated output
-          await addPanoramaDescription(panoramaId, chatCompletion.choices[0].message.content as string);
+          await addPanoramaDescription(panoramaId, outputText);
       }
-      const outputText = chatCompletion.choices[0].message.content as string;
       await recordAiRequest(true, {
         outputLength: outputText?.length ?? 0,
         tokenCount: chatCompletion.usage?.total_tokens,
       });
-      res.status(200).json({ output: outputText, history: openAIHistory });
+      res.status(200).json({ output: outputText, history: updatedHistory });
     }
     catch (e: any) {
       console.error('Error with OpenAI API request:', e);

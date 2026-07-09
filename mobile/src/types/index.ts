@@ -21,6 +21,8 @@ export interface RequestData {
     requestId?: string;
     installId?: string;
     sessionId?: string;
+    conversationId?: string;
+    resetHistory?: boolean;
     platform?: string;
     appVersion?: string;
     feature?: string;

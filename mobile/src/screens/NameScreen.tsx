@@ -31,7 +31,7 @@ export default function NameScreen({ navigation }: Props) {
           value={name}
           onChangeText={setName}
           placeholder="Your name (optional)"
-          placeholderTextColor="#888"
+          placeholderTextColor="rgba(255,255,255,0.75)"
           style={styles.input}
           mode="outlined"
           outlineColor="#fff"
@@ -74,7 +74,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   subtitle: {
-    color: '#aaa',
+    color: '#fff',
     textAlign: 'center',
     fontSize: 15,
     lineHeight: 22,

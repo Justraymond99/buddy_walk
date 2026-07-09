@@ -113,8 +113,11 @@ npx expo run:android --variant release
 Or use [EAS Build](https://docs.expo.dev/build/introduction/) for cloud builds:
 
 ```bash
-npx eas build --platform all
+eas build --platform ios --profile production
+eas submit --platform ios --profile production --latest
 ```
+
+TestFlight uses **`https://buddywalk.app`** (not your local `.env`). `EXPO_PUBLIC_BYPASS_AUTH=true` is set in `eas.json`. Build number auto-increments on EAS.
 
 ---
 

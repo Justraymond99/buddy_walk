@@ -48,7 +48,7 @@ export async function transcribeAudioBuffer(
         'Content-Type': contentType,
         Accept: 'application/json',
       },
-      body: audio,
+      body: new Uint8Array(audio),
     }
   );
 

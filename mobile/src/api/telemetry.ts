@@ -45,6 +45,7 @@ export const Events = {
   SavedPlaceUsed: 'saved_place_used',
   FeedbackSubmitted: 'feedback_submitted',
   AnswerRated: 'answer_rated',
+  NewTestStarted: 'new_test_started',
 } as const;
 
 export type EventName = (typeof Events)[keyof typeof Events] | string;

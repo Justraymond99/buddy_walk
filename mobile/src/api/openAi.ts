@@ -2,6 +2,7 @@ import { apiClient } from './client';
 import { withBriefReplyInstruction } from '../utils/briefAiInstruction';
 import { RequestData, NavRoute } from '../types';
 import { appVersion, getInstallId, platform, sessionId } from '../utils/identity';
+import { getConversationId } from '../utils/conversationSession';
 
 export interface TextResponse {
   output: string;
@@ -20,6 +21,7 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
         ...data.analytics,
         installId,
         sessionId,
+        conversationId: getConversationId(),
         platform,
         appVersion,
       },
