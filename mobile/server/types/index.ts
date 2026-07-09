@@ -22,6 +22,7 @@ export interface textRequestBody {
     sessionId?: string;
     platform?: string;
     appVersion?: string;
+    feature?: string;
   };
 }
 
