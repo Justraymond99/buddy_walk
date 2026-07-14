@@ -1,5 +1,6 @@
 {
-  "apiRoot": "https://buddywalk.app",
-  "companionApiRoot": "https://buddy-walk-companion.onrender.com",
-  "companionShareBaseUrl": "https://buddy-walk-companion.onrender.com"
+  "apiRoot": "https://buddy-walk-api.onrender.com",
+  "companionApiRoot": "https://buddy-walk-api.onrender.com",
+  "companionShareBaseUrl": "https://buddy-walk-api.onrender.com",
+  "legacyApiHosts": ["buddywalk.app", "www.buddywalk.app"]
 }

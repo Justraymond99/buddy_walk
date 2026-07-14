@@ -14,6 +14,8 @@ export interface AiRequestLogInput {
   feature?: string;
   toolUsed?: string;
   inputLength: number;
+  inputText?: string;
+  outputText?: string;
   hasImage?: boolean;
   imageCount?: number;
   hasCoords?: boolean;

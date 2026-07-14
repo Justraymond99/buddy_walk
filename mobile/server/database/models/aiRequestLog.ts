@@ -9,6 +9,10 @@ export interface aiRequestLogInterface {
   feature?: string;
   toolUsed?: string;
   inputLength: number;
+  /** Truncated prompt text (memory / zero-config proxy mode). */
+  inputText?: string;
+  /** Truncated answer text (memory / zero-config proxy mode). */
+  outputText?: string;
   hasImage: boolean;
   imageCount: number;
   hasCoords: boolean;
@@ -29,6 +33,8 @@ const AiRequestLogSchema = new Schema<aiRequestLogInterface>({
   feature: { type: String, index: true },
   toolUsed: { type: String },
   inputLength: { type: Number, required: true },
+  inputText: { type: String, required: false },
+  outputText: { type: String, required: false },
   hasImage: { type: Boolean, default: false },
   imageCount: { type: Number, default: 0 },
   hasCoords: { type: Boolean, default: false },

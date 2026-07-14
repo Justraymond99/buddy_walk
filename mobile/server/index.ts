@@ -13,6 +13,9 @@ import mtaRoute from "./routes/mta"
 import mongoose from "mongoose";
 import {databaseLink, config} from "./database";
 import { setCompanionMemoryStore } from "./database/companionStoreMode";
+import { describeServerMode, isZeroConfigMode } from "./config/serverMode";
+import { mountUpstreamProxy } from "./middleware/upstreamProxy";
+import { isMongoConnected } from "./database/usageStore";
 
 dotenv.config();
 
@@ -21,7 +24,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   : [
       'http://localhost:5173',
       'http://localhost:8000',
-      'https://buddywalk.app',
+      'https://buddy-walk-api.onrender.com',
       'https://justraymond99.github.io',
     ];
 
@@ -37,8 +40,15 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     console.log("Connect to the MongoDB successfully!");
     console.log("DB LINK -> ", databaseLink);
   } catch (error) {
-    console.warn("MongoDB unavailable — companion uses in-memory store (chat logs disabled):", error);
+    console.warn("MongoDB unavailable — using in-memory store for metrics, chat logs, and companion:", error);
     setCompanionMemoryStore(true);
+  }
+
+  const zeroConfig = isZeroConfigMode();
+  if (zeroConfig) {
+    console.log("[server] Running in zero-config mode (no API keys / DB required).");
+  } else {
+    console.log("[server] Running in self-hosted mode (local OpenAI/Gemini keys).");
   }
 
 
@@ -66,13 +76,29 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     next();
   });
 
-  app.use("/api", openAIRoute)
+  if (zeroConfig) {
+    mountUpstreamProxy(app);
+  } else {
+    app.use("/api", openAIRoute)
+    app.use("/api/token", tokenRoute)
+    app.use("/api", mtaRoute)
+  }
+
   app.use("/api/db", chatLogRoute)
-  app.use("/api/token", tokenRoute)
   app.use("/api/companion", companionRoute)
   app.use("/api/telemetry", telemetryRoute)
   app.use("/api/feedback", feedbackRoute)
-  app.use("/api", mtaRoute)
+
+  app.get('/api/health', (_req, res) => {
+    const mode = describeServerMode();
+    res.status(200).json({
+      ok: true,
+      service: 'buddy-walk-api',
+      mode: mode.mode,
+      upstream: mode.upstream,
+      storage: isMongoConnected() ? 'mongo' : 'memory',
+    });
+  });
 
   // Public companion viewer page. Loads a tiny HTML shell with the token
   // injected as a global so the page can poll the snapshot endpoint.

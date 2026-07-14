@@ -117,7 +117,7 @@ eas build --platform ios --profile production
 eas submit --platform ios --profile production --latest
 ```
 
-TestFlight uses **`https://buddywalk.app`** (not your local `.env`). `EXPO_PUBLIC_BYPASS_AUTH=true` is set in `eas.json`. Build number auto-increments on EAS.
+TestFlight uses **`https://buddy-walk-api.onrender.com`** (not your local `.env` or legacy buddywalk.app). `EXPO_PUBLIC_BYPASS_AUTH=true` is set in `eas.json`. Build number auto-increments on EAS.
 
 ---
 

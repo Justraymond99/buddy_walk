@@ -2,6 +2,11 @@ import mongoose from "mongoose";
 import { telemetryEventInterface } from "./models/telemetryEvent";
 import { feedbackInterface } from "./models/feedback";
 import { aiRequestLogInterface } from "./models/aiRequestLog";
+import { chatLogInterface, messageInterface } from "./models/chatLog";
+
+export interface MemoryChatLog extends chatLogInterface {
+  _id: string;
+}
 
 /**
  * Usage analytics and feedback should keep working during testing even when
@@ -16,10 +21,12 @@ export function isMongoConnected(): boolean {
 const MAX_MEMORY_EVENTS = 5000;
 const MAX_MEMORY_FEEDBACK = 2000;
 const MAX_MEMORY_AI_REQUESTS = 3000;
+const MAX_MEMORY_CHAT_LOGS = 500;
 
 export const memoryEvents: telemetryEventInterface[] = [];
 export const memoryFeedback: feedbackInterface[] = [];
 export const memoryAiRequests: aiRequestLogInterface[] = [];
+export const memoryChatLogs: MemoryChatLog[] = [];
 
 export function pushMemoryEvents(events: telemetryEventInterface[]): void {
   memoryEvents.push(...events);
@@ -40,4 +47,47 @@ export function pushMemoryAiRequest(entry: aiRequestLogInterface): void {
   if (memoryAiRequests.length > MAX_MEMORY_AI_REQUESTS) {
     memoryAiRequests.splice(0, memoryAiRequests.length - MAX_MEMORY_AI_REQUESTS);
   }
+}
+
+export function createMemoryChatLog(body: chatLogInterface): MemoryChatLog {
+  const entry: MemoryChatLog = {
+    _id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+    user: body.user,
+    date: body.date ?? new Date(),
+    messages: Array.isArray(body.messages) ? [...body.messages] : [],
+  };
+  memoryChatLogs.push(entry);
+  if (memoryChatLogs.length > MAX_MEMORY_CHAT_LOGS) {
+    memoryChatLogs.splice(0, memoryChatLogs.length - MAX_MEMORY_CHAT_LOGS);
+  }
+  return entry;
+}
+
+export function findMemoryChatLog(id: string): MemoryChatLog | undefined {
+  return memoryChatLogs.find((log) => log._id === id);
+}
+
+export function appendMemoryChatMessage(id: string, chat: messageInterface): MemoryChatLog | undefined {
+  const log = findMemoryChatLog(id);
+  if (!log) return undefined;
+  log.messages.push(chat);
+  return log;
+}
+
+export function flagMemoryChatMessage(
+  chatlogId: string,
+  messageId: string,
+  flagReason?: string
+): MemoryChatLog | undefined {
+  const log = findMemoryChatLog(chatlogId);
+  if (!log) return undefined;
+  for (const msg of log.messages) {
+    const msgId = (msg as messageInterface & { _id?: string })._id;
+    if (msgId === messageId) {
+      msg.flag = true;
+      msg.flag_reason = flagReason;
+      return log;
+    }
+  }
+  return undefined;
 }

@@ -1,6 +1,5 @@
 import { apiClient, API_ROOT } from './client';
-
-const PRODUCTION_API = 'https://buddywalk.app';
+import { OWNED_API_ROOT } from '../config/apiHosts';
 
 export async function getToken(): Promise<{ token: string; region: string }> {
   try {
@@ -12,11 +11,11 @@ export async function getToken(): Promise<{ token: string; region: string }> {
     console.warn('getToken: primary endpoint failed', e);
   }
 
-  // Local dev (LAN IP): fall back to production tokens when the local server has no Azure keys.
+  // Local dev (LAN IP): fall back to the owned production API when Azure keys aren't on the LAN server.
   const root = API_ROOT.replace(/\/$/, '');
-  if (root !== PRODUCTION_API) {
+  if (root !== OWNED_API_ROOT) {
     try {
-      const response = await fetch(`${PRODUCTION_API}/api/token/getToken`);
+      const response = await fetch(`${OWNED_API_ROOT}/api/token/getToken`);
       if (response.ok) {
         const data = (await response.json()) as { token?: string; region?: string };
         if (data.token && data.region) {

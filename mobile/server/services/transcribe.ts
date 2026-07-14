@@ -1,12 +1,15 @@
 import axios from 'axios';
 
-const TOKEN_URL = 'https://buddywalk.app/api/token/getToken';
-
 async function fetchSpeechToken(): Promise<{ token: string; region: string }> {
   const subscriptionKey = process.env.AZURE_SUBSCRIPTION_KEY;
   const region = process.env.AZURE_REGION;
-  if (subscriptionKey && region) {
-    const response = await axios.post(
+  if (!subscriptionKey || !region) {
+    throw new Error(
+      'Azure Speech is not configured on this server (set AZURE_SUBSCRIPTION_KEY and AZURE_REGION).'
+    );
+  }
+
+  const response = await axios.post(
       `https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`,
       null,
       {
@@ -16,18 +19,7 @@ async function fetchSpeechToken(): Promise<{ token: string; region: string }> {
         },
       }
     );
-    return { token: response.data as string, region };
-  }
-
-  const response = await fetch(TOKEN_URL);
-  if (!response.ok) {
-    throw new Error(`Token fetch failed (${response.status})`);
-  }
-  const data = (await response.json()) as { token?: string; region?: string };
-  if (!data.token || !data.region) {
-    throw new Error('Token response missing fields');
-  }
-  return { token: data.token, region: data.region };
+  return { token: response.data as string, region };
 }
 
 export async function transcribeAudioBuffer(

@@ -27,6 +27,8 @@ const AI_REQUEST_CSV_COLUMNS = [
   "appVersion",
   "feature",
   "toolUsed",
+  "inputText",
+  "outputText",
   "inputLength",
   "hasImage",
   "imageCount",

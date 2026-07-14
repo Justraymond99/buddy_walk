@@ -47,7 +47,7 @@ async function callAzureSpeechToText(
 }
 
 /**
- * Transcribe recorded audio via Azure Speech (token from buddywalk.app).
+ * Transcribe recorded audio via Azure Speech (token from our API).
  * Does not call /api/transcribe — avoids 404s when that route is missing on a host.
  */
 export async function transcribeAudio(

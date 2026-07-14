@@ -2,10 +2,38 @@
 require('dotenv').config();
 
 const appJson = require('./app.json');
-const { apiRoot: defaultApiRoot } = require('./buddy-walk-default-api.json');
+const defaultApi = require('./buddy-walk-default-api.json');
 
 const easProfile = process.env.EAS_BUILD_PROFILE;
 const isStoreBuild = easProfile === 'production' || easProfile === 'preview';
+
+const LEGACY_HOSTS = defaultApi.legacyApiHosts ?? ['buddywalk.app'];
+
+function normalizeApiRoot(raw) {
+  return raw.replace(/\/+$/, '').replace(/\/api$/i, '');
+}
+
+function hostnameOf(root) {
+  try {
+    const url = root.match(/^https?:\/\//i) ? root : `https://${root}`;
+    return new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isLegacyHost(root) {
+  const host = hostnameOf(root);
+  if (!host) return false;
+  return LEGACY_HOSTS.some((legacy) => host === legacy.replace(/^www\./i, '').toLowerCase());
+}
+
+/** Never bake buddywalk.app (or other legacy hosts) into TestFlight builds. */
+function applyOwnedApiHostGuardrail(root) {
+  const owned = normalizeApiRoot(defaultApi.apiRoot);
+  if (!root || isLegacyHost(root)) return owned;
+  return normalizeApiRoot(root);
+}
 
 // EAS TestFlight builds must not bake in a developer's LAN/Tailscale .env overrides.
 if (process.env.EAS_BUILD === 'true' && isStoreBuild) {
@@ -14,10 +42,11 @@ if (process.env.EAS_BUILD === 'true' && isStoreBuild) {
   delete process.env.EXPO_PUBLIC_COMPANION_SHARE_URL;
 }
 
-const resolvedApiRoot =
+const resolvedApiRoot = applyOwnedApiHostGuardrail(
   (typeof process.env.EXPO_PUBLIC_API_URL === 'string' &&
     process.env.EXPO_PUBLIC_API_URL.trim()) ||
-  defaultApiRoot;
+    defaultApi.apiRoot
+);
 
 const bypassAuth =
   typeof process.env.EXPO_PUBLIC_BYPASS_AUTH === 'string' &&

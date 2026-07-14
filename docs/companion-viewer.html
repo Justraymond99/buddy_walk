@@ -107,7 +107,7 @@
 
       var TOKEN = readToken();
       var params = new URLSearchParams(location.search);
-      var API_ROOT = (params.get("api") || "https://buddywalk.app").replace(/\/$/, "");
+      var API_ROOT = (params.get("api") || "https://buddy-walk-api.onrender.com").replace(/\/$/, "");
       var snapshotUrl = API_ROOT + "/api/companion/snapshot?token=" + encodeURIComponent(TOKEN);
 
       var map = null;

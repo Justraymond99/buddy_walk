@@ -8,7 +8,7 @@ export function describeApiError(error: unknown, feature = 'request'): string {
       return (
         `Companion API is missing on ${COMPANION_API_ROOT} (404).\n\n` +
         `Run npm run serve in mobile/ and set EXPO_PUBLIC_COMPANION_API_URL to that machine's LAN IP ` +
-        `(e.g. http://192.168.x.x:8000). Q&A can stay on buddywalk.app.`
+        `(e.g. http://192.168.x.x:8000). Q&A uses ${API_ROOT}.`
       );
     }
     if (!error.response) {

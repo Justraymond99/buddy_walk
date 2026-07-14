@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 import defaultApi from '../../buddy-walk-default-api.json';
+import { applyOwnedApiHostGuardrail } from '../config/apiHosts';
 
 export function isPrivateDevHost(url: string): boolean {
   return /localhost|127\.|192\.168\.|10\.|100\.|\b172\.(1[6-9]|2\d|3[01])\./i.test(url);
@@ -22,7 +23,9 @@ function normalizeApiRoot(raw: string): string {
   return raw.replace(/\/+$/, '').replace(/\/api$/i, '');
 }
 
-const PRODUCTION_API_ROOT = normalizeApiRoot(defaultApi.apiRoot);
+const PRODUCTION_API_ROOT = applyOwnedApiHostGuardrail(
+  defaultApi.apiRoot.replace(/\/+$/, '').replace(/\/api$/i, '')
+);
 
 /** Physical phones cannot reach a dev machine via localhost — use production or a LAN IP. */
 function applyPhysicalDeviceApiRootFix(root: string): string {
@@ -51,12 +54,14 @@ function readEnvRoot(name: string): string | undefined {
 function resolveApiRoot(): string {
   const inlined = readEnvRoot('EXPO_PUBLIC_API_URL');
   if (inlined) {
-    return Platform.OS === 'web' ? inlined : applyPhysicalDeviceApiRootFix(inlined);
+    const root = Platform.OS === 'web' ? inlined : applyPhysicalDeviceApiRootFix(inlined);
+    return applyOwnedApiHostGuardrail(root);
   }
   const fromExtra = Constants.expoConfig?.extra?.buddyWalkApiUrl;
   if (typeof fromExtra === 'string' && fromExtra.trim().length > 0) {
     const root = normalizeApiRoot(fromExtra.trim());
-    return Platform.OS === 'web' ? root : applyPhysicalDeviceApiRootFix(root);
+    const resolved = Platform.OS === 'web' ? root : applyPhysicalDeviceApiRootFix(root);
+    return applyOwnedApiHostGuardrail(resolved);
   }
   return PRODUCTION_API_ROOT;
 }
@@ -64,11 +69,11 @@ function resolveApiRoot(): string {
 /** Companion API root — defaults to API_ROOT; set EXPO_PUBLIC_COMPANION_API_URL for local companion only. */
 export function resolveCompanionApiRoot(): string {
   const custom = readEnvRoot('EXPO_PUBLIC_COMPANION_API_URL');
-  if (custom) return custom;
+  if (custom) return applyOwnedApiHostGuardrail(custom);
   if (Platform.OS === 'web') return resolveApiRoot();
   const fromDefault = (defaultApi as { companionApiRoot?: string }).companionApiRoot;
   if (typeof fromDefault === 'string' && fromDefault.trim().length > 0) {
-    return normalizeApiRoot(fromDefault.trim());
+    return applyOwnedApiHostGuardrail(normalizeApiRoot(fromDefault.trim()));
   }
   return resolveApiRoot();
 }
@@ -80,7 +85,7 @@ export function resolveCompanionApiRoot(): string {
  */
 export function resolveCompanionShareBaseUrl(): string {
   const custom = readEnvRoot('EXPO_PUBLIC_COMPANION_SHARE_URL');
-  if (custom) return custom;
+  if (custom) return applyOwnedApiHostGuardrail(custom);
   if (Platform.OS === 'web') return resolveApiRoot();
 
   const companionApi = resolveCompanionApiRoot();
@@ -93,7 +98,7 @@ export function resolveCompanionShareBaseUrl(): string {
 
   const fromDefault = (defaultApi as { companionShareBaseUrl?: string }).companionShareBaseUrl;
   if (typeof fromDefault === 'string' && fromDefault.trim().length > 0) {
-    return normalizeApiRoot(fromDefault.trim());
+    return applyOwnedApiHostGuardrail(normalizeApiRoot(fromDefault.trim()));
   }
 
   if (/^https?:\/\//i.test(companionApi)) {
