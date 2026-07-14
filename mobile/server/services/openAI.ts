@@ -237,7 +237,7 @@ export class OpenAIService {
           type: 'image_url',
           image_url: {
             url: image,
-            detail: 'low',
+            detail: 'auto',
           },
         });
       });
@@ -624,6 +624,9 @@ export class OpenAIService {
       // console.log("prompt: ", completeAIPrompt)
       const priorHistory = getConversationHistory(analytics);
       const recentHistory = priorHistory.slice(-3);
+        if (toolUsed === "generateGoogleDirectionAPILink" && content.image && content.image[0] !== null) {
+        completeAIPrompt += "\n\nCRITICAL INSTRUCTION: The user attached an image/video of their surroundings for 'Last Meters' navigation. DO NOT just read the GPS directions. You MUST analyze the image and use it to guide the user exactly to the physical door or entrance relative to their current view.";
+      }
       const combinedSystemMessage = completeAIPrompt
         + "\n\nRelevant data: "
         + systemContent

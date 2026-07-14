@@ -521,13 +521,13 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
     try {
-      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
+      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.8 });
       const dataUrl = photoToDataUrl(photo);
       if (dataUrl) {
         setCapturedVideoUri(null);
         setWebVideoFrames(null);
         setCapturedImage(dataUrl);
-        setUserInput('Describe the image');
+        setUserInput((prev) => prev.trim() ? prev : 'Describe the image');
         speak('Photo captured. Ready to describe the image.');
         notifySuccess();
         try {
@@ -587,7 +587,7 @@ export default function MainScreen({ navigation }: Props) {
         setCapturedImage(null);
         setCapturedVideoUri(video.uri);
         speak('Video recording ended. Ready to describe the video.');
-        setUserInput('Describe the video');
+        setUserInput((prev) => prev.trim() ? prev : 'Describe the video');
         notifySuccess();
         void track(Events.VideoRecorded, { platform: Platform.OS });
       }
