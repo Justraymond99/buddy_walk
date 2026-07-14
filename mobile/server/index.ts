@@ -160,8 +160,10 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       res.status(500).send('Usage dashboard is not available right now.');
       return;
     }
-    const token = String(req.query.token || '').replace(/[^a-zA-Z0-9_\-.]/g, '');
-    const html = usageViewerTemplate.replace('__ADMIN_TOKEN__', token);
+    // Allow base64 tokens (Render's generated ADMIN_TOKEN includes + / =).
+    // JSON.stringify makes the value safe to embed in the page's script tag.
+    const token = String(req.query.token || '').replace(/[^a-zA-Z0-9_\-.+/=]/g, '');
+    const html = usageViewerTemplate.replace("'__ADMIN_TOKEN__'", JSON.stringify(token));
     res.set('Cache-Control', 'no-store');
     res.type('html').send(html);
   });
