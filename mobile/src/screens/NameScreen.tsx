@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet } from 'react-native';
 import { Text, TextInput, Button } from 'react-native-paper';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -20,7 +20,13 @@ export default function NameScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
+      {/* Scrollable so the Continue button stays reachable with zoomed / large accessibility text
+          and while the keyboard is open. */}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.title} variant="headlineMedium" accessibilityRole="header">
           What should we call you?
         </Text>
@@ -52,7 +58,8 @@ export default function NameScreen({ navigation }: Props) {
         >
           {name.trim() ? 'Continue' : 'Skip'}
         </Button>
-      </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -62,10 +69,14 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
-  content: {
+  flex: {
     flex: 1,
+  },
+  content: {
+    flexGrow: 1,
     paddingHorizontal: 24,
     paddingTop: 40,
+    paddingBottom: 24,
     gap: 20,
   },
   title: {

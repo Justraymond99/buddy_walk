@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, StyleSheet, Alert, Platform } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, Platform } from 'react-native';
 import { Text, Button } from 'react-native-paper';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -116,6 +116,8 @@ export default function PermissionsScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Scrollable so the Continue button stays reachable with zoomed / large accessibility text. */}
+      <ScrollView contentContainerStyle={styles.scrollContent}>
       <Text style={styles.title} variant="headlineMedium" accessibilityRole="header">
         USER AGREEMENT
       </Text>
@@ -197,6 +199,7 @@ export default function PermissionsScreen({ navigation }: Props) {
           Continue
         </Button>
       )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -205,8 +208,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: 20,
     paddingTop: 8,
+    paddingBottom: 16,
   },
   title: {
     color: '#fff',

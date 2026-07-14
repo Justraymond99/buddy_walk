@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, Image } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 import { Text, Button } from 'react-native-paper';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,7 +10,8 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Welcome'>;
 export default function WelcomeScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
+      {/* Scrollable so the Get Started button stays reachable with zoomed / large accessibility text. */}
+      <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title} variant="displaySmall" accessibilityRole="header">
           BUDDY WALK
         </Text>
@@ -29,7 +30,7 @@ export default function WelcomeScreen({ navigation }: Props) {
         >
           Get Started
         </Button>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -40,10 +41,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   content: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
+    paddingVertical: 24,
     gap: 24,
   },
   title: {
