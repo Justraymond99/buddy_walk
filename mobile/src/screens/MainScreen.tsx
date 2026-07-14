@@ -44,7 +44,7 @@ import { tap, tapMedium, notifySuccess } from '../utils/haptics';
 import { ensureMicrophonePermission } from '../utils/microphonePermission';
 import { prepareAudioForRecording, resetAudioForPlayback } from '../utils/audioSession';
 import { stopSpeaking, isSpeaking } from '../utils/speakText';
-import { announce } from '../utils/announce';
+import { announce, isScreenReaderActive } from '../utils/announce';
 import { rotateConversationId } from '../utils/conversationSession';
 import { unlockWebAudioForPlayback, isSafariBrowser } from '../utils/webAudioUnlock';
 import { extractVideoFrames } from '../utils/extractVideoFrames';
@@ -409,7 +409,30 @@ export default function MainScreen({ navigation }: Props) {
 
   const notifyNoSpeechHeard = useCallback(() => {
     Vibration.vibrate(NO_SPEECH_VIBRATION_PATTERN);
-    speak("I didn't catch that. Please try again.");
+    speak("I didn't catch that. Tap the voice button and speak again.");
+  }, [speak]);
+
+  const speakListeningPrompt = useCallback(async () => {
+    speak('Listening. Speak after this message, then tap again when finished.', {
+      preferDevice: true,
+    });
+
+    // Do not let the microphone record Buddy Walk's own prompt. Screen readers
+    // do not expose completion state, so give their short announcement time to
+    // finish; app TTS can be observed directly.
+    if (Platform.OS !== 'web' && isScreenReaderActive()) {
+      await new Promise((resolve) => setTimeout(resolve, 3500));
+      return;
+    }
+
+    const startDeadline = Date.now() + 1500;
+    while (Date.now() < startDeadline && !(await isSpeaking())) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const finishDeadline = Date.now() + 6000;
+    while (Date.now() < finishDeadline && (await isSpeaking())) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }, [speak]);
 
   const notifyNoInternetConnection = useCallback(() => {
@@ -840,6 +863,8 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
 
+    await speakListeningPrompt();
+
     if (Platform.OS === 'web') {
       try {
         const session = await startWebAudioCapture();
@@ -873,9 +898,6 @@ export default function MainScreen({ navigation }: Props) {
         setIsListening(true);
         setUserInput(LISTENING_PLACEHOLDER);
         void track(Events.VoiceStarted);
-        AccessibilityInfo.announceForAccessibility(
-          'Listening. Tap again when finished speaking.'
-        );
       } catch (e) {
         console.error('startListening web error:', e);
         await resetVoiceUiState();
@@ -894,7 +916,6 @@ export default function MainScreen({ navigation }: Props) {
       setUserInput(LISTENING_PLACEHOLDER);
       Vibration.vibrate(60);
       void track(Events.VoiceStarted);
-      AccessibilityInfo.announceForAccessibility('Listening. Tap again when finished speaking.');
     } catch (e) {
       console.error('startListening error:', e);
       await resetVoiceUiState();
@@ -922,7 +943,7 @@ export default function MainScreen({ navigation }: Props) {
         setUserInput('');
         setIsTranscribing(false);
         isTranscribingRef.current = false;
-        speak('Hold Tap to Ask a little longer while you speak, then tap again.');
+        speak('I did not hear enough speech. Tap the voice button, speak, then tap it again.');
         return;
       }
 
@@ -930,7 +951,6 @@ export default function MainScreen({ navigation }: Props) {
       setIsTranscribing(true);
       setUserInput(TRANSCRIBING_PLACEHOLDER);
       void track(Events.VoiceStopped);
-      AccessibilityInfo.announceForAccessibility('Processing speech');
 
       try {
         const [liveText, blob] = await Promise.all([
@@ -943,6 +963,7 @@ export default function MainScreen({ navigation }: Props) {
           await new Promise((resolve) => setTimeout(resolve, 50));
           unlockWebAudioForPlayback();
         }
+        speak('Transcribing your question.', { preferDevice: true });
 
         let text =
           liveText.trim() ||
@@ -971,7 +992,7 @@ export default function MainScreen({ navigation }: Props) {
         }
       } catch (e) {
         console.error('stopListening web error:', e);
-        speak('Voice recognition failed');
+        speak('Voice recognition failed. Tap the voice button and speak again.');
       } finally {
         setIsTranscribing(false);
         isTranscribingRef.current = false;
@@ -995,7 +1016,7 @@ export default function MainScreen({ navigation }: Props) {
         setIsTranscribing(false);
         isTranscribingRef.current = false;
         setUserInput('');
-        speak('Hold Tap to Ask a little longer while you speak, then tap again.');
+        speak('I did not hear enough speech. Tap the voice button, speak, then tap it again.');
         return;
       }
       setIsTranscribing(true);
@@ -1008,14 +1029,13 @@ export default function MainScreen({ navigation }: Props) {
       audioRecordingRef.current = null;
       await new Promise((resolve) => setTimeout(resolve, 150));
       await resetAudioForPlayback();
+      speak('Transcribing your question.', { preferDevice: true });
 
       if (!uri || !azureTokenRef.current) {
         setIsTranscribing(false);
         if (!uri) speak('Could not read the recording. Please try again.');
         return;
       }
-
-      AccessibilityInfo.announceForAccessibility('Processing speech');
 
       const audioData = await fetch(uri);
       const audioBlob = await audioData.arrayBuffer();
@@ -1036,7 +1056,7 @@ export default function MainScreen({ navigation }: Props) {
       }
     } catch (e) {
       console.error('stopListening error:', e);
-      speak('Voice recognition failed');
+      speak('Voice recognition failed. Tap the voice button and speak again.');
     } finally {
       setIsTranscribing(false);
       isTranscribingRef.current = false;
