@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { aiClient, apiClient } from './client';
 import { withNetworkRetry } from './retry';
 import { withBriefReplyInstruction } from '../utils/briefAiInstruction';
 import { RequestData, NavRoute } from '../types';
@@ -28,9 +28,17 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
       },
     };
     const start = Date.now();
-    const res = await withNetworkRetry(() =>
-      apiClient.post('/text', payload, { timeout: 120_000 })
-    );
+    // Direct upstream first (fast); Render proxy is the fallback so questions
+    // still work if the upstream host has an outage.
+    let res;
+    try {
+      res = await aiClient.post('/text', payload, { timeout: 120_000 });
+    } catch (directError) {
+      console.warn('sendTextRequest: direct AI host failed, falling back to Render', directError);
+      res = await withNetworkRetry(() =>
+        apiClient.post('/text', payload, { timeout: 120_000 })
+      );
+    }
     console.log(`Text request completed in ${Date.now() - start}ms`);
     return res.data as TextResponse;
   } catch (e) {
@@ -41,10 +49,16 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
 export async function sendAudioRequest(text: string): Promise<ArrayBuffer | undefined> {
   if (!text.trim()) return undefined;
   try {
-    const res = await apiClient.post('/audio', { text }, { responseType: 'arraybuffer' });
+    const res = await aiClient.post('/audio', { text }, { responseType: 'arraybuffer' });
     return res.data;
-  } catch (e) {
-    console.error('sendAudioRequest error:', e);
-    throw e;
+  } catch (directError) {
+    console.warn('sendAudioRequest: direct AI host failed, falling back to Render', directError);
+    try {
+      const res = await apiClient.post('/audio', { text }, { responseType: 'arraybuffer' });
+      return res.data;
+    } catch (e) {
+      console.error('sendAudioRequest error:', e);
+      throw e;
+    }
   }
 }

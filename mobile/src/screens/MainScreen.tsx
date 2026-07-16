@@ -1090,6 +1090,9 @@ export default function MainScreen({ navigation }: Props) {
     void track(Events.QuestionAsked, {
       requestId,
       feature,
+      // Prompt text is captured here because Q&A now goes directly to the AI
+      // host for speed — the usage dashboard reads it from telemetry instead.
+      text: question.slice(0, 500),
       length: question.length,
       hasImage: !!capturedImage,
       hasVideo,
@@ -1280,6 +1283,7 @@ export default function MainScreen({ navigation }: Props) {
           latencyMs: Date.now() - requestStartedAt,
           hasRoute: !!structured,
           routeSource: structured ? 'structured' : 'none',
+          output: res.output.slice(0, 500),
           outputLength: res.output.length,
         });
       }

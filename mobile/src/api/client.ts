@@ -113,8 +113,35 @@ export const API_ROOT = resolveApiRoot();
 /** Root used for companion create/ping/share (no `/api` suffix). */
 export const COMPANION_API_ROOT = resolveCompanionApiRoot();
 
+/**
+ * AI upstream called directly for latency-critical routes (Q&A, TTS, speech
+ * token). Metrics/telemetry still go to API_ROOT (our Render server) — this
+ * root deliberately bypasses the legacy-host guardrail because the Render
+ * free tier adds a cold-start hop that made Tap to Ask time out.
+ */
+function resolveAiApiRoot(): string {
+  const custom = readEnvRoot('EXPO_PUBLIC_AI_API_URL');
+  if (custom) return custom;
+  const fromDefault = (defaultApi as { aiApiRoot?: string }).aiApiRoot;
+  if (typeof fromDefault === 'string' && fromDefault.trim().length > 0) {
+    return normalizeApiRoot(fromDefault.trim());
+  }
+  return API_ROOT;
+}
+
+export const AI_API_ROOT = resolveAiApiRoot();
+
 export const apiClient = axios.create({
   baseURL: `${API_ROOT}/api`,
+  timeout: 90_000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+/** Direct client for AI Q&A / audio / speech-token requests. */
+export const aiClient = axios.create({
+  baseURL: `${AI_API_ROOT}/api`,
   timeout: 90_000,
   headers: {
     'Content-Type': 'application/json',

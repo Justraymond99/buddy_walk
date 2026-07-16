@@ -1,31 +1,60 @@
-import { apiClient, API_ROOT } from './client';
-import { OWNED_API_ROOT } from '../config/apiHosts';
+import { aiClient, apiClient } from './client';
 
-export async function getToken(): Promise<{ token: string; region: string }> {
+interface SpeechToken {
+  token: string;
+  region: string;
+}
+
+/**
+ * Azure speech tokens live ~10 minutes. Cache one client-side so Tap to Ask
+ * never waits on a token round-trip (previously it re-fetched through the
+ * Render proxy, which added cold-start latency and timeouts).
+ */
+const TOKEN_TTL_MS = 9 * 60 * 1000;
+
+let cached: { value: SpeechToken; fetchedAt: number } | null = null;
+let inFlight: Promise<SpeechToken> | null = null;
+
+function isFresh(): boolean {
+  return !!cached && Date.now() - cached.fetchedAt < TOKEN_TTL_MS;
+}
+
+async function fetchToken(): Promise<SpeechToken> {
+  // Direct upstream first (fast, no Render cold start), Render as fallback.
   try {
-    const response = await apiClient.get('/token/getToken');
+    const response = await aiClient.get('/token/getToken', { timeout: 15_000 });
     if (response.data?.token && response.data?.region) {
       return { token: response.data.token, region: response.data.region };
     }
   } catch (e) {
-    console.warn('getToken: primary endpoint failed', e);
+    console.warn('getToken: direct AI host failed, falling back to Render', e);
   }
 
-  // Local dev (LAN IP): fall back to the owned production API when Azure keys aren't on the LAN server.
-  const root = API_ROOT.replace(/\/$/, '');
-  if (root !== OWNED_API_ROOT) {
-    try {
-      const response = await fetch(`${OWNED_API_ROOT}/api/token/getToken`);
-      if (response.ok) {
-        const data = (await response.json()) as { token?: string; region?: string };
-        if (data.token && data.region) {
-          return { token: data.token, region: data.region };
-        }
-      }
-    } catch (e) {
-      console.error('getToken: production fallback failed', e);
-    }
+  const response = await apiClient.get('/token/getToken', { timeout: 45_000 });
+  if (response.data?.token && response.data?.region) {
+    return { token: response.data.token, region: response.data.region };
   }
 
   throw new Error('Failed to fetch speech token');
+}
+
+export async function getToken(): Promise<SpeechToken> {
+  if (isFresh()) return cached!.value;
+
+  if (!inFlight) {
+    inFlight = fetchToken()
+      .then((value) => {
+        cached = { value, fetchedAt: Date.now() };
+        return value;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+  }
+  return inFlight;
+}
+
+/** Warm the token cache without blocking the caller (fire on app launch). */
+export function prefetchToken(): void {
+  void getToken().catch(() => {});
 }
