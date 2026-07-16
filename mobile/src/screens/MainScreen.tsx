@@ -36,6 +36,7 @@ import {
   isTrainArrivalQuestion,
 } from '../utils/trainLine';
 import { getToken } from '../api/token';
+import { warmApiBackend } from '../api/retry';
 import { transcribeAudio } from '../api/transcribe';
 import { useAuthSession } from '../navigation/authSession';
 import { RequestData, CustomCoords, RootStackParamList, NavRoute } from '../types';
@@ -307,6 +308,7 @@ export default function MainScreen({ navigation }: Props) {
   }, []);
 
   useEffect(() => {
+    void warmApiBackend();
     void refreshAzureToken();
     const id = setInterval(() => {
       void refreshAzureToken();
@@ -1297,7 +1299,9 @@ export default function MainScreen({ navigation }: Props) {
         setAiResponse('That took too long to answer. The server may be busy. Please try again.');
       } else if (isOffline) {
         notifyNoInternetConnection();
-        setAiResponse('No internet connection.');
+        setAiResponse(
+          'Could not reach the Buddy Walk server. It may be waking up — wait a few seconds and try again.'
+        );
       } else {
         setAiResponse('An error occurred. Please try again.');
       }

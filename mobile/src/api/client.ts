@@ -115,7 +115,7 @@ export const COMPANION_API_ROOT = resolveCompanionApiRoot();
 
 export const apiClient = axios.create({
   baseURL: `${API_ROOT}/api`,
-  timeout: 60000,
+  timeout: 90_000,
   headers: {
     'Content-Type': 'application/json',
   },

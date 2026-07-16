@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { withNetworkRetry } from './retry';
 import { withBriefReplyInstruction } from '../utils/briefAiInstruction';
 import { RequestData, NavRoute } from '../types';
 import { appVersion, getInstallId, platform, sessionId } from '../utils/identity';
@@ -27,7 +28,9 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
       },
     };
     const start = Date.now();
-    const res = await apiClient.post('/text', payload);
+    const res = await withNetworkRetry(() =>
+      apiClient.post('/text', payload, { timeout: 120_000 })
+    );
     console.log(`Text request completed in ${Date.now() - start}ms`);
     return res.data as TextResponse;
   } catch (e) {
