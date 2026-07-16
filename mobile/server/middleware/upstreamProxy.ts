@@ -62,15 +62,20 @@ async function forwardJson(req: Request, res: Response, upstreamPath: string): P
   const startedAt = Date.now();
   const upstreamRoot = getUpstreamApiRoot();
   const url = `${upstreamRoot}${upstreamPath}`;
+  const method = (req.method || 'GET').toUpperCase();
+  // Google frontends (buddywalk.app) reject GET requests that include a body /
+  // Content-Type: application/json with HTTP 400. Only forward a body on
+  // methods that actually carry one.
+  const hasBody = method !== 'GET' && method !== 'HEAD' && req.body !== undefined;
 
   try {
     const upstreamRes = await axios({
-      method: req.method,
+      method,
       url,
-      data: req.body,
+      ...(hasBody ? { data: req.body } : {}),
       headers: {
-        'Content-Type': 'application/json',
         Accept: 'application/json',
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
         ...pickForwardHeaders(req),
       },
       validateStatus: () => true,
