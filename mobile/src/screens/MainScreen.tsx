@@ -41,6 +41,7 @@ import { transcribeAudio } from '../api/transcribe';
 import { useAuthSession } from '../navigation/authSession';
 import { RequestData, CustomCoords, RootStackParamList, NavRoute } from '../types';
 import { expandSavedAliases } from '../utils/savedPlaces';
+import { withLastMetersImageInstruction } from '../utils/briefAiInstruction';
 import { tap, tapMedium, notifySuccess } from '../utils/haptics';
 import { ensureMicrophonePermission } from '../utils/microphonePermission';
 import { prepareAudioForRecording, resetAudioForPlayback } from '../utils/audioSession';
@@ -1234,6 +1235,16 @@ export default function MainScreen({ navigation }: Props) {
           outputLength: mtaDirectAnswer.length,
         });
         return;
+      }
+
+      // Last Meters: a directions question with camera imagery must make the AI
+      // use the image to find the door, not just recite GPS steps. Applied
+      // client-side so it works no matter which host answers the question.
+      const hasAttachedImagery = Array.isArray(imagePayload)
+        ? imagePayload.some(Boolean)
+        : !!imagePayload;
+      if (feature === 'directions' && hasAttachedImagery) {
+        textToSend = withLastMetersImageInstruction(textToSend);
       }
 
       const data: RequestData = {
