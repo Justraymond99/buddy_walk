@@ -9,6 +9,9 @@ import { getSubwayArrivals } from "./mta";
 import { extractTrainLineFromText } from "../../src/utils/trainLine";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
+import fs from "fs";
+import path from "path";
+import sharp from "sharp";
 import {
   appendConversationHistory,
   formatHistoryForPrompt,
@@ -185,6 +188,116 @@ export class OpenAIService {
     } catch (e) {
       console.log(e)
       res.status(500).json({ error: 'Error processing your request' });
+    }
+  }
+
+  // --- LAST METERS NAVIGATION PIPELINE ---
+  async lastMileRequest(ctx: AppContext, lat: number, lng: number, image: string, destination: string) {
+    const { res } = ctx;
+
+    console.log("\n==================================================");
+    console.log("📥 [BACKEND] HIT RECEIVED ON /api/last-mile route!");
+    console.log(`[BACKEND] Destination requested: "${destination}"`);
+    console.log(`[BACKEND] Coordinates: lat=${lat}, lng=${lng}`);
+    console.log(`[BACKEND] Image payload received (Base64 length): ${image?.length}`);
+    console.log("==================================================");
+
+    try {
+      const debugPhotoPath = path.resolve(__dirname, "../../debug-user-photo.jpg");
+      const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+      fs.writeFileSync(debugPhotoPath, base64Data, 'base64');
+      console.log(`📸 User photo saved to: ${debugPhotoPath}`);
+    } catch (err) {
+      console.error("Error saving debug photo:", err);
+    }
+
+    try {
+      const tiles = await processEightDirectionTiles(lat, lng);
+      const panoramaImagesMsg: any[] = [];
+      tiles.forEach((tile) => {
+        panoramaImagesMsg.push({ type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` });
+        panoramaImagesMsg.push({ type: "image_url", image_url: { url: tile.base64 } });
+      });
+
+      console.log(`\n🤖 Running 3-Step Architecture for target: [${destination}]...`);
+
+      // ==========================================
+      // STEP 1: FIND USER HEADING (User Photo + Panorama)
+      // ==========================================
+      console.log("   ➤ Step 1: Locating User's Current View...");
+      const step1Response = await this.client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "You will receive 8 panorama images explicitly labeled with their degrees (0°, 45°, etc.), followed by a user's photo. Identify which panorama segment visually matches the user's photo. Reply ONLY with the integer number of the degrees (e.g., 315)." },
+          { role: "user", content: [...panoramaImagesMsg, { type: "text", text: "--- USER'S CURRENT PHOTO ---" }, { type: "image_url", image_url: { url: image } }] }
+        ],
+        temperature: 0.0
+      });
+      const currentHeading = parseInt(step1Response.choices[0].message.content?.trim() || "0");
+
+      // ==========================================
+      // STEP 2: FIND TARGET HEADING (Text Name + Panorama ONLY - NO USER PHOTO)
+      // ==========================================
+      console.log("   ➤ Step 2: Locating Target Store...");
+      const step2Response = await this.client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: `You will receive 8 panorama images explicitly labeled with their degrees. Find the storefront or sign for "${destination}". Reply ONLY with the integer number of the degrees where it is located (e.g., 45).` },
+          { role: "user", content: panoramaImagesMsg }
+        ],
+        temperature: 0.0
+      });
+      const targetHeading = parseInt(step2Response.choices[0].message.content?.trim() || "0");
+
+      // ==========================================
+      // TYPESCRIPT MATH CALCULATION (Bulletproof Turn Logic)
+      // ==========================================
+      let turnInstruction = "";
+      if (currentHeading === targetHeading) {
+        turnInstruction = "No turn needed. Move straight forward.";
+      } else {
+        let diff = targetHeading - currentHeading;
+        if (diff < -180) diff += 360;
+        if (diff > 180) diff -= 360;
+        
+        const direction = diff > 0 ? "RIGHT" : "LEFT";
+        const degrees = Math.abs(diff);
+        turnInstruction = `Turn ${degrees}° to your ${direction}.`;
+      }
+
+      // ==========================================
+      // STEP 3: ACCESSIBLE GUIDANCE & LANDMARKS
+      // ==========================================
+      console.log("   ➤ Step 3: Generating Accessible Guidance...");
+      const step3Response = await this.client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: `You are an orientation assistant for the blind. 
+          The system has mathematically calculated the required action: "${turnInstruction}".
+          Your job is to look at the user's current photo and provide physical, tactile landmarks to help them execute this instruction safely. 
+          Rule 1: Double-check Left vs Right in the photo.
+          Rule 2: Mention physical objects like trash cans, steps, or building corners. Do NOT mention elevated text signs.
+          Rule 3: Keep it conversational but concise.` },
+          { role: "user", content: [{ type: "image_url", image_url: { url: image } }] }
+        ],
+        temperature: 0.1
+      });
+
+      const landmarksGuidance = step3Response.choices[0].message.content;
+
+      // --- FINAL OUTPUT FOR TERMINAL ---
+      console.log("\n💬 AI 3-Step Navigation Output:");
+      console.log(`- 1st Match (Current View): The user is facing ${currentHeading}°.`);
+      console.log(`- 2nd Match (Target Store): The target '${destination}' is located at ${targetHeading}°.`);
+      console.log(`- 3rd Step (Guidance): ${turnInstruction} Landmarks: ${landmarksGuidance}`);
+      console.log("=========================================\n");
+
+      const finalOutput = `${turnInstruction} Landmarks: ${landmarksGuidance}`;
+      res.status(200).json({ output: finalOutput });
+
+    } catch (error: any) {
+      console.error("❌ OpenAI Request failed:", error.message);
+      res.status(500).json({ error: "Last meters calculation failed." });
     }
   }
 
@@ -690,4 +803,48 @@ export class OpenAIService {
     }
   }
 
+}
+
+function createOverlaySvg(heading: number, segmentIndex: number): Buffer {
+  const svg = `
+    <svg width="640" height="640">
+      <rect x="0" y="0" width="10" height="640" fill="#000000" />
+      <rect x="20" y="20" width="220" height="45" rx="8" fill="rgba(0, 0, 0, 0.75)" />
+      <text x="30" y="50" font-family="Arial" font-size="22" font-weight="bold" fill="#00FFCC">
+        SEG ${segmentIndex}: ${heading}°
+      </text>
+    </svg>
+  `;
+  return Buffer.from(svg);
+}
+
+async function processEightDirectionTiles(lat: number, lng: number): Promise<{ heading: number; base64: string }[]> {
+  console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
+  const headings = [0, 45, 90, 135, 180, 225, 270, 315];
+  const tilesData = [];
+  const rawBuffers: Buffer[] = [];
+  const apiKey = process.env.GOOGLE_API_KEY;
+
+  for (const hd of headings) {
+    const url = `https://maps.googleapis.com/maps/api/streetview?size=640x640&location=${lat},${lng}&heading=${hd}&fov=45&pitch=0&source=outdoor&key=${apiKey}`;
+    const response = await axios.get(url, { responseType: "arraybuffer" });
+    const buffer = Buffer.from(response.data);
+    rawBuffers.push(buffer);
+    tilesData.push({ heading: hd, base64: `data:image/jpeg;base64,${buffer.toString("base64")}` });
+  }
+
+  const compositeLayers: sharp.OverlayOptions[] = [];
+  rawBuffers.forEach((buffer, index) => {
+    const leftOffset = index * 640;
+    compositeLayers.push({ input: buffer, left: leftOffset, top: 0 });
+    compositeLayers.push({ input: createOverlaySvg(headings[index], index + 1), left: leftOffset, top: 0 });
+  });
+
+  const outputPath = path.resolve(__dirname, "../../debug-panorama-360.jpg");
+  await sharp({ create: { width: 5120, height: 640, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+    .composite(compositeLayers)
+    .toFile(outputPath);
+  console.log(`✅ Debug panorama saved to: ${outputPath}`);
+
+  return tilesData;
 }
