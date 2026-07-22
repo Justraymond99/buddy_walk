@@ -48,4 +48,16 @@ export class OpenAIController {
     }
     await getPanoramaData({req, res}, address);
   }
+  
+  async lastMileRequest(req: Request, res: Response) {
+    try {
+      const { lat, lng, image, destination } = req.body;
+      if (!lat || !lng || !image || !destination) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+      await openAIService.lastMileRequest({ req, res }, lat, lng, image, destination);
+    } catch (error) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
 }

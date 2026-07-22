@@ -25,7 +25,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import CallAccessARideButton from '../components/CallAccessARideButton';
 import FeedbackModal from '../components/FeedbackModal';
 import AnswerFeedback from '../components/AnswerFeedback';
-import { sendTextRequest } from '../api/openAi';
+import { sendTextRequest, sendLastMileRequest } from '../api/openAi';
 import { fetchMtaArrivals } from '../api/mta';
 import { createChatLog, addChatToChatLog } from '../api/chatLog';
 import { track, Events } from '../api/telemetry';
@@ -1066,6 +1066,58 @@ export default function MainScreen({ navigation }: Props) {
     }
   }
 
+// ─── Last Meters Navigation Feature ──────────────────────────────────────────
+
+  async function handleLastMileNavigation() {
+    if (loading) return;
+
+    const rawDestination = userInput.trim();
+    if (!rawDestination) {
+      speak('Please enter the name of the store or destination first.', { preferDevice: true });
+      return;
+    }
+    if (!capturedImage) {
+      speak('Please take a photo of your surroundings first.', { preferDevice: true });
+      return;
+    }
+
+    setLoading(true);
+    void stopSpeaking();
+    AccessibilityInfo.announceForAccessibility('Calculating precise last meters navigation. This may take a moment.');
+
+    try {
+      let loc = locationRef.current;
+      if (!loc) {
+        loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        locationRef.current = loc;
+      }
+
+      const data = await sendLastMileRequest({
+        lat: loc.coords.latitude,
+        lng: loc.coords.longitude,
+        image: capturedImage,
+        destination: rawDestination
+      });
+
+      if (data.output) {
+        setAiResponse(data.output);
+        speak(data.output, { preferDevice: true });
+        
+        setUserInput('');
+        setCapturedImage(null);
+        cameraReadyRef.current = false;
+        void track(Events.AnswerReceived, { feature: 'last_mile' });
+      }
+    } catch (e) {
+      console.error('Last Meters Error:', e);
+      const errMsg = 'Error calculating last meters navigation. Please try again.';
+      setAiResponse(errMsg);
+      speak(errMsg, { preferDevice: true });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // ─── Submit to backend ────────────────────────────────────────────────────
 
   async function handleSubmit(questionOverride?: string) {
@@ -1565,6 +1617,34 @@ export default function MainScreen({ navigation }: Props) {
           >
             <Text style={styles.submitLabel}>Submit</Text>
           </Pressable>
+
+          {/* New Last Meters Button */}
+          <Pressable
+            onPressIn={() => tapMedium()}
+            onPress={() => void handleLastMileNavigation()}
+            style={({ pressed }) => [
+              styles.submitButton, 
+              pressed && styles.submitButtonPressed, 
+              { backgroundColor: '#00FFCC', marginTop: 4 } // Added top margin for spacing, custom color
+            ]}
+            accessibilityLabel="Calculate precise last meters navigation"
+            accessibilityRole="button"
+            disabled={loading}
+          >
+            <Text style={styles.submitLabel}>Last Meters</Text>
+          </Pressable>
+
+          {loading && (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#f8f8ff" />
+              <Text style={styles.loadingText}>Loading response...</Text>
+              {displayQuestion ? (
+                <Text style={styles.pendingQuestion} accessibilityRole="text">
+                  Your question: {displayQuestion}
+                </Text>
+              ) : null}
+            </View>
+          )}
 
           {loading && (
             <View style={styles.loadingContainer}>

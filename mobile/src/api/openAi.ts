@@ -46,6 +46,34 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
     throw e;
   }
 }
+export async function sendLastMileRequest(data: { lat: number; lng: number; image: string; destination: string }) {
+  const targetUrl = 'http://100.92.99.101:8000/api/last-mile';
+  console.log(`[FRONTEND] Sending Last-Mile request to: ${targetUrl}`);
+  console.log(`[FRONTEND] Payload size - Image length: ${data.image?.length}, Destination: ${data.destination}`);
+
+  try {
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    console.log(`[FRONTEND] Response status: ${response.status} ${response.statusText}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[FRONTEND] Server error body:`, errorText);
+      throw new Error(`Server responded with status ${response.status}`);
+    }
+
+    const jsonResponse = await response.json();
+    console.log(`[FRONTEND] Success! Response received.`);
+    return jsonResponse;
+  } catch (error: any) {
+    console.error(`[FRONTEND CATCH] Network request failed details:`, error.message);
+    throw error;
+  }
+}
 export async function sendAudioRequest(text: string): Promise<ArrayBuffer | undefined> {
   if (!text.trim()) return undefined;
   try {
