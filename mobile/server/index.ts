@@ -10,14 +10,18 @@ import companionRoute from "./routes/companion"
 import telemetryRoute from "./routes/telemetry"
 import feedbackRoute from "./routes/feedback"
 import mtaRoute from "./routes/mta"
+import lastMileTestLogRoute from "./routes/lastMileTestLog"
 import mongoose from "mongoose";
 import {databaseLink, config} from "./database";
 import { setCompanionMemoryStore } from "./database/companionStoreMode";
 import { describeServerMode, isZeroConfigMode } from "./config/serverMode";
 import { mountUpstreamProxy } from "./middleware/upstreamProxy";
 import { isMongoConnected } from "./database/usageStore";
+import { OpenAIController } from "./controllers/openAI";
 
 dotenv.config();
+
+const openAIController = new OpenAIController();
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
@@ -78,6 +82,11 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 
   if (zeroConfig) {
     mountUpstreamProxy(app);
+    // Last meters is new and requires local OpenAI + Google Maps keys —
+    // keep the route on this host even when other AI routes are proxied.
+    app.post('/api/last-mile', (req, res) => {
+      void openAIController.lastMileRequest(req, res);
+    });
   } else {
     app.use("/api", openAIRoute)
     app.use("/api/token", tokenRoute)
@@ -88,6 +97,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   app.use("/api/companion", companionRoute)
   app.use("/api/telemetry", telemetryRoute)
   app.use("/api/feedback", feedbackRoute)
+  app.use("/api/last-mile-tests", lastMileTestLogRoute)
 
   app.get('/api/health', (_req, res) => {
     const mode = describeServerMode();
@@ -164,6 +174,30 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     // JSON.stringify makes the value safe to embed in the page's script tag.
     const token = String(req.query.token || '').replace(/[^a-zA-Z0-9_\-.+/=]/g, '');
     const html = usageViewerTemplate.replace("'__ADMIN_TOKEN__'", JSON.stringify(token));
+    res.set('Cache-Control', 'no-store');
+    res.type('html').send(html);
+  });
+
+  const lastMileTestsCandidates = [
+    path.join(__dirname, 'views', 'lastMileTests.html'),
+    path.join(__dirname, '..', 'views', 'lastMileTests.html'),
+    path.join(__dirname, '..', 'server', 'views', 'lastMileTests.html'),
+  ];
+  let lastMileTestsTemplate = '';
+  for (const candidate of lastMileTestsCandidates) {
+    if (fs.existsSync(candidate)) {
+      lastMileTestsTemplate = fs.readFileSync(candidate, 'utf8');
+      break;
+    }
+  }
+
+  app.get('/last-mile-tests', (req, res) => {
+    if (!lastMileTestsTemplate) {
+      res.status(500).send('Last Meters test dashboard is not available right now.');
+      return;
+    }
+    const token = String(req.query.token || '').replace(/[^a-zA-Z0-9_\-.+/=]/g, '');
+    const html = lastMileTestsTemplate.replace("'__ADMIN_TOKEN__'", JSON.stringify(token));
     res.set('Cache-Control', 'no-store');
     res.type('html').send(html);
   });

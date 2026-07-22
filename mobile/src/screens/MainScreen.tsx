@@ -1618,14 +1618,13 @@ export default function MainScreen({ navigation }: Props) {
             <Text style={styles.submitLabel}>Submit</Text>
           </Pressable>
 
-          {/* New Last Meters Button */}
           <Pressable
             onPressIn={() => tapMedium()}
             onPress={() => void handleLastMileNavigation()}
             style={({ pressed }) => [
-              styles.submitButton, 
-              pressed && styles.submitButtonPressed, 
-              { backgroundColor: '#00FFCC', marginTop: 4 } // Added top margin for spacing, custom color
+              styles.submitButton,
+              pressed && styles.submitButtonPressed,
+              { backgroundColor: '#00FFCC', marginTop: 4 },
             ]}
             accessibilityLabel="Calculate precise last meters navigation"
             accessibilityRole="button"
@@ -1633,18 +1632,6 @@ export default function MainScreen({ navigation }: Props) {
           >
             <Text style={styles.submitLabel}>Last Meters</Text>
           </Pressable>
-
-          {loading && (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#f8f8ff" />
-              <Text style={styles.loadingText}>Loading response...</Text>
-              {displayQuestion ? (
-                <Text style={styles.pendingQuestion} accessibilityRole="text">
-                  Your question: {displayQuestion}
-                </Text>
-              ) : null}
-            </View>
-          )}
 
           {loading && (
             <View style={styles.loadingContainer}>

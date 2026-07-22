@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import { ChatCompletionContentPartImage, ChatCompletionContentPartText } from "openai/resources";
 import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { aiRequestLogService } from "./aiRequestLog";
+import { lastMileTestLogService } from "./lastMileTestLog";
 import { getSubwayArrivals } from "./mta";
 import { extractTrainLineFromText } from "../../src/utils/trainLine";
 import { getNearbyFeatures } from "./features";
@@ -194,6 +195,17 @@ export class OpenAIService {
   // --- LAST METERS NAVIGATION PIPELINE ---
   async lastMileRequest(ctx: AppContext, lat: number, lng: number, image: string, destination: string) {
     const { res } = ctx;
+    const startedAt = Date.now();
+    const testSteps: {
+      name: string;
+      prompt: string;
+      response?: string;
+      parsedHeading?: number;
+      model: string;
+      success: boolean;
+      error?: string;
+      tokenCount?: number;
+    }[] = [];
 
     console.log("\n==================================================");
     console.log("📥 [BACKEND] HIT RECEIVED ON /api/last-mile route!");
@@ -213,6 +225,7 @@ export class OpenAIService {
 
     try {
       const tiles = await processEightDirectionTiles(lat, lng);
+      const panoramaPhoto = await buildPanoramaDebugImage(tiles);
       const panoramaImagesMsg: any[] = [];
       tiles.forEach((tile) => {
         panoramaImagesMsg.push({ type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` });
@@ -225,29 +238,51 @@ export class OpenAIService {
       // STEP 1: FIND USER HEADING (User Photo + Panorama)
       // ==========================================
       console.log("   ➤ Step 1: Locating User's Current View...");
+      const step1Prompt = "You will receive 8 panorama images explicitly labeled with their degrees (0°, 45°, etc.), followed by a user's photo. Identify which panorama segment visually matches the user's photo. Reply ONLY with the integer number of the degrees (e.g., 315).";
       const step1Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: "You will receive 8 panorama images explicitly labeled with their degrees (0°, 45°, etc.), followed by a user's photo. Identify which panorama segment visually matches the user's photo. Reply ONLY with the integer number of the degrees (e.g., 315)." },
+          { role: "system", content: step1Prompt },
           { role: "user", content: [...panoramaImagesMsg, { type: "text", text: "--- USER'S CURRENT PHOTO ---" }, { type: "image_url", image_url: { url: image } }] }
         ],
         temperature: 0.0
       });
-      const currentHeading = parseInt(step1Response.choices[0].message.content?.trim() || "0");
+      const step1Text = step1Response.choices[0].message.content?.trim() || "";
+      const currentHeading = parseInt(step1Text || "0");
+      testSteps.push({
+        name: "current_view_match",
+        prompt: step1Prompt,
+        response: step1Text,
+        parsedHeading: currentHeading,
+        model: "gpt-4o-mini",
+        success: Number.isFinite(currentHeading),
+        tokenCount: step1Response.usage?.total_tokens,
+      });
 
       // ==========================================
       // STEP 2: FIND TARGET HEADING (Text Name + Panorama ONLY - NO USER PHOTO)
       // ==========================================
       console.log("   ➤ Step 2: Locating Target Store...");
+      const step2Prompt = `You will receive 8 panorama images explicitly labeled with their degrees. Find the storefront or sign for "${destination}". Reply ONLY with the integer number of the degrees where it is located (e.g., 45).`;
       const step2Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: `You will receive 8 panorama images explicitly labeled with their degrees. Find the storefront or sign for "${destination}". Reply ONLY with the integer number of the degrees where it is located (e.g., 45).` },
+          { role: "system", content: step2Prompt },
           { role: "user", content: panoramaImagesMsg }
         ],
         temperature: 0.0
       });
-      const targetHeading = parseInt(step2Response.choices[0].message.content?.trim() || "0");
+      const step2Text = step2Response.choices[0].message.content?.trim() || "";
+      const targetHeading = parseInt(step2Text || "0");
+      testSteps.push({
+        name: "target_store_match",
+        prompt: step2Prompt,
+        response: step2Text,
+        parsedHeading: targetHeading,
+        model: "gpt-4o-mini",
+        success: Number.isFinite(targetHeading),
+        tokenCount: step2Response.usage?.total_tokens,
+      });
 
       // ==========================================
       // TYPESCRIPT MATH CALCULATION (Bulletproof Turn Logic)
@@ -269,21 +304,30 @@ export class OpenAIService {
       // STEP 3: ACCESSIBLE GUIDANCE & LANDMARKS
       // ==========================================
       console.log("   ➤ Step 3: Generating Accessible Guidance...");
-      const step3Response = await this.client.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: `You are an orientation assistant for the blind. 
+      const step3Prompt = `You are an orientation assistant for the blind.
           The system has mathematically calculated the required action: "${turnInstruction}".
           Your job is to look at the user's current photo and provide physical, tactile landmarks to help them execute this instruction safely. 
           Rule 1: Double-check Left vs Right in the photo.
           Rule 2: Mention physical objects like trash cans, steps, or building corners. Do NOT mention elevated text signs.
-          Rule 3: Keep it conversational but concise.` },
+          Rule 3: Keep it conversational but concise.`;
+      const step3Response = await this.client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: step3Prompt },
           { role: "user", content: [{ type: "image_url", image_url: { url: image } }] }
         ],
         temperature: 0.1
       });
 
       const landmarksGuidance = step3Response.choices[0].message.content;
+      testSteps.push({
+        name: "accessible_guidance",
+        prompt: step3Prompt,
+        response: landmarksGuidance ?? "",
+        model: "gpt-4o-mini",
+        success: !!landmarksGuidance,
+        tokenCount: step3Response.usage?.total_tokens,
+      });
 
       // --- FINAL OUTPUT FOR TERMINAL ---
       console.log("\n💬 AI 3-Step Navigation Output:");
@@ -293,10 +337,36 @@ export class OpenAIService {
       console.log("=========================================\n");
 
       const finalOutput = `${turnInstruction} Landmarks: ${landmarksGuidance}`;
-      res.status(200).json({ output: finalOutput });
+      const testLogId = await lastMileTestLogService.record({
+        destination,
+        lat,
+        lng,
+        userPhoto: await resizeDataUrlImage(image, 1024, 76),
+        panoramaPhoto,
+        panoramaHeadings: tiles.map((tile) => tile.heading),
+        currentHeading,
+        targetHeading,
+        turnInstruction,
+        finalOutput,
+        steps: testSteps,
+        success: true,
+        latencyMs: Date.now() - startedAt,
+      });
+      res.status(200).json({ output: finalOutput, testLogId });
 
     } catch (error: any) {
       console.error("❌ OpenAI Request failed:", error.message);
+      await lastMileTestLogService.record({
+        destination,
+        lat,
+        lng,
+        userPhoto: await resizeDataUrlImage(image, 1024, 76),
+        panoramaHeadings: [],
+        steps: testSteps,
+        success: false,
+        error: error?.message ?? "Last meters calculation failed.",
+        latencyMs: Date.now() - startedAt,
+      });
       res.status(500).json({ error: "Last meters calculation failed." });
     }
   }
@@ -816,6 +886,42 @@ function createOverlaySvg(heading: number, segmentIndex: number): Buffer {
     </svg>
   `;
   return Buffer.from(svg);
+}
+
+async function buildPanoramaDebugImage(tiles: { heading: number; base64: string }[]): Promise<string> {
+  const compositeLayers: sharp.OverlayOptions[] = [];
+  tiles.forEach((tile, index) => {
+    const leftOffset = index * 640;
+    const imageBuffer = Buffer.from(
+      tile.base64.replace(/^data:image\/\w+;base64,/, ""),
+      "base64"
+    );
+    compositeLayers.push({ input: imageBuffer, left: leftOffset, top: 0 });
+    compositeLayers.push({ input: createOverlaySvg(tile.heading, index + 1), left: leftOffset, top: 0 });
+  });
+
+  const outputBuffer = await sharp({
+    create: { width: 5120, height: 640, channels: 3, background: { r: 0, g: 0, b: 0 } },
+  })
+    .composite(compositeLayers)
+    .jpeg({ quality: 72 })
+    .toBuffer();
+
+  return `data:image/jpeg;base64,${outputBuffer.toString("base64")}`;
+}
+
+async function resizeDataUrlImage(dataUrl: string, maxWidth: number, quality: number): Promise<string> {
+  try {
+    const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+    const outputBuffer = await sharp(Buffer.from(base64Data, "base64"))
+      .resize({ width: maxWidth, withoutEnlargement: true })
+      .jpeg({ quality })
+      .toBuffer();
+    return `data:image/jpeg;base64,${outputBuffer.toString("base64")}`;
+  } catch (error) {
+    console.error("[LastMileTestLog] failed to compress user photo for storage:", error);
+    return dataUrl;
+  }
 }
 
 async function processEightDirectionTiles(lat: number, lng: number): Promise<{ heading: number; base64: string }[]> {
