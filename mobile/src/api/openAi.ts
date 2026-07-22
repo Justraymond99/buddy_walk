@@ -52,44 +52,15 @@ export async function sendLastMileRequest(data: {
   image: string;
   destination: string;
 }): Promise<{ output?: string; error?: string; testLogId?: string }> {
-  // Prefer our API so Last Meters field-test logs are saved when that host has
-  // OpenAI + Street View keys. If that route is unavailable, try Dylan's AI
-  // host, then degrade to the standard photo Q&A route instead of failing.
+  // Last Meters runs on our backend because it needs the existing server-side
+  // OpenAI and Google Maps keys, plus the field-test logging database.
   try {
-    let res;
-    try {
-      res = await withNetworkRetry(() =>
-        apiClient.post('/last-mile', data, { timeout: 180_000 })
-      );
-    } catch (apiError) {
-      console.warn('sendLastMileRequest: primary API failed, falling back to AI host', apiError);
-      res = await aiClient.post('/last-mile', data, { timeout: 180_000 });
-    }
+    const res = await withNetworkRetry(() =>
+      apiClient.post('/last-mile', data, { timeout: 180_000 })
+    );
     return res.data as { output?: string; error?: string; testLogId?: string };
   } catch (error) {
     console.error('sendLastMileRequest error:', error);
-    const fallback = await sendTextRequest({
-      text:
-        `Last meters navigation to ${data.destination}. ` +
-        'Use my current photo and location to give one short, safe orientation instruction. ' +
-        'If you are not confident, say that clearly and ask me to retake the photo.',
-      image: [data.image],
-      coords: {
-        latitude: data.lat,
-        longitude: data.lng,
-        accuracy: 0,
-      },
-      analytics: {
-        feature: 'last_meters_fallback',
-      },
-    });
-    if (fallback?.output) {
-      return {
-        output:
-          'Last Meters test mode is not available on this server, so I used the photo-based fallback. ' +
-          fallback.output,
-      };
-    }
     throw error;
   }
 }
