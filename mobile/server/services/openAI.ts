@@ -218,9 +218,19 @@ export class OpenAIService {
       activeStage = "panorama assembly";
       const panoramaPhoto = await buildPanoramaDebugImage(tiles);
       const panoramaImagesMsg: any[] = [];
+      const panoramaOverviewMsg: any[] = [];
       tiles.forEach((tile) => {
-        panoramaImagesMsg.push({ type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` });
-        panoramaImagesMsg.push({ type: "image_url", image_url: { url: tile.base64 } });
+        const label = { type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` };
+        panoramaOverviewMsg.push(label);
+        panoramaOverviewMsg.push({
+          type: "image_url",
+          image_url: { url: tile.base64, detail: "low" },
+        });
+        panoramaImagesMsg.push(label);
+        panoramaImagesMsg.push({
+          type: "image_url",
+          image_url: { url: tile.base64, detail: "high" },
+        });
       });
 
       console.log(`\n🤖 Running 3-Step Architecture for target: [${destination}]...`);
@@ -235,9 +245,17 @@ export class OpenAIService {
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: step1Prompt },
-          { role: "user", content: [...panoramaImagesMsg, { type: "text", text: "--- USER'S CURRENT PHOTO ---" }, { type: "image_url", image_url: { url: image } }] }
+          {
+            role: "user",
+            content: [
+              ...panoramaOverviewMsg,
+              { type: "text", text: "--- USER'S CURRENT PHOTO ---" },
+              { type: "image_url", image_url: { url: image, detail: "low" } },
+            ],
+          }
         ],
-        temperature: 0.0
+        temperature: 0.0,
+        max_tokens: 12,
       });
       const step1Text = step1Response.choices[0].message.content?.trim() || "";
       const currentHeading = parseInt(step1Text || "0");
@@ -263,7 +281,8 @@ export class OpenAIService {
           { role: "system", content: step2Prompt },
           { role: "user", content: panoramaImagesMsg }
         ],
-        temperature: 0.0
+        temperature: 0.0,
+        max_tokens: 12,
       });
       const step2Text = step2Response.choices[0].message.content?.trim() || "";
       const targetHeading = parseInt(step2Text || "0");
@@ -310,7 +329,8 @@ export class OpenAIService {
           { role: "system", content: step3Prompt },
           { role: "user", content: [{ type: "image_url", image_url: { url: image } }] }
         ],
-        temperature: 0.1
+        temperature: 0.1,
+        max_tokens: 140,
       });
 
       const landmarksGuidance = step3Response.choices[0].message.content;
