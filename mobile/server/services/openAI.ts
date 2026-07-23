@@ -18,12 +18,27 @@ import {
 } from "../utils/conversationHistory";
 import {
   buildLastMileTurnInstruction,
+  parseDestinationVisibility,
   parseLastMileHeading,
+  snapLastMileHeading,
 } from "../utils/lastMileNavigation";
+import {
+  normalizeNearbyPlaceQuery,
+  selectNearbyPlaceCandidate,
+} from "../utils/nearbyPlaces";
 dotenv.config();
 
+function getGoogleMapsApiKey(): string {
+  const apiKey =
+    process.env.GOOGLE_MAPS_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Google Maps API key is not configured on the server.");
+  }
+  return apiKey;
+}
+
 async function geocodeCoordinates(latitude: number, longitude: number) {
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${process.env.GOOGLE_API_KEY}`;
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${getGoogleMapsApiKey()}`;
   try {
     const response = await axios.get(url);
     //console.log('Google Geocoding API response:', response.data);
@@ -79,6 +94,114 @@ function calculateHeading(from: LatLng, to: LatLng): number {
   return (heading + 360) % 360;
 }
 
+interface DestinationStreetViewReference {
+  photo: string;
+  date?: string;
+  status: string;
+  placeName: string;
+  placeAddress: string;
+  targetHeading: number;
+}
+
+async function getDestinationStreetViewReference(
+  lat: number,
+  lng: number,
+  destination: string
+): Promise<DestinationStreetViewReference> {
+  const nearbyQuery = normalizeNearbyPlaceQuery(destination);
+  if (!nearbyQuery) {
+    throw new Error("Destination name was empty after normalization.");
+  }
+
+  const locationResponse = await axios.get(
+    "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+    {
+      params: {
+        location: `${lat},${lng}`,
+        rankby: "distance",
+        keyword: nearbyQuery,
+        key: getGoogleMapsApiKey(),
+      },
+      timeout: 20_000,
+    }
+  );
+  if (!["OK", "ZERO_RESULTS"].includes(locationResponse.data.status)) {
+    throw new Error(`Nearby Places returned ${locationResponse.data.status}.`);
+  }
+
+  const nearbyPlace = selectNearbyPlaceCandidate(
+    locationResponse.data.results ?? [],
+    { lat, lng },
+    2_000
+  );
+  const placeLocation = nearbyPlace?.geometry?.location;
+  if (
+    !nearbyPlace?.place_id ||
+    typeof placeLocation?.lat !== "number" ||
+    typeof placeLocation.lng !== "number"
+  ) {
+    throw new Error(`No verified nearby ${nearbyQuery} was found within 2 kilometers.`);
+  }
+  if (nearbyPlace.distanceMeters < 3) {
+    throw new Error("Destination coordinates are too close to determine an entrance direction.");
+  }
+
+  const metadataResponse = await axios.get<StreetViewMetadata>(
+    "https://maps.googleapis.com/maps/api/streetview/metadata",
+    {
+      params: {
+        location: `${placeLocation.lat},${placeLocation.lng}`,
+        radius: 100,
+        source: "outdoor",
+        key: getGoogleMapsApiKey(),
+      },
+      timeout: 20_000,
+    }
+  );
+  const metadata = metadataResponse.data;
+  if (metadata.status !== "OK" || !metadata.location) {
+    throw new Error(`Destination Street View metadata returned ${metadata.status}.`);
+  }
+
+  const cameraHeading = calculateHeading(metadata.location, {
+    lat: placeLocation.lat,
+    lng: placeLocation.lng,
+  });
+  const imageResponse = await axios.get(
+    "https://maps.googleapis.com/maps/api/streetview",
+    {
+      params: {
+        size: "640x640",
+        ...(metadata.pano_id
+          ? { pano: metadata.pano_id }
+          : { location: `${placeLocation.lat},${placeLocation.lng}` }),
+        heading: cameraHeading.toFixed(1),
+        fov: 80,
+        pitch: 0,
+        source: "outdoor",
+        return_error_code: true,
+        key: getGoogleMapsApiKey(),
+      },
+      responseType: "arraybuffer",
+      timeout: 20_000,
+    }
+  );
+
+  return {
+    photo: `data:image/jpeg;base64,${Buffer.from(imageResponse.data).toString("base64")}`,
+    date: metadata.date,
+    status: metadata.status,
+    placeName: nearbyPlace.name || nearbyQuery,
+    placeAddress: nearbyPlace.vicinity || nearbyPlace.name || nearbyQuery,
+    targetHeading: snapLastMileHeading(
+      calculateHeading(
+        { lat, lng },
+        { lat: placeLocation.lat, lng: placeLocation.lng }
+      )
+    ),
+  };
+}
+
 // --- 4. Main Logic ---
 async function getStreetViewWithHeading(address: string): Promise<string | null> {
   try {
@@ -87,7 +210,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     // Step A: Geocode Address (Find the House)
     const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
       address
-    )}&key=${process.env.GOOGLE_API_KEY}`;
+    )}&key=${getGoogleMapsApiKey()}`;
     
     const geoRes = await fetch(geoUrl);
     const geoData = (await geoRes.json()) as GeocodeResponse;
@@ -101,7 +224,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
 
     // Step B: Find Nearest Panorama (Find the Car)
     // The Metadata API returns the specific lat/lng where the car was standing
-    const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${houseLoc.lat},${houseLoc.lng}&key=${process.env.GOOGLE_API_KEY}`;
+    const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${houseLoc.lat},${houseLoc.lng}&key=${getGoogleMapsApiKey()}`;
     
     const metaRes = await fetch(metaUrl);
     const metaData = (await metaRes.json()) as StreetViewMetadataResponse;
@@ -118,7 +241,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     console.log(`   Calculated Heading: ${heading.toFixed(2)}°`);
 
     // Step D: Construct Final URL
-    const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${process.env.GOOGLE_API_KEY}`;
+    const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${getGoogleMapsApiKey()}`;
     
     console.log(`\n✅ Final Image URL:\n${finalUrl}`);
     return finalUrl;
@@ -203,6 +326,12 @@ export class OpenAIService {
     let panoramaDate: string | undefined;
     let panoramaStatus: string | undefined;
     let panoramaHeadings: number[] = [];
+    let destinationPhoto: string | undefined;
+    let destinationPhotoDate: string | undefined;
+    let destinationPhotoStatus: string | undefined;
+    let destinationPlaceName: string | undefined;
+    let destinationPlaceAddress: string | undefined;
+    let destinationReferenceUsed = false;
     const testSteps: {
       name: string;
       prompt: string;
@@ -289,6 +418,12 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           panoramaDate,
           panoramaStatus,
           panoramaHeadings,
+          destinationPhoto,
+          destinationPhotoDate,
+          destinationPhotoStatus,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationReferenceUsed,
           finalOutput,
           steps: testSteps,
           success: false,
@@ -330,7 +465,7 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
         max_tokens: 12,
       });
       const step2Text = step2Response.choices[0].message.content?.trim() || "";
-      const targetHeading = parseLastMileHeading(step2Text);
+      let targetHeading = parseLastMileHeading(step2Text);
       testSteps.push({
         name: "target_store_match",
         prompt: step2Prompt,
@@ -341,6 +476,78 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
         error: targetHeading === null ? "Destination was not visible in the panorama." : undefined,
         tokenCount: step2Response.usage?.total_tokens,
       });
+      if (targetHeading === null) {
+        activeStage = "destination reference lookup";
+        console.log("   Step 2B: Fetching a destination-focused Street View reference...");
+        const referencePrompt =
+          `Fetch a Street View image aimed at the verified nearby location for "${destination}", ` +
+          "then confirm the destination in that image.";
+        try {
+          const reference = await getDestinationStreetViewReference(
+            lat,
+            lng,
+            destination
+          );
+          destinationPhoto = reference.photo;
+          destinationPhotoDate = reference.date;
+          destinationPhotoStatus = reference.status;
+          destinationPlaceName = reference.placeName;
+          destinationPlaceAddress = reference.placeAddress;
+
+          activeStage = "destination reference verification";
+          const destinationDateContext = reference.date
+            ? `Street View reports that this image was captured in ${reference.date}.`
+            : "Street View did not provide a capture date for this image.";
+          const step2bPrompt = `You will receive a destination-focused Street View image for the verified nearby place "${reference.placeName}" at "${reference.placeAddress}". ${destinationDateContext}
+Reply with exactly one token: VISIBLE or NOT_VISIBLE.
+Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to the named destination. Do not infer identity from the prompt, nearby businesses, or a generic building entrance.`;
+          const step2bResponse = await this.client.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: step2bPrompt },
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "--- DESTINATION-FOCUSED STREET VIEW ---" },
+                  { type: "image_url", image_url: { url: reference.photo, detail: "high" } },
+                ],
+              },
+            ],
+            temperature: 0.0,
+            max_tokens: 8,
+          });
+          const step2bText = step2bResponse.choices[0].message.content?.trim() || "";
+          destinationReferenceUsed = parseDestinationVisibility(step2bText);
+          if (destinationReferenceUsed) {
+            targetHeading = reference.targetHeading;
+          }
+          testSteps.push({
+            name: "destination_reference_match",
+            prompt: step2bPrompt,
+            response: step2bText,
+            parsedHeading: destinationReferenceUsed ? reference.targetHeading : undefined,
+            model: "gpt-4o-mini",
+            success: destinationReferenceUsed,
+            error: destinationReferenceUsed
+              ? undefined
+              : "Destination was not confirmed in the focused Street View image.",
+            tokenCount: step2bResponse.usage?.total_tokens,
+          });
+        } catch (referenceError) {
+          const message =
+            referenceError instanceof Error
+              ? referenceError.message
+              : "Destination reference lookup failed.";
+          console.error("Destination Street View fallback failed:", message);
+          testSteps.push({
+            name: "destination_reference_match",
+            prompt: referencePrompt,
+            model: "google-street-view",
+            success: false,
+            error: message,
+          });
+        }
+      }
       if (targetHeading === null) {
         const ageWarning = panoramaDate
           ? ` The available Street View image is dated ${panoramaDate} and may be outdated.`
@@ -357,6 +564,12 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
           panoramaDate,
           panoramaStatus,
           panoramaHeadings,
+          destinationPhoto,
+          destinationPhotoDate,
+          destinationPhotoStatus,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationReferenceUsed,
           currentHeading,
           finalOutput,
           steps: testSteps,
@@ -382,18 +595,32 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
       // ==========================================
       activeStage = "accessible guidance";
       console.log("   ➤ Step 3: Generating Accessible Guidance...");
+      const destinationReferenceContext = destinationReferenceUsed
+        ? `A separate Street View image for "${destinationPlaceName}" is also provided. It was captured ${destinationPhotoDate || "on an unknown date"} and may be outdated. Use it only as historical entrance context, never as proof of current conditions.`
+        : "No separate destination reference image is provided.";
       const step3Prompt = `You are an orientation assistant for a blind pedestrian.
 The validated turn instruction is: "${turnInstruction}"
-Describe at most two landmarks that are clearly visible in the user's current photo and useful while turning in place.
+${destinationReferenceContext}
+Describe at most two stable physical landmarks. Use the user's current photo for a landmark useful while turning in place. If a destination reference is provided, you may also describe one clearly visible entrance feature and must prefix it with "Street View reference:".
 Only mention stable, cane-detectable or tactile features such as a wall edge, curb, doorway recess, railing, or steps.
-Never invent an object. Never say "look", "see", "watch", "keep an eye out", or promise that a path is clear.
+Never claim that a reference-image feature is currently present or visible from the user's position. Never invent an object. Never say "look", "see", "watch", "keep an eye out", or promise that a path is clear.
 Do not instruct the user to walk forward or cross a street. If no reliable landmark is visible, reply exactly: NO_RELIABLE_LANDMARKS.
 Keep the response to two short sentences and do not repeat the turn instruction.`;
+      const step3UserContent: any[] = [
+        { type: "text", text: "--- USER'S CURRENT PHOTO ---" },
+        { type: "image_url", image_url: { url: image, detail: "high" } },
+      ];
+      if (destinationReferenceUsed && destinationPhoto) {
+        step3UserContent.push(
+          { type: "text", text: "--- DESTINATION-FOCUSED STREET VIEW REFERENCE ---" },
+          { type: "image_url", image_url: { url: destinationPhoto, detail: "high" } }
+        );
+      }
       const step3Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: step3Prompt },
-          { role: "user", content: [{ type: "image_url", image_url: { url: image } }] }
+          { role: "user", content: step3UserContent }
         ],
         temperature: 0.1,
         max_tokens: 100,
@@ -434,6 +661,12 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         panoramaDate,
         panoramaStatus,
         panoramaHeadings,
+        destinationPhoto,
+        destinationPhotoDate,
+        destinationPhotoStatus,
+        destinationPlaceName,
+        destinationPlaceAddress,
+        destinationReferenceUsed,
         currentHeading,
         targetHeading,
         turnInstruction,
@@ -468,6 +701,12 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         panoramaDate,
         panoramaStatus,
         panoramaHeadings,
+        destinationPhoto,
+        destinationPhotoDate,
+        destinationPhotoStatus,
+        destinationPlaceName,
+        destinationPlaceAddress,
+        destinationReferenceUsed,
         steps: testSteps,
         success: false,
         error: error?.message ?? "Last meters calculation failed.",
@@ -558,13 +797,13 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         const parsedArgs = JSON.parse(parsedRequest.choices[0].message.tool_calls![0].function.arguments)
         //get link
         const { link } = parsedArgs;
-        console.log(link + `&key=${process.env.GOOGLE_API_KEY}`)
+        console.log("Calling Google Maps tool:", parsedRequest.choices[0].message.tool_calls![0].function.name)
         // console.log("parsedArgs", parsedArgs);  
         if (link !== undefined && parsedRequest.choices[0].message.tool_calls![0].function.name !== "generateTrainInformation") {
           //use link
           if (parsedRequest.choices[0].message.tool_calls![0].function.name === "getCrossStreets") {
             completeAIPrompt += crossStreetsPrompt;
-            const completeLink = link + `&key=${process.env.GOOGLE_API_KEY}`;
+            const completeLink = link + `&key=${getGoogleMapsApiKey()}`;
             userContent.push({
               type: 'image_url',
               image_url: {
@@ -576,7 +815,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           }
 
           else {
-            const places: any = await axios.get(link + `&key=${process.env.GOOGLE_API_KEY}`);
+            const places: any = await axios.get(link + `&key=${getGoogleMapsApiKey()}`);
             //if its giving back a nearby places link
             if (places.data.results) {
               completeAIPrompt += nearbyPlacesPrompt;
@@ -597,7 +836,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
               let operatingHours = '';
               if (places.data.candidates[0].opening_hours) {
                 //console.log("user wants operating hours")
-                const placeInformation = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${places.data.candidates[0].place_id}&fields=opening_hours&key=${process.env.GOOGLE_API_KEY}`);
+                const placeInformation = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${places.data.candidates[0].place_id}&fields=opening_hours&key=${getGoogleMapsApiKey()}`);
                 operatingHours = placeInformation.data.result.opening_hours.weekday_text
               }
               systemContent += `Relevant Place Information: ${JSON.stringify(places.data.candidates[0], null, 2)}`
@@ -639,7 +878,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           const { address } = parsedArgs;
           // console.log(address)
           const reqlink = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?location=
-            ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname%2Cgeometry&inputtype=textquery&input=${address.replace(/\s+/g, '%2C')}` + `&key=${process.env.GOOGLE_API_KEY}`;
+            ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname%2Cgeometry&inputtype=textquery&input=${address.replace(/\s+/g, '%2C')}` + `&key=${getGoogleMapsApiKey()}`;
           console.log(reqlink)
           const location: any = await axios.get(reqlink);
           // console.log(location)
@@ -727,7 +966,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           staticMapUrl += `&markers=color:purple%7Clabel:R%7C${pedestrianRamps.map(
             ramp => `${ramp.location.coordinates[1]},${ramp.location.coordinates[0]}`).join('%7C')}`;
           // Add the API key to the static map URL
-          staticMapUrl += `&key=${process.env.GOOGLE_API_KEY}`;
+          staticMapUrl += `&key=${getGoogleMapsApiKey()}`;
 
           console.log(staticMapUrl);
         }
@@ -736,29 +975,70 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           try {
             completeAIPrompt += directionsPrompt
             let formattedAddress = '';
+            let nearbyPlaceId: string | undefined;
             console.log("Generating Google Direction API Link")
             console.log(parsedArgs);
             // step 1: if destination is a store name, get the formatted address
             let cleanAddress;
             if (!parsedArgs.address) {
-              const reqlink = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${content.coords.latitude},${content.coords.longitude}&rankby=distance&keyword=${parsedArgs.destination.replace(/\s+/g, '%20')}&key=${process.env.GOOGLE_API_KEY}`;
-              console.log(reqlink)
-              const location: any = await axios.get(reqlink);
-              // console.log(location)
-              console.log(reqlink)
-              // const placeInformation = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${location.data.results[0].place_id}&fields=formatted_address&key=${process.env.GOOGLE_API_KEY}`);
-              // console.log(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${location.data.results[0].place_id}&fields=formatted_address&key=${process.env.GOOGLE_API_KEY}`)
-              formattedAddress = location.data.results[0].vicinity;
-              // console.log(`Formatted Address: ${formattedAddress}`);
-              // console.log("placeID call ",placeInformation.data.result.formatted_address);
+              const nearbyQuery = normalizeNearbyPlaceQuery(String(parsedArgs.destination || ""));
+              if (!nearbyQuery) {
+                throw new Error("Destination name was empty after normalization.");
+              }
+              const location = await axios.get(
+                "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+                {
+                  params: {
+                    location: `${content.coords.latitude},${content.coords.longitude}`,
+                    rankby: "distance",
+                    keyword: nearbyQuery,
+                    key: getGoogleMapsApiKey(),
+                  },
+                  timeout: 20_000,
+                }
+              );
+              if (!["OK", "ZERO_RESULTS"].includes(location.data.status)) {
+                throw new Error(`Nearby Places returned ${location.data.status}.`);
+              }
+              const nearbyPlace = selectNearbyPlaceCandidate(
+                location.data.results ?? [],
+                {
+                  lat: content.coords.latitude,
+                  lng: content.coords.longitude,
+                }
+              );
+              if (!nearbyPlace?.place_id) {
+                throw new Error(`No nearby ${nearbyQuery} was found within 50 kilometers.`);
+              }
+
+              nearbyPlaceId = nearbyPlace.place_id;
+              formattedAddress = nearbyPlace.vicinity || nearbyPlace.name || nearbyQuery;
+              cleanAddress = nearbyPlace.name?.replace(/(\d+)(st|nd|rd|th)\b/gi, "$1");
+              systemContent +=
+                `Resolved nearby destination: ${nearbyPlace.name || nearbyQuery}, ` +
+                `${formattedAddress}, approximately ${Math.round(nearbyPlace.distanceMeters)} meters away.\n`;
             }
             else {
-              const reqlink = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?location=
-                ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname&inputtype=textquery&input=${parsedArgs.destination.replace(/\s+/g, '%2C')}` + `&key=${process.env.GOOGLE_API_KEY}`;
-              const location: any = await axios.get(reqlink);
-              // console.log(location)
+              const location = await axios.get(
+                "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
+                {
+                  params: {
+                    fields: "formatted_address,name,place_id",
+                    inputtype: "textquery",
+                    input: parsedArgs.destination,
+                    locationbias:
+                      `circle:50000@${content.coords.latitude},${content.coords.longitude}`,
+                    key: getGoogleMapsApiKey(),
+                  },
+                  timeout: 20_000,
+                }
+              );
+              if (location.data.status !== "OK" || !location.data.candidates?.[0]) {
+                throw new Error(`Address lookup returned ${location.data.status}.`);
+              }
               formattedAddress = location.data.candidates[0].formatted_address;
               cleanAddress = location.data.candidates[0].name.replace(/(\d+)(st|nd|rd|th)\b/gi, '$1');
+              nearbyPlaceId = location.data.candidates[0].place_id;
             }
             console.log(formattedAddress);
             
@@ -788,14 +1068,27 @@ Keep the response to two short sentences and do not repeat the turn instruction.
             }
             // step 3: get route from starting location to destination (doorfront location if it exists)
             if (!doorLocation) {
-              doorLocation = formattedAddress;
+              doorLocation = nearbyPlaceId ? `place_id:${nearbyPlaceId}` : formattedAddress;
             }
-            const route = await axios.get(`https://maps.googleapis.com/maps/api/directions/json?mode=walking&origin=${content.coords.latitude},${content.coords.longitude}&destination=${doorLocation}&key=${process.env.GOOGLE_API_KEY}`);
+            const route = await axios.get(
+              "https://maps.googleapis.com/maps/api/directions/json",
+              {
+                params: {
+                  mode: "walking",
+                  origin: `${content.coords.latitude},${content.coords.longitude}`,
+                  destination: doorLocation,
+                  key: getGoogleMapsApiKey(),
+                },
+                timeout: 20_000,
+              }
+            );
+            if (route.data.status !== "OK" || !route.data.routes?.[0]?.legs?.[0]) {
+              throw new Error(`Directions returned ${route.data.status}.`);
+            }
             relevantData = "Directions:\n"
             for (let i = 0; i < route.data.routes[0].legs[0].steps.length; i++) {
               relevantData += `Step ${i + 1}) ${route.data.routes[0].legs[0].steps[i].html_instructions} for ${route.data.routes[0].legs[0].steps[i].distance.text} \n`
             }
-            console.log(`https://maps.googleapis.com/maps/api/directions/json?mode=walking&origin=${content.coords.latitude},${content.coords.longitude}&destination=${doorLocation}&key=${process.env.GOOGLE_API_KEY}`)
             systemContent += relevantData
             // // step 4: Take each lat/lng from each point in route --> can just use encoded polyline
             // const polyline = route.data.routes[0].overview_polyline.points;
@@ -865,11 +1158,23 @@ Keep the response to two short sentences and do not repeat the turn instruction.
             //   doorfront: doorfrontData,
             // }
             // console.log(JSON.stringify(fullRouteData))
-
-
-
           } catch (error) {
-            systemContent += 'Sorry, I could not generate directions to that location. Please try another destination.'
+            console.error("Nearby directions lookup failed:", error);
+            const failedDestination = String(parsedArgs.destination || "that destination");
+            const safeOutput =
+              `I could not verify a nearby ${failedDestination} from your current location. ` +
+              "Try a more specific name or street address.";
+            const updatedHistory = appendConversationHistory(content.analytics, {
+              input: content.text,
+              output: safeOutput,
+              data: "Nearby destination lookup failed; no unverified location was used.",
+            });
+            await recordAiRequest(false, {
+              outputLength: safeOutput.length,
+              errorCode: "nearby_destination_not_verified",
+            });
+            res.status(200).json({ output: safeOutput, history: updatedHistory, route: null });
+            return;
           }
         }
         else if (parsedRequest.choices[0].message.tool_calls![0].function.name === "generateTrainInformation") {
@@ -1052,8 +1357,7 @@ async function processEightDirectionTiles(
   console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
   const headings = [0, 45, 90, 135, 180, 225, 270, 315];
   const tilesData: { heading: number; base64: string }[] = [];
-  const apiKey =
-    process.env.GOOGLE_MAPS_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+  const apiKey = getGoogleMapsApiKey();
   const metadataUrl =
     `https://maps.googleapis.com/maps/api/streetview/metadata` +
     `?location=${lat},${lng}&source=outdoor&key=${apiKey}`;

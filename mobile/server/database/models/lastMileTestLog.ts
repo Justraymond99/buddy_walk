@@ -20,6 +20,12 @@ export interface lastMileTestLogInterface {
   panoramaDate?: string;
   panoramaStatus?: string;
   panoramaHeadings: number[];
+  destinationPhoto?: string;
+  destinationPhotoDate?: string;
+  destinationPhotoStatus?: string;
+  destinationPlaceName?: string;
+  destinationPlaceAddress?: string;
+  destinationReferenceUsed?: boolean;
   currentHeading?: number;
   targetHeading?: number;
   turnInstruction?: string;
@@ -57,6 +63,12 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   panoramaDate: { type: String },
   panoramaStatus: { type: String },
   panoramaHeadings: [{ type: Number }],
+  destinationPhoto: { type: String },
+  destinationPhotoDate: { type: String },
+  destinationPhotoStatus: { type: String },
+  destinationPlaceName: { type: String },
+  destinationPlaceAddress: { type: String },
+  destinationReferenceUsed: { type: Boolean, default: false },
   currentHeading: { type: Number },
   targetHeading: { type: Number },
   turnInstruction: { type: String },

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildLastMileTurnInstruction,
+  parseDestinationVisibility,
   parseLastMileHeading,
+  snapLastMileHeading,
 } from "../../server/utils/lastMileNavigation";
 
 test("parseLastMileHeading accepts a single valid panorama heading", () => {
@@ -45,4 +47,19 @@ test("buildLastMileTurnInstruction always chooses the shortest safe turn", () =>
 test("buildLastMileTurnInstruction rejects non-panorama headings", () => {
   assert.throws(() => buildLastMileTurnInstruction(Number.NaN, 45));
   assert.throws(() => buildLastMileTurnInstruction(0, 22));
+});
+
+test("parseDestinationVisibility only accepts an exact visible result", () => {
+  assert.equal(parseDestinationVisibility("VISIBLE"), true);
+  assert.equal(parseDestinationVisibility(" visible "), true);
+  assert.equal(parseDestinationVisibility("NOT_VISIBLE"), false);
+  assert.equal(parseDestinationVisibility("The storefront is visible."), false);
+});
+
+test("snapLastMileHeading chooses the nearest panorama direction", () => {
+  assert.equal(snapLastMileHeading(12), 0);
+  assert.equal(snapLastMileHeading(44), 45);
+  assert.equal(snapLastMileHeading(338), 0);
+  assert.equal(snapLastMileHeading(-46), 315);
+  assert.throws(() => snapLastMileHeading(Number.NaN));
 });

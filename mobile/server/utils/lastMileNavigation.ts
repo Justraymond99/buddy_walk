@@ -19,6 +19,20 @@ export function parseLastMileHeading(response: string): number | null {
   return uniqueMatches.length === 1 ? uniqueMatches[0] : null;
 }
 
+export function parseDestinationVisibility(response: string): boolean {
+  return response.trim().toUpperCase() === "VISIBLE";
+}
+
+export function snapLastMileHeading(heading: number): number {
+  if (!Number.isFinite(heading)) {
+    throw new Error("Last Meters heading must be a finite number.");
+  }
+  const normalized = ((heading % 360) + 360) % 360;
+  return LAST_MILE_HEADINGS[
+    Math.round(normalized / 45) % LAST_MILE_HEADINGS.length
+  ];
+}
+
 export function buildLastMileTurnInstruction(
   currentHeading: number,
   targetHeading: number

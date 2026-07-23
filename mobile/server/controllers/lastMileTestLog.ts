@@ -10,6 +10,11 @@ const LAST_MILE_TEST_CSV_COLUMNS = [
   "lng",
   "panoramaDate",
   "panoramaStatus",
+  "destinationPhotoDate",
+  "destinationPhotoStatus",
+  "destinationPlaceName",
+  "destinationPlaceAddress",
+  "destinationReferenceUsed",
   "currentHeading",
   "targetHeading",
   "turnInstruction",
@@ -24,6 +29,7 @@ const LAST_MILE_TEST_CSV_COLUMNS = [
   "steps",
   "userPhoto",
   "panoramaPhoto",
+  "destinationPhoto",
 ];
 
 export class LastMileTestLogController {
@@ -42,6 +48,9 @@ export class LastMileTestLogController {
           ...row,
           userPhoto: row.userPhoto ? `[base64 image ${row.userPhoto.length} chars]` : "",
           panoramaPhoto: row.panoramaPhoto ? `[base64 image ${row.panoramaPhoto.length} chars]` : "",
+          destinationPhoto: row.destinationPhoto
+            ? `[base64 image ${row.destinationPhoto.length} chars]`
+            : "",
         }));
 
     res.status(200).json({ source, data: rows });
@@ -68,6 +77,11 @@ export class LastMileTestLogController {
           ? row.panoramaPhoto
           : row.panoramaPhoto
             ? `[base64 image ${row.panoramaPhoto.length} chars]`
+            : "",
+        destinationPhoto: includeImages
+          ? row.destinationPhoto
+          : row.destinationPhoto
+            ? `[base64 image ${row.destinationPhoto.length} chars]`
             : "",
       })) as Record<string, unknown>[],
       LAST_MILE_TEST_CSV_COLUMNS

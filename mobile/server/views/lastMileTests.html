@@ -273,6 +273,8 @@
           '<div class="meta">' + esc(fmtDate(row.serverTs)) + ' - ' + esc(coords) +
           '<br>Panorama capture: ' + esc(row.panoramaDate || 'Date unavailable') +
           ' | Street View: ' + esc(row.panoramaStatus || 'Unknown') +
+          '<br>Destination reference: ' + esc(row.destinationReferenceUsed ? 'Used' : 'Not used') +
+          (row.destinationPlaceName ? ' | ' + esc(row.destinationPlaceName) : '') +
           '<br>Current heading: ' + esc(row.currentHeading ?? '') +
           ' | Target heading: ' + esc(row.targetHeading ?? '') +
           ' | Latency: ' + esc(row.latencyMs ?? '') + ' ms</div></div>' +
@@ -287,6 +289,10 @@
             (row.panoramaDate ? ' - captured ' + esc(row.panoramaDate) : '') + '</div>' +
             (row.panoramaPhoto ? '<img src="' + esc(row.panoramaPhoto) + '" alt="Street View panorama composite" />' : '<div class="empty">No panorama saved.</div>') +
             '</div>' +
+            (row.destinationPhoto ? '<div class="image-wrap"><div class="image-label">Destination-focused Street View' +
+            (row.destinationPhotoDate ? ' - captured ' + esc(row.destinationPhotoDate) : '') + '</div>' +
+            '<img src="' + esc(row.destinationPhoto) + '" alt="Street View image focused on the verified destination" />' +
+            '<div class="small">' + esc(row.destinationPlaceAddress || row.destinationPlaceName || '') + '</div></div>' : '') +
           '</div>' +
           '<div class="steps">' +
             '<div class="final"><strong>Final guidance:</strong><br>' + esc(row.finalOutput || row.error || '') + '</div>' +
