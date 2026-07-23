@@ -34,6 +34,49 @@ export function snapLastMileHeading(heading: number): number {
   ];
 }
 
+export function lastMileHeadingDifference(
+  currentHeading: number,
+  targetHeading: number
+): number {
+  if (!Number.isFinite(currentHeading) || !Number.isFinite(targetHeading)) {
+    throw new Error("Last Meters headings must be finite numbers.");
+  }
+  return Math.abs(((targetHeading - currentHeading + 540) % 360) - 180);
+}
+
+export function isLastMileHeadingAligned(
+  currentHeading: number,
+  targetHeading: number,
+  toleranceDegrees = 30
+): boolean {
+  if (!Number.isFinite(toleranceDegrees) || toleranceDegrees < 0 || toleranceDegrees > 180) {
+    throw new Error("Last Meters heading tolerance must be between 0 and 180 degrees.");
+  }
+  return lastMileHeadingDifference(currentHeading, targetHeading) <= toleranceDegrees;
+}
+
+function formatLastMileDistance(distanceMeters: number): string {
+  return distanceMeters >= 1_000
+    ? `${(distanceMeters / 1_609.344).toFixed(1)} miles`
+    : `${Math.max(
+        50,
+        Math.round((distanceMeters * 3.28084) / 50) * 50
+      ).toLocaleString("en-US")} feet`;
+}
+
+export function buildAlignedHeadingInstruction(
+  destination: string,
+  distanceMeters: number
+): string {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  return (
+    `${destination} is roughly ${formatLastMileDistance(distanceMeters)} ahead on your current heading. ` +
+    "Keep this heading and continue with your primary navigation."
+  );
+}
+
 export function buildLastMileApproachInstruction(
   destination: string,
   distanceMeters: number,
@@ -53,13 +96,7 @@ export function buildLastMileApproachInstruction(
     "northwest",
   ];
   const direction = directionNames[snapLastMileHeading(bearing) / 45];
-  const distance =
-    distanceMeters >= 1_000
-      ? `${(distanceMeters / 1_609.344).toFixed(1)} miles`
-      : `${Math.max(
-          50,
-          Math.round((distanceMeters * 3.28084) / 50) * 50
-        ).toLocaleString("en-US")} feet`;
+  const distance = formatLastMileDistance(distanceMeters);
 
   return (
     `${destination} is roughly ${distance} to the ${direction}. ` +

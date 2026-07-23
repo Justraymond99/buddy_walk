@@ -26,8 +26,12 @@ export interface lastMileTestLogInterface {
   destinationPlaceName?: string;
   destinationPlaceAddress?: string;
   destinationDistanceMeters?: number;
+  destinationBearing?: number;
+  deviceHeading?: number;
+  headingDifferenceDegrees?: number;
+  headingAligned?: boolean;
   destinationReferenceUsed?: boolean;
-  navigationMode?: "approach" | "exact";
+  navigationMode?: "approach" | "exact" | "aligned";
   currentHeading?: number;
   targetHeading?: number;
   turnInstruction?: string;
@@ -71,8 +75,12 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   destinationPlaceName: { type: String },
   destinationPlaceAddress: { type: String },
   destinationDistanceMeters: { type: Number },
+  destinationBearing: { type: Number },
+  deviceHeading: { type: Number },
+  headingDifferenceDegrees: { type: Number },
+  headingAligned: { type: Boolean },
   destinationReferenceUsed: { type: Boolean, default: false },
-  navigationMode: { type: String, enum: ["approach", "exact"] },
+  navigationMode: { type: String, enum: ["approach", "exact", "aligned"] },
   currentHeading: { type: Number },
   targetHeading: { type: Number },
   turnInstruction: { type: String },

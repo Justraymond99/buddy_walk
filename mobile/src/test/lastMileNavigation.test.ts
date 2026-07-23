@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildAlignedHeadingInstruction,
   buildLastMileApproachInstruction,
   buildLastMileTurnInstruction,
+  isLastMileHeadingAligned,
+  lastMileHeadingDifference,
   parseDestinationVisibility,
   parseLastMileHeading,
   snapLastMileHeading,
@@ -76,5 +79,20 @@ test("buildLastMileApproachInstruction gives only rough far-away guidance", () =
   );
   assert.throws(() =>
     buildLastMileApproachInstruction("FedEx", Number.NaN, 90)
+  );
+});
+
+test("heading alignment handles compass wraparound", () => {
+  assert.equal(lastMileHeadingDifference(350, 10), 20);
+  assert.equal(lastMileHeadingDifference(10, 350), 20);
+  assert.equal(isLastMileHeadingAligned(350, 10), true);
+  assert.equal(isLastMileHeadingAligned(350, 30), false);
+  assert.throws(() => isLastMileHeadingAligned(0, 90, 181));
+});
+
+test("buildAlignedHeadingInstruction keeps aligned guidance rough", () => {
+  assert.equal(
+    buildAlignedHeadingInstruction("Whole Foods", 320),
+    "Whole Foods is roughly 1,050 feet ahead on your current heading. Keep this heading and continue with your primary navigation."
   );
 });

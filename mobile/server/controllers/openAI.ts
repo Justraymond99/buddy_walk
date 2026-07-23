@@ -51,8 +51,24 @@ export class OpenAIController {
   
   async lastMileRequest(req: Request, res: Response) {
     try {
-      const { lat, lng, image, destination } = req.body;
-      if (!lat || !lng || !image || !destination) {
+      const { lat, lng, heading, image, destination } = req.body;
+      if (
+        typeof lat !== "number" ||
+        typeof lng !== "number" ||
+        (
+          heading !== undefined &&
+          (
+            typeof heading !== "number" ||
+            !Number.isFinite(heading) ||
+            heading < 0 ||
+            heading >= 360
+          )
+        ) ||
+        typeof image !== "string" ||
+        !image ||
+        typeof destination !== "string" ||
+        !destination.trim()
+      ) {
         return res.status(400).json({ error: "Missing required fields" });
       }
       const googleMapsApiKey =
@@ -62,7 +78,14 @@ export class OpenAIController {
           error: "Last Meters requires OPENAI_API_KEY and GOOGLE_MAPS_API_KEY on this backend.",
         });
       }
-      await openAIService.lastMileRequest({ req, res }, lat, lng, image, destination);
+      await openAIService.lastMileRequest(
+        { req, res },
+        lat,
+        lng,
+        image,
+        destination,
+        heading
+      );
     } catch (error) {
       res.status(500).json({ error: "Internal server error" });
     }

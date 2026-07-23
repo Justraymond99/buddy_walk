@@ -17,8 +17,11 @@ import {
   getConversationHistory,
 } from "../utils/conversationHistory";
 import {
+  buildAlignedHeadingInstruction,
   buildLastMileApproachInstruction,
   buildLastMileTurnInstruction,
+  isLastMileHeadingAligned,
+  lastMileHeadingDifference,
   LAST_METERS_EXACT_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
@@ -405,12 +408,22 @@ export class OpenAIService {
   }
 
   // --- LAST METERS NAVIGATION PIPELINE ---
-  async lastMileRequest(ctx: AppContext, lat: number, lng: number, image: string, destination: string) {
+  async lastMileRequest(
+    ctx: AppContext,
+    lat: number,
+    lng: number,
+    image: string,
+    destination: string,
+    deviceHeading?: number
+  ) {
     const { res } = ctx;
     const startedAt = Date.now();
     let activeStage = "destination proximity check";
-    let navigationMode: "approach" | "exact" | undefined;
+    let navigationMode: "approach" | "exact" | "aligned" | undefined;
     let destinationDistanceMeters: number | undefined;
+    let destinationBearing: number | undefined;
+    let headingDifferenceDegrees: number | undefined;
+    let headingAligned: boolean | undefined;
     let verifiedDestination: VerifiedNearbyDestination | undefined;
     let panoramaPhoto: string | undefined;
     let panoramaDate: string | undefined;
@@ -478,6 +491,7 @@ export class OpenAIService {
           destinationPlaceName,
           destinationPlaceAddress,
           destinationDistanceMeters,
+          deviceHeading,
           finalOutput,
           steps: testSteps,
           success: false,
@@ -492,23 +506,89 @@ export class OpenAIService {
         return;
       }
 
+      destinationBearing = calculateHeading(
+        { lat, lng },
+        verifiedDestination.location
+      );
+      if (typeof deviceHeading === "number") {
+        headingDifferenceDegrees = lastMileHeadingDifference(
+          deviceHeading,
+          destinationBearing
+        );
+        headingAligned = isLastMileHeadingAligned(
+          deviceHeading,
+          destinationBearing
+        );
+        testSteps.push({
+          name: "heading_alignment",
+          prompt:
+            "Compare the phone compass heading with the verified destination bearing.",
+          response:
+            `${headingAligned ? "ALIGNED" : "MISALIGNED"}: phone ` +
+            `${deviceHeading.toFixed(1)} degrees, destination ` +
+            `${destinationBearing.toFixed(1)} degrees, difference ` +
+            `${headingDifferenceDegrees.toFixed(1)} degrees`,
+          model: "deterministic-compass",
+          success: true,
+        });
+      }
+
+      if (headingAligned) {
+        navigationMode = "aligned";
+        testSteps.unshift({
+          name: "proximity_gate",
+          prompt: proximityPrompt,
+          response:
+            `${destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS ? "APPROACH_ONLY" : "EXACT_RANGE"}: ` +
+            `${Math.round(destinationDistanceMeters)} meters`,
+          model: "google-places",
+          success: true,
+        });
+        const finalOutput = buildAlignedHeadingInstruction(
+          verifiedDestination.placeName,
+          destinationDistanceMeters
+        );
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaHeadings,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationDistanceMeters,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
+          navigationMode,
+          finalOutput,
+          steps: testSteps,
+          success: true,
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          mode: navigationMode,
+          warning: "heading_already_aligned",
+        });
+        return;
+      }
+
       if (destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS) {
         navigationMode = "approach";
-        const bearing = calculateHeading(
-          { lat, lng },
-          verifiedDestination.location
-        );
         const finalOutput = buildLastMileApproachInstruction(
           verifiedDestination.placeName,
           destinationDistanceMeters,
-          bearing
+          destinationBearing
         );
         testSteps.push({
           name: "proximity_gate",
           prompt: proximityPrompt,
           response:
             `APPROACH_ONLY: ${Math.round(destinationDistanceMeters)} meters, ` +
-            `${bearing.toFixed(1)} degrees`,
+            `${destinationBearing.toFixed(1)} degrees`,
           model: "google-places",
           success: true,
         });
@@ -521,6 +601,10 @@ export class OpenAIService {
           destinationPlaceName,
           destinationPlaceAddress,
           destinationDistanceMeters,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
           navigationMode,
           finalOutput,
           steps: testSteps,
@@ -618,6 +702,10 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           destinationPlaceName,
           destinationPlaceAddress,
           destinationDistanceMeters,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
           destinationReferenceUsed,
           navigationMode,
           finalOutput,
@@ -768,6 +856,10 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           destinationPlaceName,
           destinationPlaceAddress,
           destinationDistanceMeters,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
           destinationReferenceUsed,
           navigationMode,
           currentHeading,
@@ -868,6 +960,10 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationPlaceName,
         destinationPlaceAddress,
         destinationDistanceMeters,
+        destinationBearing,
+        deviceHeading,
+        headingDifferenceDegrees,
+        headingAligned,
         destinationReferenceUsed,
         navigationMode,
         currentHeading,
@@ -910,6 +1006,10 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationPlaceName,
         destinationPlaceAddress,
         destinationDistanceMeters,
+        destinationBearing,
+        deviceHeading,
+        headingDifferenceDegrees,
+        headingAligned,
         destinationReferenceUsed,
         navigationMode,
         steps: testSteps,

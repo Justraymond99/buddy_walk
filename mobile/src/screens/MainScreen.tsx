@@ -160,7 +160,7 @@ export default function MainScreen({ navigation }: Props) {
   const [feedbackVisible, setFeedbackVisible] = useState(false);
 
   const locationRef = useRef<Location.LocationObject | null>(null);
-  const headingRef = useRef<number>(0);
+  const headingRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
@@ -1095,6 +1095,7 @@ export default function MainScreen({ navigation }: Props) {
       const data = await sendLastMileRequest({
         lat: loc.coords.latitude,
         lng: loc.coords.longitude,
+        heading: headingRef.current ?? undefined,
         image: capturedImage,
         destination: rawDestination
       });

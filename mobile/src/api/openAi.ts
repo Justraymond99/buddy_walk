@@ -52,13 +52,14 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
 export async function sendLastMileRequest(data: {
   lat: number;
   lng: number;
+  heading?: number;
   image: string;
   destination: string;
 }): Promise<{
   output?: string;
   error?: string;
   testLogId?: string;
-  mode?: 'approach' | 'exact';
+  mode?: 'approach' | 'exact' | 'aligned';
   warning?: string;
 }> {
   // Last Meters is hosted on Render; buddywalk.app does not expose this route.
@@ -70,7 +71,7 @@ export async function sendLastMileRequest(data: {
       output?: string;
       error?: string;
       testLogId?: string;
-      mode?: 'approach' | 'exact';
+      mode?: 'approach' | 'exact' | 'aligned';
       warning?: string;
     };
   } catch (error: any) {
