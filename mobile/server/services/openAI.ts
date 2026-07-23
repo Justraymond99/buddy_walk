@@ -217,7 +217,6 @@ export class OpenAIService {
       const tiles = await processEightDirectionTiles(lat, lng);
       activeStage = "panorama assembly";
       const panoramaPhoto = await buildPanoramaDebugImage(tiles);
-      const panoramaImagesMsg: any[] = [];
       const panoramaOverviewMsg: any[] = [];
       tiles.forEach((tile) => {
         const label = { type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` };
@@ -225,11 +224,6 @@ export class OpenAIService {
         panoramaOverviewMsg.push({
           type: "image_url",
           image_url: { url: tile.base64, detail: "low" },
-        });
-        panoramaImagesMsg.push(label);
-        panoramaImagesMsg.push({
-          type: "image_url",
-          image_url: { url: tile.base64, detail: "high" },
         });
       });
 
@@ -274,12 +268,18 @@ export class OpenAIService {
       // ==========================================
       activeStage = "destination matching";
       console.log("   ➤ Step 2: Locating Target Store...");
-      const step2Prompt = `You will receive 8 panorama images explicitly labeled with their degrees. Find the storefront or sign for "${destination}". Reply ONLY with the integer number of the degrees where it is located (e.g., 45).`;
+      const step2Prompt = `You will receive one panorama grid containing 8 views explicitly labeled with their degrees. Find the storefront or sign for "${destination}". Reply ONLY with the integer number of the degrees where it is located (e.g., 45).`;
       const step2Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: step2Prompt },
-          { role: "user", content: panoramaImagesMsg }
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "--- LABELED PANORAMA GRID ---" },
+              { type: "image_url", image_url: { url: panoramaPhoto, detail: "high" } },
+            ],
+          }
         ],
         temperature: 0.0,
         max_tokens: 12,
@@ -918,17 +918,22 @@ function createOverlaySvg(heading: number, segmentIndex: number): Buffer {
 async function buildPanoramaDebugImage(tiles: { heading: number; base64: string }[]): Promise<string> {
   const compositeLayers: sharp.OverlayOptions[] = [];
   tiles.forEach((tile, index) => {
-    const leftOffset = index * 640;
+    const leftOffset = (index % 4) * 640;
+    const topOffset = Math.floor(index / 4) * 640;
     const imageBuffer = Buffer.from(
       tile.base64.replace(/^data:image\/\w+;base64,/, ""),
       "base64"
     );
-    compositeLayers.push({ input: imageBuffer, left: leftOffset, top: 0 });
-    compositeLayers.push({ input: createOverlaySvg(tile.heading, index + 1), left: leftOffset, top: 0 });
+    compositeLayers.push({ input: imageBuffer, left: leftOffset, top: topOffset });
+    compositeLayers.push({
+      input: createOverlaySvg(tile.heading, index + 1),
+      left: leftOffset,
+      top: topOffset,
+    });
   });
 
   const outputBuffer = await sharp({
-    create: { width: 5120, height: 640, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    create: { width: 2560, height: 1280, channels: 3, background: { r: 0, g: 0, b: 0 } },
   })
     .composite(compositeLayers)
     .jpeg({ quality: 72 })
