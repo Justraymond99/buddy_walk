@@ -206,11 +206,18 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? path.join(__dirname, '..')       // Production: go up 1 level to /dist
   : path.join(__dirname, '../dist'); // Development: go up 2 levels to /dist
 
-  app.use(express.static(rootDir));
+  if (fs.existsSync(path.join(rootDir, 'index.html'))) {
+    app.use(express.static(rootDir));
 
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(rootDir, 'index.html'));
-  });
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(rootDir, 'index.html'));
+    });
+  } else {
+    console.warn('[server] Web dist not found; running API-only.');
+    app.get('/', (_req, res) => {
+      res.status(200).json({ ok: true, service: 'buddy-walk-api' });
+    });
+  }
   
   app.listen(Number(port), '0.0.0.0', () => {
       console.log(`Server is live at http://localhost:${port}`);

@@ -171,7 +171,6 @@ export function mountUpstreamProxy(app: Application): void {
 
   app.post('/api/text', (req, res) => forwardJson(req, res, '/api/text'));
   app.post('/api/parseRequest', (req, res) => forwardJson(req, res, '/api/parseRequest'));
-  app.post('/api/last-mile', (req, res) => forwardJson(req, res, '/api/last-mile'));
   app.post('/api/audio', (req, res) => forwardBinary(req, res, '/api/audio'));
   app.post(
     '/api/transcribe',
