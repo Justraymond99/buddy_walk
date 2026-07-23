@@ -10,8 +10,6 @@ import { getSubwayArrivals } from "./mta";
 import { extractTrainLineFromText } from "../../src/utils/trainLine";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
-import fs from "fs";
-import path from "path";
 import sharp from "sharp";
 import {
   appendConversationHistory,
@@ -196,6 +194,7 @@ export class OpenAIService {
   async lastMileRequest(ctx: AppContext, lat: number, lng: number, image: string, destination: string) {
     const { res } = ctx;
     const startedAt = Date.now();
+    let activeStage = "panorama download";
     const testSteps: {
       name: string;
       prompt: string;
@@ -215,16 +214,8 @@ export class OpenAIService {
     console.log("==================================================");
 
     try {
-      const debugPhotoPath = path.resolve(__dirname, "../../debug-user-photo.jpg");
-      const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
-      fs.writeFileSync(debugPhotoPath, base64Data, 'base64');
-      console.log(`📸 User photo saved to: ${debugPhotoPath}`);
-    } catch (err) {
-      console.error("Error saving debug photo:", err);
-    }
-
-    try {
       const tiles = await processEightDirectionTiles(lat, lng);
+      activeStage = "panorama assembly";
       const panoramaPhoto = await buildPanoramaDebugImage(tiles);
       const panoramaImagesMsg: any[] = [];
       tiles.forEach((tile) => {
@@ -237,6 +228,7 @@ export class OpenAIService {
       // ==========================================
       // STEP 1: FIND USER HEADING (User Photo + Panorama)
       // ==========================================
+      activeStage = "current-view matching";
       console.log("   ➤ Step 1: Locating User's Current View...");
       const step1Prompt = "You will receive 8 panorama images explicitly labeled with their degrees (0°, 45°, etc.), followed by a user's photo. Identify which panorama segment visually matches the user's photo. Reply ONLY with the integer number of the degrees (e.g., 315).";
       const step1Response = await this.client.chat.completions.create({
@@ -262,6 +254,7 @@ export class OpenAIService {
       // ==========================================
       // STEP 2: FIND TARGET HEADING (Text Name + Panorama ONLY - NO USER PHOTO)
       // ==========================================
+      activeStage = "destination matching";
       console.log("   ➤ Step 2: Locating Target Store...");
       const step2Prompt = `You will receive 8 panorama images explicitly labeled with their degrees. Find the storefront or sign for "${destination}". Reply ONLY with the integer number of the degrees where it is located (e.g., 45).`;
       const step2Response = await this.client.chat.completions.create({
@@ -303,6 +296,7 @@ export class OpenAIService {
       // ==========================================
       // STEP 3: ACCESSIBLE GUIDANCE & LANDMARKS
       // ==========================================
+      activeStage = "accessible guidance";
       console.log("   ➤ Step 3: Generating Accessible Guidance...");
       const step3Prompt = `You are an orientation assistant for the blind.
           The system has mathematically calculated the required action: "${turnInstruction}".
@@ -355,7 +349,20 @@ export class OpenAIService {
       res.status(200).json({ output: finalOutput, testLogId });
 
     } catch (error: any) {
-      console.error("❌ OpenAI Request failed:", error.message);
+      const upstreamStatus = error?.status ?? error?.response?.status;
+      const failureReason =
+        typeof upstreamStatus === "number"
+          ? `upstream returned HTTP ${upstreamStatus}`
+          : typeof error?.code === "string"
+            ? error.code
+            : "unexpected backend error";
+      const clientError = `Last Meters failed during ${activeStage}: ${failureReason}.`;
+      console.error("❌ Last Meters request failed:", {
+        stage: activeStage,
+        status: upstreamStatus,
+        code: error?.code,
+        message: error?.message,
+      });
       await lastMileTestLogService.record({
         destination,
         lat,
@@ -367,7 +374,7 @@ export class OpenAIService {
         error: error?.message ?? "Last meters calculation failed.",
         latencyMs: Date.now() - startedAt,
       });
-      res.status(500).json({ error: "Last meters calculation failed." });
+      res.status(502).json({ error: clientError });
     }
   }
 
@@ -928,29 +935,14 @@ async function processEightDirectionTiles(lat: number, lng: number): Promise<{ h
   console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
   const headings = [0, 45, 90, 135, 180, 225, 270, 315];
   const tilesData = [];
-  const rawBuffers: Buffer[] = [];
   const apiKey = process.env.GOOGLE_API_KEY;
 
   for (const hd of headings) {
     const url = `https://maps.googleapis.com/maps/api/streetview?size=640x640&location=${lat},${lng}&heading=${hd}&fov=45&pitch=0&source=outdoor&key=${apiKey}`;
-    const response = await axios.get(url, { responseType: "arraybuffer" });
+    const response = await axios.get(url, { responseType: "arraybuffer", timeout: 20_000 });
     const buffer = Buffer.from(response.data);
-    rawBuffers.push(buffer);
     tilesData.push({ heading: hd, base64: `data:image/jpeg;base64,${buffer.toString("base64")}` });
   }
-
-  const compositeLayers: sharp.OverlayOptions[] = [];
-  rawBuffers.forEach((buffer, index) => {
-    const leftOffset = index * 640;
-    compositeLayers.push({ input: buffer, left: leftOffset, top: 0 });
-    compositeLayers.push({ input: createOverlaySvg(headings[index], index + 1), left: leftOffset, top: 0 });
-  });
-
-  const outputPath = path.resolve(__dirname, "../../debug-panorama-360.jpg");
-  await sharp({ create: { width: 5120, height: 640, channels: 3, background: { r: 0, g: 0, b: 0 } } })
-    .composite(compositeLayers)
-    .toFile(outputPath);
-  console.log(`✅ Debug panorama saved to: ${outputPath}`);
 
   return tilesData;
 }
