@@ -275,6 +275,8 @@
           ' | Street View: ' + esc(row.panoramaStatus || 'Unknown') +
           '<br>Destination reference: ' + esc(row.destinationReferenceUsed ? 'Used' : 'Not used') +
           (row.destinationPlaceName ? ' | ' + esc(row.destinationPlaceName) : '') +
+          '<br>Navigation mode: ' + esc(row.navigationMode || 'Unknown') +
+          ' | Destination distance: ' + esc(row.destinationDistanceMeters == null ? '' : Math.round(row.destinationDistanceMeters) + ' m') +
           '<br>Current heading: ' + esc(row.currentHeading ?? '') +
           ' | Target heading: ' + esc(row.targetHeading ?? '') +
           ' | Latency: ' + esc(row.latencyMs ?? '') + ' ms</div></div>' +

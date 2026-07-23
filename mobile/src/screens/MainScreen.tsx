@@ -1083,7 +1083,7 @@ export default function MainScreen({ navigation }: Props) {
 
     setLoading(true);
     void stopSpeaking();
-    AccessibilityInfo.announceForAccessibility('Calculating precise last meters navigation. This may take a moment.');
+    AccessibilityInfo.announceForAccessibility('Checking your distance and surroundings. This may take a moment.');
 
     try {
       let loc = locationRef.current;
@@ -1106,7 +1106,10 @@ export default function MainScreen({ navigation }: Props) {
         setUserInput('');
         setCapturedImage(null);
         cameraReadyRef.current = false;
-        void track(Events.AnswerReceived, { feature: 'last_mile' });
+        void track(Events.AnswerReceived, {
+          feature: 'last_mile',
+          navigationMode: data.mode || 'unknown',
+        });
       }
     } catch (e) {
       console.error('Last Meters Error:', e);

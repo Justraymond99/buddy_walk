@@ -54,13 +54,25 @@ export async function sendLastMileRequest(data: {
   lng: number;
   image: string;
   destination: string;
-}): Promise<{ output?: string; error?: string; testLogId?: string }> {
+}): Promise<{
+  output?: string;
+  error?: string;
+  testLogId?: string;
+  mode?: 'approach' | 'exact';
+  warning?: string;
+}> {
   // Last Meters is hosted on Render; buddywalk.app does not expose this route.
   try {
     const res = await withNetworkRetry(() =>
       apiClient.post('/last-mile', data, { timeout: 180_000 })
     );
-    return res.data as { output?: string; error?: string; testLogId?: string };
+    return res.data as {
+      output?: string;
+      error?: string;
+      testLogId?: string;
+      mode?: 'approach' | 'exact';
+      warning?: string;
+    };
   } catch (error: any) {
     console.error('sendLastMileRequest error:', error);
     const backendMessage = error?.response?.data?.error;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildLastMileApproachInstruction,
   buildLastMileTurnInstruction,
   parseDestinationVisibility,
   parseLastMileHeading,
@@ -62,4 +63,18 @@ test("snapLastMileHeading chooses the nearest panorama direction", () => {
   assert.equal(snapLastMileHeading(338), 0);
   assert.equal(snapLastMileHeading(-46), 315);
   assert.throws(() => snapLastMileHeading(Number.NaN));
+});
+
+test("buildLastMileApproachInstruction gives only rough far-away guidance", () => {
+  assert.equal(
+    buildLastMileApproachInstruction("Whole Foods", 1_609.344, 47),
+    "Whole Foods is roughly 1.0 miles to the northeast. Continue with your primary navigation and use Last Meters again when you are within about 800 feet."
+  );
+  assert.match(
+    buildLastMileApproachInstruction("FedEx", 300, 180),
+    /^FedEx is roughly 1,000 feet to the south\./
+  );
+  assert.throws(() =>
+    buildLastMileApproachInstruction("FedEx", Number.NaN, 90)
+  );
 });

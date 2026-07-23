@@ -17,7 +17,9 @@ import {
   getConversationHistory,
 } from "../utils/conversationHistory";
 import {
+  buildLastMileApproachInstruction,
   buildLastMileTurnInstruction,
+  LAST_METERS_EXACT_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
   snapLastMileHeading,
@@ -105,11 +107,20 @@ interface DestinationStreetViewReference {
   targetHeading: number;
 }
 
-async function getDestinationStreetViewReference(
+interface VerifiedNearbyDestination {
+  placeId: string;
+  placeName: string;
+  placeAddress: string;
+  location: LatLng;
+  distanceMeters: number;
+}
+
+async function getVerifiedNearbyDestination(
   lat: number,
   lng: number,
-  destination: string
-): Promise<DestinationStreetViewReference> {
+  destination: string,
+  maxDistanceMeters = 50_000
+): Promise<VerifiedNearbyDestination> {
   const nearbyQuery = normalizeNearbyPlaceQuery(destination);
   if (!nearbyQuery) {
     throw new Error("Destination name was empty after normalization.");
@@ -136,7 +147,7 @@ async function getDestinationStreetViewReference(
       isNearbyPlaceCandidateRelevant(candidate, nearbyQuery)
     ),
     { lat, lng },
-    2_000
+    maxDistanceMeters
   );
   const placeLocation = nearbyPlace?.geometry?.location;
   if (
@@ -144,8 +155,34 @@ async function getDestinationStreetViewReference(
     typeof placeLocation?.lat !== "number" ||
     typeof placeLocation.lng !== "number"
   ) {
-    throw new Error(`No verified nearby ${nearbyQuery} was found within 2 kilometers.`);
+    throw new Error(
+      `No verified ${nearbyQuery} was found within ${Math.round(maxDistanceMeters / 1_000)} kilometers.`
+    );
   }
+
+  return {
+    placeId: nearbyPlace.place_id,
+    placeName: nearbyPlace.name || nearbyQuery,
+    placeAddress: nearbyPlace.vicinity || nearbyPlace.name || nearbyQuery,
+    location: { lat: placeLocation.lat, lng: placeLocation.lng },
+    distanceMeters: nearbyPlace.distanceMeters,
+  };
+}
+
+async function getDestinationStreetViewReference(
+  lat: number,
+  lng: number,
+  destination: string,
+  resolvedDestination?: VerifiedNearbyDestination
+): Promise<DestinationStreetViewReference> {
+  const nearbyQuery = normalizeNearbyPlaceQuery(destination);
+  if (!nearbyQuery) {
+    throw new Error("Destination name was empty after normalization.");
+  }
+  const nearbyPlace =
+    resolvedDestination ??
+    await getVerifiedNearbyDestination(lat, lng, nearbyQuery, 2_000);
+  const placeLocation = nearbyPlace.location;
   if (nearbyPlace.distanceMeters < 3) {
     throw new Error("Destination coordinates are too close to determine an entrance direction.");
   }
@@ -195,8 +232,8 @@ async function getDestinationStreetViewReference(
     photo: `data:image/jpeg;base64,${Buffer.from(imageResponse.data).toString("base64")}`,
     date: metadata.date,
     status: metadata.status,
-    placeName: nearbyPlace.name || nearbyQuery,
-    placeAddress: nearbyPlace.vicinity || nearbyPlace.name || nearbyQuery,
+    placeName: nearbyPlace.placeName,
+    placeAddress: nearbyPlace.placeAddress,
     targetHeading: snapLastMileHeading(
       calculateHeading(
         { lat, lng },
@@ -218,31 +255,7 @@ async function getVerifiedNearbyWalkingDirections(
   lng: number,
   destination: string
 ): Promise<VerifiedWalkingDirections> {
-  const locationResponse = await axios.get(
-    "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
-    {
-      params: {
-        location: `${lat},${lng}`,
-        rankby: "distance",
-        keyword: destination,
-        key: getGoogleMapsApiKey(),
-      },
-      timeout: 20_000,
-    }
-  );
-  if (!["OK", "ZERO_RESULTS"].includes(locationResponse.data.status)) {
-    throw new Error(`Nearby Places returned ${locationResponse.data.status}.`);
-  }
-
-  const nearbyPlace = selectNearbyPlaceCandidate(
-    (locationResponse.data.results ?? []).filter((candidate: any) =>
-      isNearbyPlaceCandidateRelevant(candidate, destination)
-    ),
-    { lat, lng }
-  );
-  if (!nearbyPlace?.place_id) {
-    throw new Error(`No nearby ${destination} was found within 50 kilometers.`);
-  }
+  const nearbyPlace = await getVerifiedNearbyDestination(lat, lng, destination);
 
   const routeResponse = await axios.get(
     "https://maps.googleapis.com/maps/api/directions/json",
@@ -250,7 +263,7 @@ async function getVerifiedNearbyWalkingDirections(
       params: {
         mode: "walking",
         origin: `${lat},${lng}`,
-        destination: `place_id:${nearbyPlace.place_id}`,
+        destination: `place_id:${nearbyPlace.placeId}`,
         key: getGoogleMapsApiKey(),
       },
       timeout: 20_000,
@@ -269,8 +282,8 @@ async function getVerifiedNearbyWalkingDirections(
     .join("\n");
 
   return {
-    placeName: nearbyPlace.name || destination,
-    placeAddress: nearbyPlace.vicinity || nearbyPlace.name || destination,
+    placeName: nearbyPlace.placeName,
+    placeAddress: nearbyPlace.placeAddress,
     distanceMeters: nearbyPlace.distanceMeters,
     directionsText,
   };
@@ -395,7 +408,10 @@ export class OpenAIService {
   async lastMileRequest(ctx: AppContext, lat: number, lng: number, image: string, destination: string) {
     const { res } = ctx;
     const startedAt = Date.now();
-    let activeStage = "panorama download";
+    let activeStage = "destination proximity check";
+    let navigationMode: "approach" | "exact" | undefined;
+    let destinationDistanceMeters: number | undefined;
+    let verifiedDestination: VerifiedNearbyDestination | undefined;
     let panoramaPhoto: string | undefined;
     let panoramaDate: string | undefined;
     let panoramaStatus: string | undefined;
@@ -425,6 +441,110 @@ export class OpenAIService {
     console.log("==================================================");
 
     try {
+      const proximityPrompt =
+        `Resolve "${destination}" near the user's coordinates and use exact ` +
+        `panorama matching only within ${LAST_METERS_EXACT_RADIUS_METERS} meters.`;
+      try {
+        verifiedDestination = await getVerifiedNearbyDestination(
+          lat,
+          lng,
+          destination
+        );
+        destinationDistanceMeters = verifiedDestination.distanceMeters;
+        destinationPlaceName = verifiedDestination.placeName;
+        destinationPlaceAddress = verifiedDestination.placeAddress;
+      } catch (proximityError) {
+        const message =
+          proximityError instanceof Error
+            ? proximityError.message
+            : "Destination proximity lookup failed.";
+        testSteps.push({
+          name: "proximity_gate",
+          prompt: proximityPrompt,
+          response: "DESTINATION_NOT_VERIFIED",
+          model: "google-places",
+          success: false,
+          error: message,
+        });
+        const finalOutput =
+          `I could not verify a nearby ${destination} from your current location. ` +
+          "Try a more specific name or street address.";
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaHeadings,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationDistanceMeters,
+          finalOutput,
+          steps: testSteps,
+          success: false,
+          error: "destination_not_verified",
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          warning: "destination_not_verified",
+        });
+        return;
+      }
+
+      if (destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS) {
+        navigationMode = "approach";
+        const bearing = calculateHeading(
+          { lat, lng },
+          verifiedDestination.location
+        );
+        const finalOutput = buildLastMileApproachInstruction(
+          verifiedDestination.placeName,
+          destinationDistanceMeters,
+          bearing
+        );
+        testSteps.push({
+          name: "proximity_gate",
+          prompt: proximityPrompt,
+          response:
+            `APPROACH_ONLY: ${Math.round(destinationDistanceMeters)} meters, ` +
+            `${bearing.toFixed(1)} degrees`,
+          model: "google-places",
+          success: true,
+        });
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaHeadings,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationDistanceMeters,
+          navigationMode,
+          finalOutput,
+          steps: testSteps,
+          success: true,
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          mode: navigationMode,
+          warning: "destination_too_far",
+        });
+        return;
+      }
+
+      navigationMode = "exact";
+      testSteps.push({
+        name: "proximity_gate",
+        prompt: proximityPrompt,
+        response: `EXACT: ${Math.round(destinationDistanceMeters)} meters`,
+        model: "google-places",
+        success: true,
+      });
+      activeStage = "panorama download";
       const panorama = await processEightDirectionTiles(lat, lng);
       const { tiles } = panorama;
       panoramaDate = panorama.metadata.date;
@@ -497,7 +617,9 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           destinationPhotoStatus,
           destinationPlaceName,
           destinationPlaceAddress,
+          destinationDistanceMeters,
           destinationReferenceUsed,
+          navigationMode,
           finalOutput,
           steps: testSteps,
           success: false,
@@ -507,6 +629,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         res.status(200).json({
           output: finalOutput,
           testLogId,
+          mode: navigationMode,
           warning: "current_view_not_visible",
         });
         return;
@@ -560,7 +683,8 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
           const reference = await getDestinationStreetViewReference(
             lat,
             lng,
-            destination
+            destination,
+            verifiedDestination
           );
           destinationPhoto = reference.photo;
           destinationPhotoDate = reference.date;
@@ -643,7 +767,9 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           destinationPhotoStatus,
           destinationPlaceName,
           destinationPlaceAddress,
+          destinationDistanceMeters,
           destinationReferenceUsed,
+          navigationMode,
           currentHeading,
           finalOutput,
           steps: testSteps,
@@ -654,6 +780,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
         res.status(200).json({
           output: finalOutput,
           testLogId,
+          mode: navigationMode,
           warning: "destination_not_visible",
         });
         return;
@@ -740,7 +867,9 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationPhotoStatus,
         destinationPlaceName,
         destinationPlaceAddress,
+        destinationDistanceMeters,
         destinationReferenceUsed,
+        navigationMode,
         currentHeading,
         targetHeading,
         turnInstruction,
@@ -749,7 +878,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         success: true,
         latencyMs: Date.now() - startedAt,
       });
-      res.status(200).json({ output: finalOutput, testLogId });
+      res.status(200).json({ output: finalOutput, testLogId, mode: navigationMode });
 
     } catch (error: any) {
       const upstreamStatus = error?.status ?? error?.response?.status;
@@ -780,7 +909,9 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationPhotoStatus,
         destinationPlaceName,
         destinationPlaceAddress,
+        destinationDistanceMeters,
         destinationReferenceUsed,
+        navigationMode,
         steps: testSteps,
         success: false,
         error: error?.message ?? "Last meters calculation failed.",

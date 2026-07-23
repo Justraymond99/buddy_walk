@@ -25,7 +25,9 @@ export interface lastMileTestLogInterface {
   destinationPhotoStatus?: string;
   destinationPlaceName?: string;
   destinationPlaceAddress?: string;
+  destinationDistanceMeters?: number;
   destinationReferenceUsed?: boolean;
+  navigationMode?: "approach" | "exact";
   currentHeading?: number;
   targetHeading?: number;
   turnInstruction?: string;
@@ -68,7 +70,9 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   destinationPhotoStatus: { type: String },
   destinationPlaceName: { type: String },
   destinationPlaceAddress: { type: String },
+  destinationDistanceMeters: { type: Number },
   destinationReferenceUsed: { type: Boolean, default: false },
+  navigationMode: { type: String, enum: ["approach", "exact"] },
   currentHeading: { type: Number },
   targetHeading: { type: Number },
   turnInstruction: { type: String },

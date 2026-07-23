@@ -1,4 +1,5 @@
 export const LAST_MILE_HEADINGS = [0, 45, 90, 135, 180, 225, 270, 315] as const;
+export const LAST_METERS_EXACT_RADIUS_METERS = 250;
 
 const NOT_VISIBLE_PATTERN =
   /\b(?:not visible|not in view|cannot (?:identify|locate|match|see)|can't (?:identify|locate|match|see)|unknown|no match)\b/i;
@@ -31,6 +32,39 @@ export function snapLastMileHeading(heading: number): number {
   return LAST_MILE_HEADINGS[
     Math.round(normalized / 45) % LAST_MILE_HEADINGS.length
   ];
+}
+
+export function buildLastMileApproachInstruction(
+  destination: string,
+  distanceMeters: number,
+  bearing: number
+): string {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  const directionNames = [
+    "north",
+    "northeast",
+    "east",
+    "southeast",
+    "south",
+    "southwest",
+    "west",
+    "northwest",
+  ];
+  const direction = directionNames[snapLastMileHeading(bearing) / 45];
+  const distance =
+    distanceMeters >= 1_000
+      ? `${(distanceMeters / 1_609.344).toFixed(1)} miles`
+      : `${Math.max(
+          50,
+          Math.round((distanceMeters * 3.28084) / 50) * 50
+        ).toLocaleString("en-US")} feet`;
+
+  return (
+    `${destination} is roughly ${distance} to the ${direction}. ` +
+    "Continue with your primary navigation and use Last Meters again when you are within about 800 feet."
+  );
 }
 
 export function buildLastMileTurnInstruction(
