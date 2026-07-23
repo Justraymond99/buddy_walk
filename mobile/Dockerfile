@@ -8,7 +8,7 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm ci --omit=optional || npm install --omit=optional
+RUN npm ci --include=optional || npm install --include=optional
 
 COPY tsconfig*.json ./
 COPY server ./server
