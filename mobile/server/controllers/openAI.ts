@@ -55,9 +55,11 @@ export class OpenAIController {
       if (!lat || !lng || !image || !destination) {
         return res.status(400).json({ error: "Missing required fields" });
       }
-      if (!process.env.OPENAI_API_KEY?.trim() || !process.env.GOOGLE_API_KEY?.trim()) {
+      const googleMapsApiKey =
+        process.env.GOOGLE_MAPS_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+      if (!process.env.OPENAI_API_KEY?.trim() || !googleMapsApiKey) {
         return res.status(503).json({
-          error: "Last Meters requires OPENAI_API_KEY and GOOGLE_API_KEY on this backend.",
+          error: "Last Meters requires OPENAI_API_KEY and GOOGLE_MAPS_API_KEY on this backend.",
         });
       }
       await openAIService.lastMileRequest({ req, res }, lat, lng, image, destination);

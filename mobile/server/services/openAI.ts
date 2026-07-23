@@ -935,7 +935,8 @@ async function processEightDirectionTiles(lat: number, lng: number): Promise<{ h
   console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
   const headings = [0, 45, 90, 135, 180, 225, 270, 315];
   const tilesData = [];
-  const apiKey = process.env.GOOGLE_API_KEY;
+  const apiKey =
+    process.env.GOOGLE_MAPS_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
 
   for (const hd of headings) {
     const url = `https://maps.googleapis.com/maps/api/streetview?size=640x640&location=${lat},${lng}&heading=${hd}&fov=45&pitch=0&source=outdoor&key=${apiKey}`;
