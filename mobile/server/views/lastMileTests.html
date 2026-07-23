@@ -119,7 +119,7 @@
     .image-wrap { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #0b0d10; }
     .image-label { padding: 8px 10px; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--line); font-size: 0.82rem; }
     img { display: block; width: 100%; max-height: 380px; object-fit: contain; background: #0b0d10; }
-    .panorama img { max-height: 170px; }
+    .panorama img { max-height: 300px; }
     .steps { display: grid; gap: 12px; }
     .step {
       border: 1px solid var(--line);
@@ -271,6 +271,8 @@
         '<div class="trial-head">' +
           '<div><div class="title">' + esc(row.destination || 'Unknown destination') + '</div>' +
           '<div class="meta">' + esc(fmtDate(row.serverTs)) + ' - ' + esc(coords) +
+          '<br>Panorama capture: ' + esc(row.panoramaDate || 'Date unavailable') +
+          ' | Street View: ' + esc(row.panoramaStatus || 'Unknown') +
           '<br>Current heading: ' + esc(row.currentHeading ?? '') +
           ' | Target heading: ' + esc(row.targetHeading ?? '') +
           ' | Latency: ' + esc(row.latencyMs ?? '') + ' ms</div></div>' +
@@ -281,7 +283,8 @@
             '<div class="image-wrap"><div class="image-label">User photo</div>' +
             (row.userPhoto ? '<img src="' + esc(row.userPhoto) + '" alt="User-submitted Last Meters photo" />' : '<div class="empty">No user photo saved.</div>') +
             '</div>' +
-            '<div class="image-wrap panorama"><div class="image-label">Panorama composite</div>' +
+            '<div class="image-wrap panorama"><div class="image-label">Panorama composite' +
+            (row.panoramaDate ? ' - captured ' + esc(row.panoramaDate) : '') + '</div>' +
             (row.panoramaPhoto ? '<img src="' + esc(row.panoramaPhoto) + '" alt="Street View panorama composite" />' : '<div class="empty">No panorama saved.</div>') +
             '</div>' +
           '</div>' +

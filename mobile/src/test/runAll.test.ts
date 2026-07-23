@@ -1,5 +1,6 @@
 import '../config/apiHosts.test.ts';
 import './serverMode.test.ts';
+import './lastMileNavigation.test.ts';
 import '../utils/parseSteps.test.ts';
 import '../utils/hapticPatterns.test.ts';
 import '../utils/navigationMath.test.ts';

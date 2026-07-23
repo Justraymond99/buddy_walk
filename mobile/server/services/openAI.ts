@@ -16,6 +16,10 @@ import {
   formatHistoryForPrompt,
   getConversationHistory,
 } from "../utils/conversationHistory";
+import {
+  buildLastMileTurnInstruction,
+  parseLastMileHeading,
+} from "../utils/lastMileNavigation";
 dotenv.config();
 
 async function geocodeCoordinates(latitude: number, longitude: number) {
@@ -195,6 +199,10 @@ export class OpenAIService {
     const { res } = ctx;
     const startedAt = Date.now();
     let activeStage = "panorama download";
+    let panoramaPhoto: string | undefined;
+    let panoramaDate: string | undefined;
+    let panoramaStatus: string | undefined;
+    let panoramaHeadings: number[] = [];
     const testSteps: {
       name: string;
       prompt: string;
@@ -214,9 +222,13 @@ export class OpenAIService {
     console.log("==================================================");
 
     try {
-      const tiles = await processEightDirectionTiles(lat, lng);
+      const panorama = await processEightDirectionTiles(lat, lng);
+      const { tiles } = panorama;
+      panoramaDate = panorama.metadata.date;
+      panoramaStatus = panorama.metadata.status;
+      panoramaHeadings = tiles.map((tile) => tile.heading);
       activeStage = "panorama assembly";
-      const panoramaPhoto = await buildPanoramaDebugImage(tiles);
+      panoramaPhoto = await buildPanoramaDebugImage(tiles);
       const panoramaOverviewMsg: any[] = [];
       tiles.forEach((tile) => {
         const label = { type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` };
@@ -234,7 +246,9 @@ export class OpenAIService {
       // ==========================================
       activeStage = "current-view matching";
       console.log("   ➤ Step 1: Locating User's Current View...");
-      const step1Prompt = "You will receive 8 panorama images explicitly labeled with their degrees (0°, 45°, etc.), followed by a user's photo. Identify which panorama segment visually matches the user's photo. Reply ONLY with the integer number of the degrees (e.g., 315).";
+      const step1Prompt = `You will receive 8 panorama images explicitly labeled with their degrees (0°, 45°, etc.), followed by a user's photo. Identify which single panorama segment confidently matches the user's photo.
+Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
+Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confidently matched. Do not return business names or explanations.`;
       const step1Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -252,23 +266,54 @@ export class OpenAIService {
         max_tokens: 12,
       });
       const step1Text = step1Response.choices[0].message.content?.trim() || "";
-      const currentHeading = parseInt(step1Text || "0");
+      const currentHeading = parseLastMileHeading(step1Text);
       testSteps.push({
         name: "current_view_match",
         prompt: step1Prompt,
         response: step1Text,
-        parsedHeading: currentHeading,
+        parsedHeading: currentHeading ?? undefined,
         model: "gpt-4o-mini",
-        success: Number.isFinite(currentHeading),
+        success: currentHeading !== null,
+        error: currentHeading === null ? "Current view could not be matched." : undefined,
         tokenCount: step1Response.usage?.total_tokens,
       });
+      if (currentHeading === null) {
+        const finalOutput =
+          "I could not confidently match your photo to the street panorama. Stop in a safe place and retake the photo while facing straight ahead.";
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaPhoto,
+          panoramaDate,
+          panoramaStatus,
+          panoramaHeadings,
+          finalOutput,
+          steps: testSteps,
+          success: false,
+          error: "current_view_not_visible",
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          warning: "current_view_not_visible",
+        });
+        return;
+      }
 
       // ==========================================
       // STEP 2: FIND TARGET HEADING (Text Name + Panorama ONLY - NO USER PHOTO)
       // ==========================================
       activeStage = "destination matching";
       console.log("   ➤ Step 2: Locating Target Store...");
-      const step2Prompt = `You will receive one panorama grid containing 8 views explicitly labeled with their degrees. Find the storefront or sign for "${destination}". Reply ONLY with the integer number of the degrees where it is located (e.g., 45).`;
+      const panoramaDateContext = panoramaDate
+        ? `Street View reports that this panorama was captured in ${panoramaDate}.`
+        : "Street View did not provide a capture date for this panorama.";
+      const step2Prompt = `You will receive one panorama grid containing 8 views explicitly labeled with their degrees. Find the storefront or sign for "${destination}". ${panoramaDateContext}
+Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
+Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
       const step2Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -285,44 +330,65 @@ export class OpenAIService {
         max_tokens: 12,
       });
       const step2Text = step2Response.choices[0].message.content?.trim() || "";
-      const targetHeading = parseInt(step2Text || "0");
+      const targetHeading = parseLastMileHeading(step2Text);
       testSteps.push({
         name: "target_store_match",
         prompt: step2Prompt,
         response: step2Text,
-        parsedHeading: targetHeading,
+        parsedHeading: targetHeading ?? undefined,
         model: "gpt-4o-mini",
-        success: Number.isFinite(targetHeading),
+        success: targetHeading !== null,
+        error: targetHeading === null ? "Destination was not visible in the panorama." : undefined,
         tokenCount: step2Response.usage?.total_tokens,
       });
+      if (targetHeading === null) {
+        const ageWarning = panoramaDate
+          ? ` The available Street View image is dated ${panoramaDate} and may be outdated.`
+          : "";
+        const finalOutput =
+          `I could not confirm ${destination} in the street panorama.${ageWarning} ` +
+          "Do not turn based on this result. Move closer using your primary navigation and try Last Meters again.";
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaPhoto,
+          panoramaDate,
+          panoramaStatus,
+          panoramaHeadings,
+          currentHeading,
+          finalOutput,
+          steps: testSteps,
+          success: false,
+          error: "destination_not_visible",
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          warning: "destination_not_visible",
+        });
+        return;
+      }
 
       // ==========================================
       // TYPESCRIPT MATH CALCULATION (Bulletproof Turn Logic)
       // ==========================================
-      let turnInstruction = "";
-      if (currentHeading === targetHeading) {
-        turnInstruction = "No turn needed. Move straight forward.";
-      } else {
-        let diff = targetHeading - currentHeading;
-        if (diff < -180) diff += 360;
-        if (diff > 180) diff -= 360;
-        
-        const direction = diff > 0 ? "RIGHT" : "LEFT";
-        const degrees = Math.abs(diff);
-        turnInstruction = `Turn ${degrees}° to your ${direction}.`;
-      }
+      const turnInstruction = buildLastMileTurnInstruction(currentHeading, targetHeading);
 
       // ==========================================
       // STEP 3: ACCESSIBLE GUIDANCE & LANDMARKS
       // ==========================================
       activeStage = "accessible guidance";
       console.log("   ➤ Step 3: Generating Accessible Guidance...");
-      const step3Prompt = `You are an orientation assistant for the blind.
-          The system has mathematically calculated the required action: "${turnInstruction}".
-          Your job is to look at the user's current photo and provide physical, tactile landmarks to help them execute this instruction safely. 
-          Rule 1: Double-check Left vs Right in the photo.
-          Rule 2: Mention physical objects like trash cans, steps, or building corners. Do NOT mention elevated text signs.
-          Rule 3: Keep it conversational but concise.`;
+      const step3Prompt = `You are an orientation assistant for a blind pedestrian.
+The validated turn instruction is: "${turnInstruction}"
+Describe at most two landmarks that are clearly visible in the user's current photo and useful while turning in place.
+Only mention stable, cane-detectable or tactile features such as a wall edge, curb, doorway recess, railing, or steps.
+Never invent an object. Never say "look", "see", "watch", "keep an eye out", or promise that a path is clear.
+Do not instruct the user to walk forward or cross a street. If no reliable landmark is visible, reply exactly: NO_RELIABLE_LANDMARKS.
+Keep the response to two short sentences and do not repeat the turn instruction.`;
       const step3Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -330,16 +396,24 @@ export class OpenAIService {
           { role: "user", content: [{ type: "image_url", image_url: { url: image } }] }
         ],
         temperature: 0.1,
-        max_tokens: 140,
+        max_tokens: 100,
       });
 
-      const landmarksGuidance = step3Response.choices[0].message.content;
+      const step3Text = step3Response.choices[0].message.content?.trim() || "";
+      const landmarksGuidance =
+        !step3Text || /\bNO_RELIABLE_LANDMARKS\b/i.test(step3Text)
+          ? "No reliable physical landmark was identified. Turn in place without moving forward, then confirm your orientation before continuing."
+          : step3Text;
       testSteps.push({
         name: "accessible_guidance",
         prompt: step3Prompt,
-        response: landmarksGuidance ?? "",
+        response: step3Text,
         model: "gpt-4o-mini",
-        success: !!landmarksGuidance,
+        success: !!step3Text && !/\bNO_RELIABLE_LANDMARKS\b/i.test(step3Text),
+        error:
+          !step3Text || /\bNO_RELIABLE_LANDMARKS\b/i.test(step3Text)
+            ? "No reliable physical landmark was identified."
+            : undefined,
         tokenCount: step3Response.usage?.total_tokens,
       });
 
@@ -357,7 +431,9 @@ export class OpenAIService {
         lng,
         userPhoto: await resizeDataUrlImage(image, 1024, 76),
         panoramaPhoto,
-        panoramaHeadings: tiles.map((tile) => tile.heading),
+        panoramaDate,
+        panoramaStatus,
+        panoramaHeadings,
         currentHeading,
         targetHeading,
         turnInstruction,
@@ -388,7 +464,10 @@ export class OpenAIService {
         lat,
         lng,
         userPhoto: await resizeDataUrlImage(image, 1024, 76),
-        panoramaHeadings: [],
+        panoramaPhoto,
+        panoramaDate,
+        panoramaStatus,
+        panoramaHeadings,
         steps: testSteps,
         success: false,
         error: error?.message ?? "Last meters calculation failed.",
@@ -956,19 +1035,50 @@ async function resizeDataUrlImage(dataUrl: string, maxWidth: number, quality: nu
   }
 }
 
-async function processEightDirectionTiles(lat: number, lng: number): Promise<{ heading: number; base64: string }[]> {
+interface StreetViewMetadata {
+  status: string;
+  date?: string;
+  pano_id?: string;
+  location?: { lat: number; lng: number };
+}
+
+async function processEightDirectionTiles(
+  lat: number,
+  lng: number
+): Promise<{
+  tiles: { heading: number; base64: string }[];
+  metadata: StreetViewMetadata;
+}> {
   console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
   const headings = [0, 45, 90, 135, 180, 225, 270, 315];
-  const tilesData = [];
+  const tilesData: { heading: number; base64: string }[] = [];
   const apiKey =
     process.env.GOOGLE_MAPS_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+  const metadataUrl =
+    `https://maps.googleapis.com/maps/api/streetview/metadata` +
+    `?location=${lat},${lng}&source=outdoor&key=${apiKey}`;
+  const metadataResponse = await axios.get<StreetViewMetadata>(metadataUrl, {
+    timeout: 20_000,
+  });
+  const metadata = metadataResponse.data;
+  if (metadata.status !== "OK") {
+    const metadataError = new Error(`Street View metadata returned ${metadata.status}.`);
+    Object.assign(metadataError, { code: `STREET_VIEW_${metadata.status}` });
+    throw metadataError;
+  }
+
+  const panoramaSelector = metadata.pano_id
+    ? `pano=${encodeURIComponent(metadata.pano_id)}`
+    : `location=${lat},${lng}`;
 
   for (const hd of headings) {
-    const url = `https://maps.googleapis.com/maps/api/streetview?size=640x640&location=${lat},${lng}&heading=${hd}&fov=45&pitch=0&source=outdoor&key=${apiKey}`;
+    const url =
+      `https://maps.googleapis.com/maps/api/streetview?size=640x640&${panoramaSelector}` +
+      `&heading=${hd}&fov=45&pitch=0&source=outdoor&return_error_code=true&key=${apiKey}`;
     const response = await axios.get(url, { responseType: "arraybuffer", timeout: 20_000 });
     const buffer = Buffer.from(response.data);
     tilesData.push({ heading: hd, base64: `data:image/jpeg;base64,${buffer.toString("base64")}` });
   }
 
-  return tilesData;
+  return { tiles: tilesData, metadata };
 }

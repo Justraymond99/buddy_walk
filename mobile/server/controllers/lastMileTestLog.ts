@@ -8,6 +8,8 @@ const LAST_MILE_TEST_CSV_COLUMNS = [
   "destination",
   "lat",
   "lng",
+  "panoramaDate",
+  "panoramaStatus",
   "currentHeading",
   "targetHeading",
   "turnInstruction",
