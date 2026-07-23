@@ -23,6 +23,7 @@ import {
   snapLastMileHeading,
 } from "../utils/lastMileNavigation";
 import {
+  extractNearbyPlaceQuery,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
 } from "../utils/nearbyPlaces";
@@ -199,6 +200,74 @@ async function getDestinationStreetViewReference(
         { lat: placeLocation.lat, lng: placeLocation.lng }
       )
     ),
+  };
+}
+
+interface VerifiedWalkingDirections {
+  placeName: string;
+  placeAddress: string;
+  distanceMeters: number;
+  directionsText: string;
+}
+
+async function getVerifiedNearbyWalkingDirections(
+  lat: number,
+  lng: number,
+  destination: string
+): Promise<VerifiedWalkingDirections> {
+  const locationResponse = await axios.get(
+    "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+    {
+      params: {
+        location: `${lat},${lng}`,
+        rankby: "distance",
+        keyword: destination,
+        key: getGoogleMapsApiKey(),
+      },
+      timeout: 20_000,
+    }
+  );
+  if (!["OK", "ZERO_RESULTS"].includes(locationResponse.data.status)) {
+    throw new Error(`Nearby Places returned ${locationResponse.data.status}.`);
+  }
+
+  const nearbyPlace = selectNearbyPlaceCandidate(
+    locationResponse.data.results ?? [],
+    { lat, lng }
+  );
+  if (!nearbyPlace?.place_id) {
+    throw new Error(`No nearby ${destination} was found within 50 kilometers.`);
+  }
+
+  const routeResponse = await axios.get(
+    "https://maps.googleapis.com/maps/api/directions/json",
+    {
+      params: {
+        mode: "walking",
+        origin: `${lat},${lng}`,
+        destination: `place_id:${nearbyPlace.place_id}`,
+        key: getGoogleMapsApiKey(),
+      },
+      timeout: 20_000,
+    }
+  );
+  const routeLeg = routeResponse.data.routes?.[0]?.legs?.[0];
+  if (routeResponse.data.status !== "OK" || !routeLeg) {
+    throw new Error(`Directions returned ${routeResponse.data.status}.`);
+  }
+
+  const directionsText = routeLeg.steps
+    .map(
+      (step: { html_instructions: string; distance: { text: string } }, index: number) =>
+        `Step ${index + 1}) ${step.html_instructions} for ${step.distance.text}`
+    )
+    .join("\n");
+
+  return {
+    placeName: nearbyPlace.name || destination,
+    placeAddress: nearbyPlace.vicinity || nearbyPlace.name || destination,
+    distanceMeters: nearbyPlace.distanceMeters,
+    directionsText,
   };
 }
 
@@ -721,6 +790,17 @@ Keep the response to two short sentences and do not repeat the turn instruction.
     const startedAt = Date.now();
     let toolUsed: string | undefined;
     const analytics = content.analytics;
+    const requestHadCoords = !!content.coords;
+    const requestedNearbyQuery = requestHadCoords
+      ? extractNearbyPlaceQuery(content.text)
+      : null;
+    const requiresVerifiedNearbyAnswer =
+      requestHadCoords &&
+      (
+        analytics?.feature === "directions" ||
+        requestedNearbyQuery !== null
+      );
+    let verifiedNearbyAnswer = false;
     const imageCount = Array.isArray(content.image)
       ? content.image.filter((img) => img).length
       : 0;
@@ -747,6 +827,22 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         outputLength: extra?.outputLength,
         tokenCount: extra?.tokenCount,
       });
+    };
+
+    const respondWithUnverifiedNearbyLocation = async (destinationLabel: string) => {
+      const safeOutput =
+        `I could not verify a nearby ${destinationLabel} from your current location. ` +
+        "Try a more specific name or street address.";
+      const updatedHistory = appendConversationHistory(content.analytics, {
+        input: content.text,
+        output: safeOutput,
+        data: "Nearby destination lookup failed; no unverified location was used.",
+      });
+      await recordAiRequest(false, {
+        outputLength: safeOutput.length,
+        errorCode: "nearby_destination_not_verified",
+      });
+      res.status(200).json({ output: safeOutput, history: updatedHistory, route: null });
     };
 
     // console.log("hello world!!!")
@@ -785,7 +881,38 @@ Keep the response to two short sentences and do not repeat the turn instruction.
     }
     else content.coords = { latitude: 0, longitude: 0 }
 
+    if (requiresVerifiedNearbyAnswer) {
+      const nearbyQuery = requestedNearbyQuery;
+      if (!nearbyQuery) {
+        await respondWithUnverifiedNearbyLocation("destination");
+        return;
+      }
+      try {
+        const verifiedDirections = await getVerifiedNearbyWalkingDirections(
+          content.coords.latitude,
+          content.coords.longitude,
+          nearbyQuery
+        );
+        toolUsed = "verifiedNearbyWalkingDirections";
+        verifiedNearbyAnswer = true;
+        completeAIPrompt += directionsPrompt;
+        relevantData = `Directions:\n${verifiedDirections.directionsText}`;
+        systemContent +=
+          `\nVerified nearby destination: ${verifiedDirections.placeName}, ` +
+          `${verifiedDirections.placeAddress}, approximately ` +
+          `${Math.round(verifiedDirections.distanceMeters)} meters away.\n` +
+          relevantData;
+      } catch (error) {
+        console.error("Verified nearby directions lookup failed:", error);
+        await respondWithUnverifiedNearbyLocation(nearbyQuery);
+        return;
+      }
+    }
+
     try {
+      if (verifiedNearbyAnswer) {
+        console.log("Using deterministic nearby walking directions.");
+      } else {
       const parsedRequest = await this.parseUserRequest(ctx, content.text, content.coords.latitude, content.coords.longitude)
       // console.log("parsedRequest: ", parsedRequest)
       console.log(parsedRequest?.choices[0].message)
@@ -1201,6 +1328,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         }
 
       } else console.log("No tool calls found in OpenAI response");
+      }
       // const places = await fetchNearbyPlaces(content.coords.latitude, content.coords.longitude);
       // nearbyPlaces = places.map((place: { name: string }) => place.name).join(', ');
       // systemContent += ` Nearby Places: ${nearbyPlaces}`;

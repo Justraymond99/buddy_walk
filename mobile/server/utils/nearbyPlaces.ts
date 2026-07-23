@@ -39,6 +39,29 @@ export function normalizeNearbyPlaceQuery(query: string): string {
     .trim();
 }
 
+export function extractNearbyPlaceQuery(input: string): string | null {
+  const text = input.trim();
+  const patterns = [
+    /(?:directions?|route|navigate|walk|head|take me|get me|bring me)\s+(?:to|toward|towards)\s+(.+)/i,
+    /how\s+(?:do|can|would|could)\s+i\s+(?:get|walk|go)\s+(?:to|toward|towards)\s+(.+)/i,
+    /(?:nearest|closest)\s+(.+?)(?:\s+(?:to|from)\s+me)?[?.!]*$/i,
+    /(?:find|show me|where(?:'s| is))\s+(?:the\s+)?(.+?)(?:\s+(?:near|close to)\s+me|\s+nearby)?[?.!]*$/i,
+    /(.+?)\s+(?:near|close to)\s+me[?.!]*$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+    const query = normalizeNearbyPlaceQuery(
+      match[1].replace(/[?.!]+\s*$/, "").replace(/^(?:the|a|an)\s+/i, "")
+    );
+    if (/^(?:what|which|who|how|is|are)\b/i.test(query)) continue;
+    if (query.length >= 2) return query;
+  }
+
+  return null;
+}
+
 export function selectNearbyPlaceCandidate(
   candidates: NearbyPlaceCandidate[],
   origin: { lat: number; lng: number },

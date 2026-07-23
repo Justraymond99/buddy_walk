@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  extractNearbyPlaceQuery,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
 } from "../../server/utils/nearbyPlaces";
@@ -10,6 +11,17 @@ const manhattan = { lat: 40.758, lng: -73.9855 };
 test("normalizeNearbyPlaceQuery removes proximity filler", () => {
   assert.equal(normalizeNearbyPlaceQuery("closest FedEx near me"), "FedEx");
   assert.equal(normalizeNearbyPlaceQuery("Nearby pharmacy"), "pharmacy");
+});
+
+test("extractNearbyPlaceQuery isolates destinations from local requests", () => {
+  assert.equal(
+    extractNearbyPlaceQuery("Give me walking directions to FedEx near me."),
+    "FedEx"
+  );
+  assert.equal(extractNearbyPlaceQuery("Where is the nearest Whole Foods?"), "Whole Foods");
+  assert.equal(extractNearbyPlaceQuery("Find a pharmacy nearby"), "pharmacy");
+  assert.equal(extractNearbyPlaceQuery("What is near me?"), null);
+  assert.equal(extractNearbyPlaceQuery("Tell me about package delivery"), null);
 });
 
 test("selectNearbyPlaceCandidate chooses the nearest valid result", () => {
