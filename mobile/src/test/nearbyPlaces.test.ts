@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   extractNearbyPlaceQuery,
+  isNearbyPlaceCandidateRelevant,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
 } from "../../server/utils/nearbyPlaces";
@@ -22,6 +23,30 @@ test("extractNearbyPlaceQuery isolates destinations from local requests", () => 
   assert.equal(extractNearbyPlaceQuery("Find a pharmacy nearby"), "pharmacy");
   assert.equal(extractNearbyPlaceQuery("What is near me?"), null);
   assert.equal(extractNearbyPlaceQuery("Tell me about package delivery"), null);
+});
+
+test("isNearbyPlaceCandidateRelevant rejects fuzzy brand substitutions", () => {
+  assert.equal(
+    isNearbyPlaceCandidateRelevant(
+      { name: "Burger Man", types: ["restaurant"], vicinity: "7th Avenue" },
+      "Whataburger"
+    ),
+    false
+  );
+  assert.equal(
+    isNearbyPlaceCandidateRelevant(
+      { name: "FedEx Office Print & Ship Center", types: ["store"] },
+      "FedEx"
+    ),
+    true
+  );
+  assert.equal(
+    isNearbyPlaceCandidateRelevant(
+      { name: "CVS", types: ["drugstore", "pharmacy", "store"] },
+      "pharmacy"
+    ),
+    true
+  );
 });
 
 test("selectNearbyPlaceCandidate chooses the nearest valid result", () => {

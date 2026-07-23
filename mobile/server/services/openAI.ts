@@ -24,6 +24,7 @@ import {
 } from "../utils/lastMileNavigation";
 import {
   extractNearbyPlaceQuery,
+  isNearbyPlaceCandidateRelevant,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
 } from "../utils/nearbyPlaces";
@@ -131,7 +132,9 @@ async function getDestinationStreetViewReference(
   }
 
   const nearbyPlace = selectNearbyPlaceCandidate(
-    locationResponse.data.results ?? [],
+    (locationResponse.data.results ?? []).filter((candidate: any) =>
+      isNearbyPlaceCandidateRelevant(candidate, nearbyQuery)
+    ),
     { lat, lng },
     2_000
   );
@@ -232,7 +235,9 @@ async function getVerifiedNearbyWalkingDirections(
   }
 
   const nearbyPlace = selectNearbyPlaceCandidate(
-    locationResponse.data.results ?? [],
+    (locationResponse.data.results ?? []).filter((candidate: any) =>
+      isNearbyPlaceCandidateRelevant(candidate, destination)
+    ),
     { lat, lng }
   );
   if (!nearbyPlace?.place_id) {
@@ -1128,7 +1133,9 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                 throw new Error(`Nearby Places returned ${location.data.status}.`);
               }
               const nearbyPlace = selectNearbyPlaceCandidate(
-                location.data.results ?? [],
+                (location.data.results ?? []).filter((candidate: any) =>
+                  isNearbyPlaceCandidateRelevant(candidate, nearbyQuery)
+                ),
                 {
                   lat: content.coords.latitude,
                   lng: content.coords.longitude,

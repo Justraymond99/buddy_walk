@@ -2,6 +2,7 @@ export interface NearbyPlaceCandidate {
   place_id?: string;
   name?: string;
   vicinity?: string;
+  types?: string[];
   geometry?: {
     location?: {
       lat?: number;
@@ -28,6 +29,67 @@ function haversineMeters(
     Math.sin(deltaLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2;
   return 2 * earthRadiusMeters * Math.asin(Math.sqrt(haversine));
+}
+
+const PLACE_TYPE_ALIASES: Record<string, string[]> = {
+  atm: ["atm"],
+  bank: ["bank"],
+  bar: ["bar"],
+  cafe: ["cafe"],
+  coffee: ["cafe"],
+  "coffee shop": ["cafe"],
+  gas: ["gas_station"],
+  "gas station": ["gas_station"],
+  grocery: ["grocery_or_supermarket", "supermarket"],
+  "grocery store": ["grocery_or_supermarket", "supermarket"],
+  hospital: ["hospital"],
+  hotel: ["lodging"],
+  pharmacy: ["drugstore", "pharmacy"],
+  "post office": ["post_office"],
+  restaurant: ["restaurant"],
+  supermarket: ["grocery_or_supermarket", "supermarket"],
+};
+
+function normalizeMatchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+export function isNearbyPlaceCandidateRelevant(
+  candidate: NearbyPlaceCandidate,
+  query: string
+): boolean {
+  const normalizedQuery = normalizeMatchText(normalizeNearbyPlaceQuery(query));
+  if (!normalizedQuery) return false;
+
+  const normalizedName = normalizeMatchText(candidate.name || "");
+  const normalizedAddress = normalizeMatchText(candidate.vicinity || "");
+  if (
+    normalizedName.includes(normalizedQuery) ||
+    normalizedQuery.includes(normalizedName) && normalizedName.length >= 4
+  ) {
+    return true;
+  }
+
+  const queryTokens = normalizedQuery.split(" ").filter((token) => token.length >= 2);
+  const nameTokens = new Set(normalizedName.split(" "));
+  if (queryTokens.length > 0 && queryTokens.every((token) => nameTokens.has(token))) {
+    return true;
+  }
+
+  const aliases = PLACE_TYPE_ALIASES[normalizedQuery] ?? [];
+  if (aliases.some((type) => candidate.types?.includes(type))) {
+    return true;
+  }
+
+  const queryNumbers = queryTokens.filter((token) => /^\d+$/.test(token));
+  return (
+    queryNumbers.length > 0 &&
+    queryNumbers.every((number) => normalizedAddress.split(" ").includes(number))
+  );
 }
 
 export function normalizeNearbyPlaceQuery(query: string): string {
