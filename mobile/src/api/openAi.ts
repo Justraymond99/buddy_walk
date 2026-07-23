@@ -52,21 +52,19 @@ export async function sendLastMileRequest(data: {
   image: string;
   destination: string;
 }): Promise<{ output?: string; error?: string; testLogId?: string }> {
-  // Last Meters needs server-side OpenAI and Google Maps keys. Try Render first
-  // for field-test logging, then the keyed AI host if Render is still stale.
+  // Last Meters needs our Render backend so field-test logs, panoramas, and
+  // the 3-step AI trace stay together for review.
   try {
-    let res;
-    try {
-      res = await withNetworkRetry(() =>
-        apiClient.post('/last-mile', data, { timeout: 180_000 })
-      );
-    } catch (apiError) {
-      console.warn('sendLastMileRequest: primary API failed, falling back to keyed AI host', apiError);
-      res = await aiClient.post('/last-mile', data, { timeout: 180_000 });
-    }
+    const res = await withNetworkRetry(() =>
+      apiClient.post('/last-mile', data, { timeout: 180_000 })
+    );
     return res.data as { output?: string; error?: string; testLogId?: string };
-  } catch (error) {
+  } catch (error: any) {
     console.error('sendLastMileRequest error:', error);
+    const backendMessage = error?.response?.data?.error;
+    if (typeof backendMessage === 'string' && backendMessage.trim()) {
+      throw new Error(backendMessage);
+    }
     throw error;
   }
 }

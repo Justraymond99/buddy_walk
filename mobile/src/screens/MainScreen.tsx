@@ -1110,7 +1110,10 @@ export default function MainScreen({ navigation }: Props) {
       }
     } catch (e) {
       console.error('Last Meters Error:', e);
-      const errMsg = 'Error calculating last meters navigation. Please try again.';
+      const detail = e instanceof Error ? e.message : '';
+      const errMsg = detail
+        ? `Last Meters error: ${detail}`
+        : 'Error calculating last meters navigation. Please try again.';
       setAiResponse(errMsg);
       speak(errMsg, { preferDevice: true });
     } finally {
