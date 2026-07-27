@@ -275,7 +275,9 @@
           ' | Street View: ' + esc(row.panoramaStatus || 'Unknown') +
           '<br>Destination reference: ' + esc(row.destinationReferenceUsed ? 'Used' : 'Not used') +
           (row.destinationPlaceName ? ' | ' + esc(row.destinationPlaceName) : '') +
-          '<br>Navigation mode: ' + esc(row.navigationMode || 'Unknown') +
+          '<br>Test scenario: ' + esc(row.testScenario || 'Not classified') +
+          ' | Navigation mode: ' + esc(row.navigationMode || 'Unknown') +
+          '<br>Destination types: ' + esc((row.destinationTypes || []).join(', ') || 'Unknown') +
           ' | Destination distance: ' + esc(row.destinationDistanceMeters == null ? '' : Math.round(row.destinationDistanceMeters) + ' m') +
           '<br>Phone heading: ' + esc(row.deviceHeading == null ? '' : Math.round(row.deviceHeading) + ' deg') +
           ' | Destination bearing: ' + esc(row.destinationBearing == null ? '' : Math.round(row.destinationBearing) + ' deg') +

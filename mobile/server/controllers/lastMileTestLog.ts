@@ -14,6 +14,7 @@ const LAST_MILE_TEST_CSV_COLUMNS = [
   "destinationPhotoStatus",
   "destinationPlaceName",
   "destinationPlaceAddress",
+  "destinationTypes",
   "destinationDistanceMeters",
   "destinationBearing",
   "deviceHeading",
@@ -21,6 +22,7 @@ const LAST_MILE_TEST_CSV_COLUMNS = [
   "headingAligned",
   "destinationReferenceUsed",
   "navigationMode",
+  "testScenario",
   "currentHeading",
   "targetHeading",
   "turnInstruction",
@@ -77,6 +79,7 @@ export class LastMileTestLogController {
         serverTs: row.serverTs ? new Date(row.serverTs).toISOString() : "",
         reviewedAt: row.reviewedAt ? new Date(row.reviewedAt).toISOString() : "",
         panoramaHeadings: row.panoramaHeadings.join("|"),
+        destinationTypes: (row.destinationTypes || []).join("|"),
         steps: JSON.stringify(row.steps),
         userPhoto: includeImages ? row.userPhoto : row.userPhoto ? `[base64 image ${row.userPhoto.length} chars]` : "",
         panoramaPhoto: includeImages

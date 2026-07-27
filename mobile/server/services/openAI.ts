@@ -19,14 +19,17 @@ import {
 import {
   buildAlignedHeadingInstruction,
   buildLastMileApproachInstruction,
+  buildLastMileRetakeInstruction,
   buildLastMileTurnInstruction,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
   LAST_METERS_EXACT_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
+  shouldUseDestinationReference,
   snapLastMileHeading,
 } from "../utils/lastMileNavigation";
+import type { LastMileTestScenario } from "../utils/lastMileNavigation";
 import {
   extractNearbyPlaceQuery,
   isNearbyPlaceCandidateRelevant,
@@ -114,6 +117,7 @@ interface VerifiedNearbyDestination {
   placeId: string;
   placeName: string;
   placeAddress: string;
+  types: string[];
   location: LatLng;
   distanceMeters: number;
 }
@@ -167,6 +171,7 @@ async function getVerifiedNearbyDestination(
     placeId: nearbyPlace.place_id,
     placeName: nearbyPlace.name || nearbyQuery,
     placeAddress: nearbyPlace.vicinity || nearbyPlace.name || nearbyQuery,
+    types: nearbyPlace.types ?? [],
     location: { lat: placeLocation.lat, lng: placeLocation.lng },
     distanceMeters: nearbyPlace.distanceMeters,
   };
@@ -420,6 +425,7 @@ export class OpenAIService {
     const startedAt = Date.now();
     let activeStage = "destination proximity check";
     let navigationMode: "approach" | "exact" | "aligned" | undefined;
+    let testScenario: LastMileTestScenario | undefined;
     let destinationDistanceMeters: number | undefined;
     let destinationBearing: number | undefined;
     let headingDifferenceDegrees: number | undefined;
@@ -434,6 +440,7 @@ export class OpenAIService {
     let destinationPhotoStatus: string | undefined;
     let destinationPlaceName: string | undefined;
     let destinationPlaceAddress: string | undefined;
+    let destinationTypes: string[] = [];
     let destinationReferenceUsed = false;
     const testSteps: {
       name: string;
@@ -466,7 +473,9 @@ export class OpenAIService {
         destinationDistanceMeters = verifiedDestination.distanceMeters;
         destinationPlaceName = verifiedDestination.placeName;
         destinationPlaceAddress = verifiedDestination.placeAddress;
+        destinationTypes = verifiedDestination.types;
       } catch (proximityError) {
+        testScenario = "destination_unverified";
         const message =
           proximityError instanceof Error
             ? proximityError.message
@@ -490,8 +499,10 @@ export class OpenAIService {
           panoramaHeadings,
           destinationPlaceName,
           destinationPlaceAddress,
+          destinationTypes,
           destinationDistanceMeters,
           deviceHeading,
+          testScenario,
           finalOutput,
           steps: testSteps,
           success: false,
@@ -501,6 +512,7 @@ export class OpenAIService {
         res.status(200).json({
           output: finalOutput,
           testLogId,
+          testScenario,
           warning: "destination_not_verified",
         });
         return;
@@ -535,6 +547,7 @@ export class OpenAIService {
 
       if (headingAligned) {
         navigationMode = "aligned";
+        testScenario = "heading_aligned";
         testSteps.unshift({
           name: "proximity_gate",
           prompt: proximityPrompt,
@@ -556,12 +569,14 @@ export class OpenAIService {
           panoramaHeadings,
           destinationPlaceName,
           destinationPlaceAddress,
+          destinationTypes,
           destinationDistanceMeters,
           destinationBearing,
           deviceHeading,
           headingDifferenceDegrees,
           headingAligned,
           navigationMode,
+          testScenario,
           finalOutput,
           steps: testSteps,
           success: true,
@@ -571,6 +586,7 @@ export class OpenAIService {
           output: finalOutput,
           testLogId,
           mode: navigationMode,
+          testScenario,
           warning: "heading_already_aligned",
         });
         return;
@@ -578,6 +594,7 @@ export class OpenAIService {
 
       if (destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS) {
         navigationMode = "approach";
+        testScenario = "test_b_approach";
         const finalOutput = buildLastMileApproachInstruction(
           verifiedDestination.placeName,
           destinationDistanceMeters,
@@ -600,12 +617,14 @@ export class OpenAIService {
           panoramaHeadings,
           destinationPlaceName,
           destinationPlaceAddress,
+          destinationTypes,
           destinationDistanceMeters,
           destinationBearing,
           deviceHeading,
           headingDifferenceDegrees,
           headingAligned,
           navigationMode,
+          testScenario,
           finalOutput,
           steps: testSteps,
           success: true,
@@ -615,6 +634,7 @@ export class OpenAIService {
           output: finalOutput,
           testLogId,
           mode: navigationMode,
+          testScenario,
           warning: "destination_too_far",
         });
         return;
@@ -701,6 +721,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           destinationPhotoStatus,
           destinationPlaceName,
           destinationPlaceAddress,
+          destinationTypes,
           destinationDistanceMeters,
           destinationBearing,
           deviceHeading,
@@ -708,6 +729,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           headingAligned,
           destinationReferenceUsed,
           navigationMode,
+          testScenario,
           finalOutput,
           steps: testSteps,
           success: false,
@@ -718,6 +740,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           output: finalOutput,
           testLogId,
           mode: navigationMode,
+          testScenario,
           warning: "current_view_not_visible",
         });
         return;
@@ -751,6 +774,9 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
       });
       const step2Text = step2Response.choices[0].message.content?.trim() || "";
       let targetHeading = parseLastMileHeading(step2Text);
+      if (targetHeading !== null) {
+        testScenario = "test_a_visible";
+      }
       testSteps.push({
         name: "target_store_match",
         prompt: step2Prompt,
@@ -762,6 +788,51 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
         tokenCount: step2Response.usage?.total_tokens,
       });
       if (targetHeading === null) {
+        if (!shouldUseDestinationReference(destinationDistanceMeters)) {
+          navigationMode = "approach";
+          testScenario = "test_b_approach";
+          const finalOutput = buildLastMileRetakeInstruction(
+            verifiedDestination.placeName,
+            destinationDistanceMeters,
+            destinationBearing
+          );
+          const testLogId = await lastMileTestLogService.record({
+            destination,
+            lat,
+            lng,
+            userPhoto: await resizeDataUrlImage(image, 1024, 76),
+            panoramaPhoto,
+            panoramaDate,
+            panoramaStatus,
+            panoramaHeadings,
+            destinationPlaceName,
+            destinationPlaceAddress,
+            destinationTypes,
+            destinationDistanceMeters,
+            destinationBearing,
+            deviceHeading,
+            headingDifferenceDegrees,
+            headingAligned,
+            destinationReferenceUsed,
+            navigationMode,
+            testScenario,
+            currentHeading,
+            finalOutput,
+            steps: testSteps,
+            success: true,
+            latencyMs: Date.now() - startedAt,
+          });
+          res.status(200).json({
+            output: finalOutput,
+            testLogId,
+            mode: navigationMode,
+            testScenario,
+            warning: "destination_not_visible_move_closer",
+          });
+          return;
+        }
+
+        testScenario = "test_a_reference";
         activeStage = "destination reference lookup";
         console.log("   Step 2B: Fetching a destination-focused Street View reference...");
         const referencePrompt =
@@ -855,6 +926,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           destinationPhotoStatus,
           destinationPlaceName,
           destinationPlaceAddress,
+          destinationTypes,
           destinationDistanceMeters,
           destinationBearing,
           deviceHeading,
@@ -862,6 +934,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           headingAligned,
           destinationReferenceUsed,
           navigationMode,
+          testScenario,
           currentHeading,
           finalOutput,
           steps: testSteps,
@@ -873,6 +946,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           output: finalOutput,
           testLogId,
           mode: navigationMode,
+          testScenario,
           warning: "destination_not_visible",
         });
         return;
@@ -959,6 +1033,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationPhotoStatus,
         destinationPlaceName,
         destinationPlaceAddress,
+        destinationTypes,
         destinationDistanceMeters,
         destinationBearing,
         deviceHeading,
@@ -966,6 +1041,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         headingAligned,
         destinationReferenceUsed,
         navigationMode,
+        testScenario,
         currentHeading,
         targetHeading,
         turnInstruction,
@@ -974,7 +1050,12 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         success: true,
         latencyMs: Date.now() - startedAt,
       });
-      res.status(200).json({ output: finalOutput, testLogId, mode: navigationMode });
+      res.status(200).json({
+        output: finalOutput,
+        testLogId,
+        mode: navigationMode,
+        testScenario,
+      });
 
     } catch (error: any) {
       const upstreamStatus = error?.status ?? error?.response?.status;
@@ -1005,6 +1086,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationPhotoStatus,
         destinationPlaceName,
         destinationPlaceAddress,
+        destinationTypes,
         destinationDistanceMeters,
         destinationBearing,
         deviceHeading,
@@ -1012,6 +1094,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         headingAligned,
         destinationReferenceUsed,
         navigationMode,
+        testScenario,
         steps: testSteps,
         success: false,
         error: error?.message ?? "Last meters calculation failed.",

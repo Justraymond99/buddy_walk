@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import type { LastMileTestScenario } from "../../utils/lastMileNavigation";
 
 export interface lastMileTestStepInterface {
   name: string;
@@ -25,6 +26,7 @@ export interface lastMileTestLogInterface {
   destinationPhotoStatus?: string;
   destinationPlaceName?: string;
   destinationPlaceAddress?: string;
+  destinationTypes?: string[];
   destinationDistanceMeters?: number;
   destinationBearing?: number;
   deviceHeading?: number;
@@ -32,6 +34,7 @@ export interface lastMileTestLogInterface {
   headingAligned?: boolean;
   destinationReferenceUsed?: boolean;
   navigationMode?: "approach" | "exact" | "aligned";
+  testScenario?: LastMileTestScenario;
   currentHeading?: number;
   targetHeading?: number;
   turnInstruction?: string;
@@ -74,6 +77,7 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   destinationPhotoStatus: { type: String },
   destinationPlaceName: { type: String },
   destinationPlaceAddress: { type: String },
+  destinationTypes: [{ type: String }],
   destinationDistanceMeters: { type: Number },
   destinationBearing: { type: Number },
   deviceHeading: { type: Number },
@@ -81,6 +85,17 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   headingAligned: { type: Boolean },
   destinationReferenceUsed: { type: Boolean, default: false },
   navigationMode: { type: String, enum: ["approach", "exact", "aligned"] },
+  testScenario: {
+    type: String,
+    enum: [
+      "test_a_visible",
+      "test_a_reference",
+      "test_b_approach",
+      "heading_aligned",
+      "destination_unverified",
+    ],
+    index: true,
+  },
   currentHeading: { type: Number },
   targetHeading: { type: Number },
   turnInstruction: { type: String },

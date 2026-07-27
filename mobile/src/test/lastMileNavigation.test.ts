@@ -3,11 +3,14 @@ import test from "node:test";
 import {
   buildAlignedHeadingInstruction,
   buildLastMileApproachInstruction,
+  buildLastMileRetakeInstruction,
   buildLastMileTurnInstruction,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
+  LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
+  shouldUseDestinationReference,
   snapLastMileHeading,
 } from "../../server/utils/lastMileNavigation";
 
@@ -94,5 +97,34 @@ test("buildAlignedHeadingInstruction keeps aligned guidance rough", () => {
   assert.equal(
     buildAlignedHeadingInstruction("Whole Foods", 320),
     "Whole Foods is roughly 1,050 feet ahead on your current heading. Keep this heading and continue with your primary navigation."
+  );
+});
+
+test("destination references are limited to the same frontage", () => {
+  assert.equal(
+    shouldUseDestinationReference(
+      LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS - 1
+    ),
+    true
+  );
+  assert.equal(
+    shouldUseDestinationReference(
+      LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS
+    ),
+    true
+  );
+  assert.equal(
+    shouldUseDestinationReference(
+      LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS + 1
+    ),
+    false
+  );
+  assert.throws(() => shouldUseDestinationReference(Number.NaN));
+});
+
+test("Test B guidance asks the user to move one block and retake", () => {
+  assert.equal(
+    buildLastMileRetakeInstruction("Whole Foods", 120, 90),
+    "Whole Foods is not visible from this block and is roughly 400 feet to the east. Continue with your primary navigation for another block, then stop safely and take a new photo."
   );
 });

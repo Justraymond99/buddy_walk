@@ -1,5 +1,13 @@
 export const LAST_MILE_HEADINGS = [0, 45, 90, 135, 180, 225, 270, 315] as const;
 export const LAST_METERS_EXACT_RADIUS_METERS = 250;
+export const LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS = 75;
+
+export type LastMileTestScenario =
+  | "test_a_visible"
+  | "test_a_reference"
+  | "test_b_approach"
+  | "heading_aligned"
+  | "destination_unverified";
 
 const NOT_VISIBLE_PATTERN =
   /\b(?:not visible|not in view|cannot (?:identify|locate|match|see)|can't (?:identify|locate|match|see)|unknown|no match)\b/i;
@@ -64,6 +72,27 @@ function formatLastMileDistance(distanceMeters: number): string {
       ).toLocaleString("en-US")} feet`;
 }
 
+function formatLastMileDirection(bearing: number): string {
+  const directionNames = [
+    "north",
+    "northeast",
+    "east",
+    "southeast",
+    "south",
+    "southwest",
+    "west",
+    "northwest",
+  ];
+  return directionNames[snapLastMileHeading(bearing) / 45];
+}
+
+export function shouldUseDestinationReference(distanceMeters: number): boolean {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  return distanceMeters <= LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS;
+}
+
 export function buildAlignedHeadingInstruction(
   destination: string,
   distanceMeters: number
@@ -85,22 +114,27 @@ export function buildLastMileApproachInstruction(
   if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
     throw new Error("Last Meters distance must be a non-negative finite number.");
   }
-  const directionNames = [
-    "north",
-    "northeast",
-    "east",
-    "southeast",
-    "south",
-    "southwest",
-    "west",
-    "northwest",
-  ];
-  const direction = directionNames[snapLastMileHeading(bearing) / 45];
+  const direction = formatLastMileDirection(bearing);
   const distance = formatLastMileDistance(distanceMeters);
 
   return (
     `${destination} is roughly ${distance} to the ${direction}. ` +
     "Continue with your primary navigation and use Last Meters again when you are within about 800 feet."
+  );
+}
+
+export function buildLastMileRetakeInstruction(
+  destination: string,
+  distanceMeters: number,
+  bearing: number
+): string {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  return (
+    `${destination} is not visible from this block and is roughly ` +
+    `${formatLastMileDistance(distanceMeters)} to the ${formatLastMileDirection(bearing)}. ` +
+    "Continue with your primary navigation for another block, then stop safely and take a new photo."
   );
 }
 
