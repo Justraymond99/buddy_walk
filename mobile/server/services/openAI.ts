@@ -26,6 +26,7 @@ import {
   LAST_METERS_EXACT_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
+  resolveVerifiedTargetHeading,
   shouldUseDestinationReference,
   snapLastMileHeading,
 } from "../utils/lastMileNavigation";
@@ -33,8 +34,10 @@ import type { LastMileTestScenario } from "../utils/lastMileNavigation";
 import {
   extractNearbyPlaceQuery,
   isNearbyPlaceCandidateRelevant,
+  MAX_LOCAL_PLACE_DISTANCE_METERS,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
+  selectNearbyPlaceCandidates,
 } from "../utils/nearbyPlaces";
 dotenv.config();
 
@@ -126,7 +129,7 @@ async function getVerifiedNearbyDestination(
   lat: number,
   lng: number,
   destination: string,
-  maxDistanceMeters = 50_000
+  maxDistanceMeters = MAX_LOCAL_PLACE_DISTANCE_METERS
 ): Promise<VerifiedNearbyDestination> {
   const nearbyQuery = normalizeNearbyPlaceQuery(destination);
   if (!nearbyQuery) {
@@ -256,6 +259,39 @@ interface VerifiedWalkingDirections {
   placeAddress: string;
   distanceMeters: number;
   directionsText: string;
+  route: VerifiedWalkingRoute;
+}
+
+interface VerifiedWalkingRouteStep {
+  index: number;
+  instruction: string;
+  distance: { text: string; value: number };
+  duration: { text: string; value: number };
+  maneuver: string;
+  startLocation: LatLng;
+  endLocation: LatLng;
+  travelMode?: string;
+}
+
+interface VerifiedWalkingRoute {
+  destination: { name?: string; address?: string } & LatLng;
+  origin: LatLng;
+  totalDistance: { text: string; value: number };
+  totalDuration: { text: string; value: number };
+  steps: VerifiedWalkingRouteStep[];
+  polyline?: string;
+  travelMode: string;
+}
+
+function plainGoogleInstruction(value: string): string {
+  return value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function getVerifiedNearbyWalkingDirections(
@@ -282,10 +318,31 @@ async function getVerifiedNearbyWalkingDirections(
     throw new Error(`Directions returned ${routeResponse.data.status}.`);
   }
 
-  const directionsText = routeLeg.steps
+  const routeDistanceMeters = Number(routeLeg.distance?.value ?? 0);
+  if (
+    !Number.isFinite(routeDistanceMeters) ||
+    routeDistanceMeters <= 0 ||
+    routeDistanceMeters > MAX_LOCAL_PLACE_DISTANCE_METERS
+  ) {
+    throw new Error("Verified walking route is outside the local distance limit.");
+  }
+
+  const routeSteps: VerifiedWalkingRouteStep[] = (routeLeg.steps ?? []).map(
+    (step: any, index: number) => ({
+      index,
+      instruction: plainGoogleInstruction(step.html_instructions || ""),
+      distance: step.distance,
+      duration: step.duration,
+      maneuver: step.maneuver || "",
+      startLocation: step.start_location,
+      endLocation: step.end_location,
+      travelMode: step.travel_mode,
+    })
+  );
+  const directionsText = routeSteps
     .map(
-      (step: { html_instructions: string; distance: { text: string } }, index: number) =>
-        `Step ${index + 1}) ${step.html_instructions} for ${step.distance.text}`
+      (step, index) =>
+        `Step ${index + 1}) ${step.instruction} for ${step.distance.text}`
     )
     .join("\n");
 
@@ -294,6 +351,20 @@ async function getVerifiedNearbyWalkingDirections(
     placeAddress: nearbyPlace.placeAddress,
     distanceMeters: nearbyPlace.distanceMeters,
     directionsText,
+    route: {
+      destination: {
+        name: nearbyPlace.placeName,
+        address: nearbyPlace.placeAddress,
+        lat: nearbyPlace.location.lat,
+        lng: nearbyPlace.location.lng,
+      },
+      origin: { lat, lng },
+      totalDistance: routeLeg.distance,
+      totalDuration: routeLeg.duration,
+      steps: routeSteps,
+      polyline: routeResponse.data.routes[0].overview_polyline?.points,
+      travelMode: "WALKING",
+    },
   };
 }
 
@@ -654,6 +725,10 @@ export class OpenAIService {
       panoramaDate = panorama.metadata.date;
       panoramaStatus = panorama.metadata.status;
       panoramaHeadings = tiles.map((tile) => tile.heading);
+      const panoramaOrigin = panorama.metadata.location ?? { lat, lng };
+      const expectedTargetHeading = snapLastMileHeading(
+        calculateHeading(panoramaOrigin, verifiedDestination.location)
+      );
       activeStage = "panorama assembly";
       panoramaPhoto = await buildPanoramaDebugImage(tiles);
       const panoramaOverviewMsg: any[] = [];
@@ -754,7 +829,8 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
       const panoramaDateContext = panoramaDate
         ? `Street View reports that this panorama was captured in ${panoramaDate}.`
         : "Street View did not provide a capture date for this panorama.";
-      const step2Prompt = `You will receive one panorama grid containing 8 views explicitly labeled with their degrees. Find the storefront or sign for "${destination}". ${panoramaDateContext}
+      const step2Prompt = `You will receive one panorama grid containing 8 overlapping views explicitly labeled with their center headings. Find the storefront or sign for "${destination}". ${panoramaDateContext}
+Google Maps places the verified destination near ${expectedTargetHeading} degrees from the panorama camera. Inspect that view and both neighboring views carefully, but use the map bearing only to focus the search, never as proof that the storefront is visible.
 Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
 Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
       const step2Response = await this.client.chat.completions.create({
@@ -773,8 +849,13 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
         max_tokens: 12,
       });
       const step2Text = step2Response.choices[0].message.content?.trim() || "";
-      let targetHeading = parseLastMileHeading(step2Text);
-      if (targetHeading !== null) {
+      const visuallyMatchedTargetHeading = parseLastMileHeading(step2Text);
+      let targetHeading = resolveVerifiedTargetHeading(
+        visuallyMatchedTargetHeading,
+        expectedTargetHeading
+      );
+      const visualMatchAgreesWithMap = targetHeading !== null;
+      if (visualMatchAgreesWithMap) {
         testScenario = "test_a_visible";
       }
       testSteps.push({
@@ -783,8 +864,13 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
         response: step2Text,
         parsedHeading: targetHeading ?? undefined,
         model: "gpt-4o-mini",
-        success: targetHeading !== null,
-        error: targetHeading === null ? "Destination was not visible in the panorama." : undefined,
+        success: visualMatchAgreesWithMap,
+        error:
+          visuallyMatchedTargetHeading === null
+            ? "Destination was not visible in the panorama."
+            : visualMatchAgreesWithMap
+              ? undefined
+              : "Visual destination heading disagreed with the verified map bearing.",
         tokenCount: step2Response.usage?.total_tokens,
       });
       if (targetHeading === null) {
@@ -1110,16 +1196,12 @@ Keep the response to two short sentences and do not repeat the turn instruction.
     let toolUsed: string | undefined;
     const analytics = content.analytics;
     const requestHadCoords = !!content.coords;
-    const requestedNearbyQuery = requestHadCoords
-      ? extractNearbyPlaceQuery(content.text)
-      : null;
+    const requestedNearbyQuery = extractNearbyPlaceQuery(content.text);
     const requiresVerifiedNearbyAnswer =
-      requestHadCoords &&
-      (
-        analytics?.feature === "directions" ||
-        requestedNearbyQuery !== null
-      );
+      analytics?.feature === "directions" ||
+      requestedNearbyQuery !== null;
     let verifiedNearbyAnswer = false;
+    let structuredRoute: VerifiedWalkingRoute | null = null;
     const imageCount = Array.isArray(content.image)
       ? content.image.filter((img) => img).length
       : 0;
@@ -1163,6 +1245,23 @@ Keep the response to two short sentences and do not repeat the turn instruction.
       });
       res.status(200).json({ output: safeOutput, history: updatedHistory, route: null });
     };
+
+    if (requiresVerifiedNearbyAnswer && !requestHadCoords) {
+      const safeOutput =
+        "I could not determine your current location, so I will not guess at nearby directions. " +
+        "Check location access and try again.";
+      const updatedHistory = appendConversationHistory(content.analytics, {
+        input: content.text,
+        output: safeOutput,
+        data: "Current location was unavailable; no place lookup was attempted.",
+      });
+      await recordAiRequest(false, {
+        outputLength: safeOutput.length,
+        errorCode: "current_location_unavailable",
+      });
+      res.status(200).json({ output: safeOutput, history: updatedHistory, route: null });
+      return;
+    }
 
     // console.log("hello world!!!")
     let systemContent = '';
@@ -1214,6 +1313,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         );
         toolUsed = "verifiedNearbyWalkingDirections";
         verifiedNearbyAnswer = true;
+        structuredRoute = verifiedDirections.route;
         completeAIPrompt += directionsPrompt;
         relevantData = `Directions:\n${verifiedDirections.directionsText}`;
         systemContent +=
@@ -1244,6 +1344,35 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         //get link
         const { link } = parsedArgs;
         console.log("Calling Google Maps tool:", parsedRequest.choices[0].message.tool_calls![0].function.name)
+        if (toolUsed === "generateGoogleDirectionAPILink" && !verifiedNearbyAnswer) {
+          const fallbackDestination = String(parsedArgs.destination || "").trim();
+          if (!requestHadCoords || !fallbackDestination) {
+            await respondWithUnverifiedNearbyLocation(
+              fallbackDestination || "destination"
+            );
+            return;
+          }
+          try {
+            const verifiedDirections = await getVerifiedNearbyWalkingDirections(
+              content.coords.latitude,
+              content.coords.longitude,
+              fallbackDestination
+            );
+            verifiedNearbyAnswer = true;
+            structuredRoute = verifiedDirections.route;
+            completeAIPrompt += directionsPrompt;
+            relevantData = `Directions:\n${verifiedDirections.directionsText}`;
+            systemContent +=
+              `\nVerified nearby destination: ${verifiedDirections.placeName}, ` +
+              `${verifiedDirections.placeAddress}, approximately ` +
+              `${Math.round(verifiedDirections.distanceMeters)} meters away.\n` +
+              relevantData;
+          } catch (error) {
+            console.error("Fallback verified directions lookup failed:", error);
+            await respondWithUnverifiedNearbyLocation(fallbackDestination);
+            return;
+          }
+        }
         // console.log("parsedArgs", parsedArgs);  
         if (link !== undefined && parsedRequest.choices[0].message.tool_calls![0].function.name !== "generateTrainInformation") {
           //use link
@@ -1417,7 +1546,11 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           console.log(staticMapUrl);
         }
         // Directions with static map, doorfront, and features
-        else if (parsedRequest.choices[0].message.tool_calls![0].function.name === "generateGoogleDirectionAPILink") {
+        else if (
+          parsedRequest.choices[0].message.tool_calls![0].function.name ===
+            "generateGoogleDirectionAPILink" &&
+          !verifiedNearbyAnswer
+        ) {
           try {
             completeAIPrompt += directionsPrompt
             let formattedAddress = '';
@@ -1456,7 +1589,10 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                 }
               );
               if (!nearbyPlace?.place_id) {
-                throw new Error(`No nearby ${nearbyQuery} was found within 50 kilometers.`);
+                  throw new Error(
+                    `No nearby ${nearbyQuery} was found within ` +
+                    `${MAX_LOCAL_PLACE_DISTANCE_METERS / 1_000} kilometers.`
+                  );
               }
 
               nearbyPlaceId = nearbyPlace.place_id;
@@ -1703,7 +1839,11 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         outputLength: outputText?.length ?? 0,
         tokenCount: chatCompletion.usage?.total_tokens,
       });
-      res.status(200).json({ output: outputText, history: updatedHistory });
+      res.status(200).json({
+        output: outputText,
+        history: updatedHistory,
+        route: structuredRoute,
+      });
     }
     catch (e: any) {
       console.error('Error with OpenAI API request:', e);
@@ -1805,7 +1945,6 @@ async function processEightDirectionTiles(
 }> {
   console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
   const headings = [0, 45, 90, 135, 180, 225, 270, 315];
-  const tilesData: { heading: number; base64: string }[] = [];
   const apiKey = getGoogleMapsApiKey();
   const metadataUrl =
     `https://maps.googleapis.com/maps/api/streetview/metadata` +
@@ -1824,14 +1963,22 @@ async function processEightDirectionTiles(
     ? `pano=${encodeURIComponent(metadata.pano_id)}`
     : `location=${lat},${lng}`;
 
-  for (const hd of headings) {
-    const url =
-      `https://maps.googleapis.com/maps/api/streetview?size=640x640&${panoramaSelector}` +
-      `&heading=${hd}&fov=45&pitch=0&source=outdoor&return_error_code=true&key=${apiKey}`;
-    const response = await axios.get(url, { responseType: "arraybuffer", timeout: 20_000 });
-    const buffer = Buffer.from(response.data);
-    tilesData.push({ heading: hd, base64: `data:image/jpeg;base64,${buffer.toString("base64")}` });
-  }
+  const tilesData = await Promise.all(
+    headings.map(async (heading) => {
+      const url =
+        `https://maps.googleapis.com/maps/api/streetview?size=640x640&${panoramaSelector}` +
+        `&heading=${heading}&fov=70&pitch=0&source=outdoor&return_error_code=true&key=${apiKey}`;
+      const response = await axios.get(url, {
+        responseType: "arraybuffer",
+        timeout: 20_000,
+      });
+      const buffer = Buffer.from(response.data);
+      return {
+        heading,
+        base64: `data:image/jpeg;base64,${buffer.toString("base64")}`,
+      };
+    })
+  );
 
   return { tiles: tilesData, metadata };
 }

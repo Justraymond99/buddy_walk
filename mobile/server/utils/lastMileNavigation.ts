@@ -63,6 +63,34 @@ export function isLastMileHeadingAligned(
   return lastMileHeadingDifference(currentHeading, targetHeading) <= toleranceDegrees;
 }
 
+export function resolveVerifiedTargetHeading(
+  visuallyMatchedHeading: number | null,
+  expectedMapHeading: number,
+  toleranceDegrees = 90
+): number | null {
+  if (
+    !LAST_MILE_HEADINGS.includes(
+      expectedMapHeading as (typeof LAST_MILE_HEADINGS)[number]
+    )
+  ) {
+    throw new Error("Expected target heading must be a panorama direction.");
+  }
+  if (visuallyMatchedHeading === null) return null;
+  if (
+    !LAST_MILE_HEADINGS.includes(
+      visuallyMatchedHeading as (typeof LAST_MILE_HEADINGS)[number]
+    )
+  ) {
+    throw new Error("Visual target heading must be a panorama direction.");
+  }
+  return lastMileHeadingDifference(
+    visuallyMatchedHeading,
+    expectedMapHeading
+  ) <= toleranceDegrees
+    ? expectedMapHeading
+    : null;
+}
+
 function formatLastMileDistance(distanceMeters: number): string {
   return distanceMeters >= 1_000
     ? `${(distanceMeters / 1_609.344).toFixed(1)} miles`

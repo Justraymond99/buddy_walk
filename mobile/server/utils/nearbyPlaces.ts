@@ -15,7 +15,9 @@ export interface NearbyPlaceSelection extends NearbyPlaceCandidate {
   distanceMeters: number;
 }
 
-function haversineMeters(
+export const MAX_LOCAL_PLACE_DISTANCE_METERS = 5_000;
+
+export function nearbyPlaceDistanceMeters(
   a: { lat: number; lng: number },
   b: { lat: number; lng: number }
 ): number {
@@ -127,9 +129,17 @@ export function extractNearbyPlaceQuery(input: string): string | null {
 export function selectNearbyPlaceCandidate(
   candidates: NearbyPlaceCandidate[],
   origin: { lat: number; lng: number },
-  maxDistanceMeters = 50_000
+  maxDistanceMeters = MAX_LOCAL_PLACE_DISTANCE_METERS
 ): NearbyPlaceSelection | null {
-  const ranked = candidates
+  return selectNearbyPlaceCandidates(candidates, origin, maxDistanceMeters)[0] ?? null;
+}
+
+export function selectNearbyPlaceCandidates(
+  candidates: NearbyPlaceCandidate[],
+  origin: { lat: number; lng: number },
+  maxDistanceMeters = MAX_LOCAL_PLACE_DISTANCE_METERS
+): NearbyPlaceSelection[] {
+  return candidates
     .map((candidate) => {
       const lat = candidate.geometry?.location?.lat;
       const lng = candidate.geometry?.location?.lng;
@@ -143,12 +153,10 @@ export function selectNearbyPlaceCandidate(
       }
       return {
         ...candidate,
-        distanceMeters: haversineMeters(origin, { lat, lng }),
+        distanceMeters: nearbyPlaceDistanceMeters(origin, { lat, lng }),
       };
     })
     .filter((candidate): candidate is NearbyPlaceSelection => candidate !== null)
     .filter((candidate) => candidate.distanceMeters <= maxDistanceMeters)
     .sort((a, b) => a.distanceMeters - b.distanceMeters);
-
-  return ranked[0] ?? null;
 }

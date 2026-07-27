@@ -3,8 +3,11 @@ import test from "node:test";
 import {
   extractNearbyPlaceQuery,
   isNearbyPlaceCandidateRelevant,
+  MAX_LOCAL_PLACE_DISTANCE_METERS,
+  nearbyPlaceDistanceMeters,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
+  selectNearbyPlaceCandidates,
 } from "../../server/utils/nearbyPlaces";
 
 const manhattan = { lat: 40.758, lng: -73.9855 };
@@ -88,4 +91,38 @@ test("selectNearbyPlaceCandidate rejects global and malformed results", () => {
     selectNearbyPlaceCandidate([{ place_id: "missing-location" }], manhattan),
     null
   );
+});
+
+test("default place selection rejects results beyond the local boundary", () => {
+  const sixKilometersNorth = {
+    place_id: "outside-local-area",
+    name: "FedEx outside local area",
+    geometry: { location: { lat: 40.812, lng: -73.9855 } },
+  };
+
+  assert.equal(
+    selectNearbyPlaceCandidate([sixKilometersNorth], manhattan),
+    null
+  );
+});
+
+test("local place ranking filters distant results before returning options", () => {
+  const origin = { lat: 40.758, lng: -73.9855 };
+  const local = {
+    name: "Local store",
+    geometry: { location: { lat: 40.759, lng: -73.9855 } },
+  };
+  const distant = {
+    name: "Different-state result",
+    geometry: { location: { lat: 41.2, lng: -74.5 } },
+  };
+
+  const ranked = selectNearbyPlaceCandidates(
+    [distant, local],
+    origin,
+    MAX_LOCAL_PLACE_DISTANCE_METERS
+  );
+
+  assert.deepEqual(ranked.map((place) => place.name), ["Local store"]);
+  assert.ok(nearbyPlaceDistanceMeters(origin, origin) < 1);
 });

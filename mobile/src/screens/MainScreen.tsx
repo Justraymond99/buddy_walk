@@ -17,7 +17,7 @@ import { Text, Button, IconButton } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
-import { Magnetometer, Accelerometer } from 'expo-sensors';
+import { Accelerometer } from 'expo-sensors';
 import * as Network from 'expo-network';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -194,6 +194,11 @@ export default function MainScreen({ navigation }: Props) {
   useEffect(() => { userInputRef.current = userInput; }, [userInput]);
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { recordingModeRef.current = recordingMode; }, [recordingMode]);
+  useEffect(() => {
+    if (capturedImage || capturedVideoUri || webVideoFrames?.length) {
+      cameraReadyRef.current = false;
+    }
+  }, [capturedImage, capturedVideoUri, webVideoFrames]);
 
   function clearRecordingTimer(): void {
     if (recordingTimerRef.current) {
@@ -252,7 +257,7 @@ export default function MainScreen({ navigation }: Props) {
 
   useEffect(() => {
     let locationSub: Location.LocationSubscription | null = null;
-    let magnetometerSub: ReturnType<typeof Magnetometer.addListener> | null = null;
+    let headingSub: Location.LocationSubscription | null = null;
 
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -272,26 +277,27 @@ export default function MainScreen({ navigation }: Props) {
           { accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 2 },
           (loc) => { locationRef.current = loc; }
         );
+        if (Platform.OS !== 'web') {
+          try {
+            headingSub = await Location.watchHeadingAsync((heading) => {
+              if (heading.accuracy < 2) return;
+              const degrees =
+                heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
+              if (Number.isFinite(degrees)) {
+                headingRef.current = (degrees + 360) % 360;
+              }
+            });
+          } catch (e) {
+            console.warn('Compass heading unavailable:', e);
+          }
+        }
       }
     })();
 
-    // The magnetometer doesn't exist on web — guard so the screen still mounts
-    // (heading just stays at its default for browser testers).
-    if (Platform.OS !== 'web') {
-      try {
-        Magnetometer.setUpdateInterval(500);
-        magnetometerSub = Magnetometer.addListener(({ x, y }) => {
-          let angle = Math.atan2(y, x) * (180 / Math.PI);
-          headingRef.current = (angle + 360) % 360;
-        });
-      } catch (e) {
-        console.warn('Magnetometer unavailable:', e);
-      }
-    }
-
+    // Low-accuracy readings remain unset so Last Meters uses panorama matching.
     return () => {
       locationSub?.remove();
-      magnetometerSub?.remove();
+      headingSub?.remove();
     };
   }, []);
 
@@ -505,7 +511,7 @@ export default function MainScreen({ navigation }: Props) {
   }, []);
 
   /** expo-camera requires onCameraReady before takePicture/recordAsync. */
-  async function waitForCameraReady(timeoutMs = 5000): Promise<boolean> {
+  async function waitForCameraReady(timeoutMs = 2500): Promise<boolean> {
     if (cameraReadyRef.current) return true;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -547,7 +553,11 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
     try {
-      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.4,
+        skipProcessing: Platform.OS !== 'web',
+      });
       const dataUrl = photoToDataUrl(photo);
       if (dataUrl) {
         setCapturedVideoUri(null);
@@ -605,7 +615,7 @@ export default function MainScreen({ navigation }: Props) {
     try {
       videoRecordStartedRef.current = true;
       beginRecordingFeedback();
-      await resetAudioForPlayback();
+      await prepareAudioForRecording();
       AccessibilityInfo.announceForAccessibility('Video recording started');
       // recordAsync resolves when stopRecording is called or maxDuration is reached
       const video = await cameraRef.current.recordAsync({ maxDuration: MAX_VIDEO_DURATION_MS / 1000 });

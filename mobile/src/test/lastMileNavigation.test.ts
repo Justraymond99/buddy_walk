@@ -10,6 +10,7 @@ import {
   LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
+  resolveVerifiedTargetHeading,
   shouldUseDestinationReference,
   snapLastMileHeading,
 } from "../../server/utils/lastMileNavigation";
@@ -91,6 +92,13 @@ test("heading alignment handles compass wraparound", () => {
   assert.equal(isLastMileHeadingAligned(350, 10), true);
   assert.equal(isLastMileHeadingAligned(350, 30), false);
   assert.throws(() => isLastMileHeadingAligned(0, 90, 181));
+});
+
+test("verified panorama target preserves precise front-to-behind guidance", () => {
+  assert.equal(resolveVerifiedTargetHeading(180, 180), 180);
+  assert.equal(resolveVerifiedTargetHeading(135, 180), 180);
+  assert.equal(resolveVerifiedTargetHeading(0, 180), null);
+  assert.equal(buildLastMileTurnInstruction(0, 180), "Turn around 180 degrees without moving forward.");
 });
 
 test("buildAlignedHeadingInstruction keeps aligned guidance rough", () => {
