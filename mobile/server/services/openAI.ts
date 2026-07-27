@@ -1205,6 +1205,9 @@ Keep the response to two short sentences and do not repeat the turn instruction.
     const imageCount = Array.isArray(content.image)
       ? content.image.filter((img) => img).length
       : 0;
+    const isDirectVisualRequest =
+      imageCount > 0 &&
+      (analytics?.feature === "photo_qa" || analytics?.feature === "video_qa");
 
     const recordAiRequest = async (
       success: boolean,
@@ -1246,6 +1249,25 @@ Keep the response to two short sentences and do not repeat the turn instruction.
       res.status(200).json({ output: safeOutput, history: updatedHistory, route: null });
     };
 
+    const respondWithVerifiedWalkingDirections = async (
+      verified: VerifiedWalkingDirections
+    ) => {
+      const output =
+        `${verified.directionsText}\n` +
+        `Destination: ${verified.placeName}, ${verified.placeAddress}.`;
+      const updatedHistory = appendConversationHistory(content.analytics, {
+        input: content.text,
+        output,
+        data: `Verified local route to ${verified.placeName}.`,
+      });
+      await recordAiRequest(true, { outputLength: output.length });
+      res.status(200).json({
+        output,
+        history: updatedHistory,
+        route: verified.route,
+      });
+    };
+
     if (requiresVerifiedNearbyAnswer && !requestHadCoords) {
       const safeOutput =
         "I could not determine your current location, so I will not guess at nearby directions. " +
@@ -1285,19 +1307,17 @@ Keep the response to two short sentences and do not repeat the turn instruction.
       });
     }
     // console.log(userContent)
-    if (content.coords) {
+    if (content.coords && !requiresVerifiedNearbyAnswer && !isDirectVisualRequest) {
       const geocodedCoords = await geocodeCoordinates(content.coords.latitude, content.coords.longitude)
       systemContent += `Current Address: ${geocodedCoords[0].formatted_address} `;
-
-      if (content.coords.heading !== undefined) {
-        systemContent += `, Heading (Compass Direction): ${content.coords.heading}`;
-      }
-
-      if (content.coords.orientation) {
-        systemContent += `, Orientation - Alpha: ${content.coords.orientation.alpha}, Beta: ${content.coords.orientation.beta}, Gamma: ${content.coords.orientation.gamma}`;
-      }
     }
-    else content.coords = { latitude: 0, longitude: 0 }
+    if (content.coords?.heading !== undefined) {
+      systemContent += `, Heading (Compass Direction): ${content.coords.heading}`;
+    }
+    if (content.coords?.orientation) {
+      systemContent += `, Orientation - Alpha: ${content.coords.orientation.alpha}, Beta: ${content.coords.orientation.beta}, Gamma: ${content.coords.orientation.gamma}`;
+    }
+    if (!content.coords) content.coords = { latitude: 0, longitude: 0 }
 
     if (requiresVerifiedNearbyAnswer) {
       const nearbyQuery = requestedNearbyQuery;
@@ -1314,6 +1334,10 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         toolUsed = "verifiedNearbyWalkingDirections";
         verifiedNearbyAnswer = true;
         structuredRoute = verifiedDirections.route;
+        if (imageCount === 0) {
+          await respondWithVerifiedWalkingDirections(verifiedDirections);
+          return;
+        }
         completeAIPrompt += directionsPrompt;
         relevantData = `Directions:\n${verifiedDirections.directionsText}`;
         systemContent +=
@@ -1331,6 +1355,13 @@ Keep the response to two short sentences and do not repeat the turn instruction.
     try {
       if (verifiedNearbyAnswer) {
         console.log("Using deterministic nearby walking directions.");
+      } else if (isDirectVisualRequest) {
+        toolUsed =
+          analytics?.feature === "video_qa"
+            ? "videoDescription"
+            : "imageDescription";
+        completeAIPrompt +=
+          analytics?.feature === "video_qa" ? videoPrompt : imagePrompt;
       } else {
       const parsedRequest = await this.parseUserRequest(ctx, content.text, content.coords.latitude, content.coords.longitude)
       // console.log("parsedRequest: ", parsedRequest)
@@ -1360,6 +1391,10 @@ Keep the response to two short sentences and do not repeat the turn instruction.
             );
             verifiedNearbyAnswer = true;
             structuredRoute = verifiedDirections.route;
+            if (imageCount === 0) {
+              await respondWithVerifiedWalkingDirections(verifiedDirections);
+              return;
+            }
             completeAIPrompt += directionsPrompt;
             relevantData = `Directions:\n${verifiedDirections.directionsText}`;
             systemContent +=
@@ -1816,7 +1851,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           { role: 'system', content: combinedSystemMessage },
           { role: 'user', content: userContent }
         ],
-        model: 'gpt-4.1-mini',
+        model: isDirectVisualRequest ? 'gpt-4o-mini' : 'gpt-4.1-mini',
         temperature: 0.2,
         max_tokens: maxTokensForFeature(analytics?.feature),
       });
