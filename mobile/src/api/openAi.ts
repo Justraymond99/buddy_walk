@@ -47,7 +47,7 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
   }
 }
 export async function sendLastMileRequest(data: { lat: number; lng: number; image: string; destination: string }) {
-  const targetUrl = 'http://100.92.99.101:8000/api/last-mile';
+  const targetUrl = 'http://100.92.97.101:8000/api/last-mile';
   console.log(`[FRONTEND] Sending Last-Mile request to: ${targetUrl}`);
   console.log(`[FRONTEND] Payload size - Image length: ${data.image?.length}, Destination: ${data.destination}`);
 

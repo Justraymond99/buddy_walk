@@ -191,7 +191,111 @@ export class OpenAIService {
     }
   }
 
+  private async getNewestPanoramaId(lat: number, lng: number): Promise<string | null> {
+    try {
+      const apiKey = process.env.GOOGLE_API_KEY;
+      
+      // Define a 5-point grid: Center, North, South, East, West
+      const offsets = [
+        { dLat: 0, dLng: 0 },
+        { dLat: 0.0001, dLng: 0 },
+        { dLat: -0.0001, dLng: 0 },
+        { dLat: 0, dLng: 0.0001 },
+        { dLat: 0, dLng: -0.0001 }
+      ];
+  
+      // Fire all metadata requests concurrently
+      const requests = offsets.map(offset => {
+        const testLat = lat + offset.dLat;
+        const testLng = lng + offset.dLng;
+        const url = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${testLat},${testLng}&radius=50&source=outdoor&key=${apiKey}`;
+        return axios.get(url).catch(() => null);
+      });
+  
+      const responses = await Promise.all(requests);
+  
+      // Extract valid responses and default missing dates to '2000-01' for sorting purposes
+      const validPanos = responses
+        .filter(res => res && res.data && res.data.status === "OK")
+        .map(res => ({
+          pano_id: res!.data.pano_id,
+          date: res!.data.date || "2000-01",
+        }));
+  
+      if (validPanos.length === 0) return null;
+  
+      // Sort descending so the newest date comes first
+      validPanos.sort((a, b) => b.date.localeCompare(a.date));
+      console.log(`\n📸 Grid Scan: Found ${validPanos.length} panos. Best date: ${validPanos[0].date}, PanoID: ${validPanos[0].pano_id}`);
+      
+      return validPanos[0].pano_id;
+  
+    } catch (error: any) {
+      console.error("❌ ERROR fetching metadata grid:", error.message);
+      return null;
+    }
+  }
+
+  private async processEightDirectionTiles(lat: number, lng: number, panoId: string | null): Promise<{ heading: number; base64: string }[]> {
+    console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
+    
+    // Exactly 8 segments to cover a full 360-degree view (45 degrees per tile)
+    const headings = [0, 45, 90, 135, 180, 225, 270, 315];
+    const apiKey = process.env.GOOGLE_API_KEY;
+    
+    // 1. Download all 8 tiles in parallel to maximize speed
+    const tilePromises = headings.map(async (hd) => {
+      // If we found a recent panoId, use it. Otherwise fallback to lat/lng.
+      const locationOrPano = panoId ? `pano=${panoId}` : `location=${lat},${lng}`;
+      const url = `https://maps.googleapis.com/maps/api/streetview?size=640x640&${locationOrPano}&heading=${hd}&fov=45&pitch=0&source=outdoor&key=${apiKey}`;
+      
+      const response = await axios.get(url, { responseType: "arraybuffer" });
+      const buffer = Buffer.from(response.data);
+      
+      // We return both the buffer (for Sharp) and the base64 (for OpenAI)
+      return { 
+        heading: hd, 
+        buffer: buffer, 
+        base64: `data:image/jpeg;base64,${buffer.toString("base64")}` 
+      };
+    });
+
+    const results = await Promise.all(tilePromises);
+
+    // 2. --- DEBUG LOGIC: RECREATE THE JPG FOR VISUAL CONFIRMATION ---
+    try {
+      const compositeLayers: sharp.OverlayOptions[] = [];
+      
+      results.forEach((tile, index) => {
+        const leftOffset = index * 640;
+        
+        // Add the image layer
+        compositeLayers.push({ input: tile.buffer, left: leftOffset, top: 0 });
+        
+        // Add the SVG text overlay (assuming createOverlaySvg is defined at the bottom of your file)
+        compositeLayers.push({ input: createOverlaySvg(tile.heading, index + 1), left: leftOffset, top: 0 });
+      });
+
+      // Stitch the 8 images together into a single 5120x640 file
+      const outputPath = path.resolve(__dirname, "../../debug-panorama-360.jpg");
+      await sharp({ create: { width: 5120, height: 640, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+        .composite(compositeLayers)
+        .toFile(outputPath);
+        
+      console.log(`✅ Debug panorama saved to: ${outputPath}`);
+    } catch (err) {
+      console.error("❌ Error saving debug panorama:", err);
+    }
+    // -----------------------------------------------------------------
+
+    // 3. Return only the data required by the OpenAI pipeline (strip out the raw buffer to save memory)
+    return results.map(r => ({ heading: r.heading, base64: r.base64 }));
+  }
+
+  // =====================================================================
   // --- LAST METERS NAVIGATION PIPELINE ---
+  // =====================================================================
+  
   async lastMileRequest(ctx: AppContext, lat: number, lng: number, image: string, destination: string) {
     const { res } = ctx;
 
@@ -212,7 +316,10 @@ export class OpenAIService {
     }
 
     try {
-      const tiles = await processEightDirectionTiles(lat, lng);
+      // 0. Obtaining the most recent panorama ID and processing the tiles.
+      const bestPanoId = await this.getNewestPanoramaId(lat, lng);
+      const tiles = await this.processEightDirectionTiles(lat, lng, bestPanoId);
+      
       const panoramaImagesMsg: any[] = [];
       tiles.forEach((tile) => {
         panoramaImagesMsg.push({ type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` });
@@ -233,7 +340,15 @@ export class OpenAIService {
         ],
         temperature: 0.0
       });
-      const currentHeading = parseInt(step1Response.choices[0].message.content?.trim() || "0");
+      
+      const step1Text = step1Response.choices[0].message.content?.trim() || "";
+      const currentHeading = parseInt(step1Text);
+
+      // 🛡️ GUARDRAIL STEP 1: Controlling NaN results
+      if (isNaN(currentHeading)) {
+        console.log(`❌ Step 1 Failed (NaN returned). AI output: ${step1Text}`);
+        return res.status(200).json({ output: "Unable to determine your current orientation from the photo. Please adjust your camera angle and take another photo." });
+      }
 
       // ==========================================
       // STEP 2: FIND TARGET HEADING (Text Name + Panorama ONLY - NO USER PHOTO)
@@ -242,12 +357,20 @@ export class OpenAIService {
       const step2Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: `You will receive 8 panorama images explicitly labeled with their degrees. Find the storefront or sign for "${destination}". Reply ONLY with the integer number of the degrees where it is located (e.g., 45).` },
+          { role: "system", content: `You will receive 8 panorama images explicitly labeled with their degrees. Find the storefront or sign for "${destination}" from the panorama image ONLY. If the destination is NOT clearly visible in ANY of the images, you MUST reply with 'NaN'. If it is visible, reply ONLY with the exact integer number of the degrees where it is located (e.g., 45). Do not guess or assume.` },
           { role: "user", content: panoramaImagesMsg }
         ],
         temperature: 0.0
       });
-      const targetHeading = parseInt(step2Response.choices[0].message.content?.trim() || "0");
+      
+      const step2Text = step2Response.choices[0].message.content?.trim() || "";
+      const targetHeading = parseInt(step2Text);
+
+      // 🛡️ GUARDRAIL STEP 2: Controlling NaN results
+      if (isNaN(targetHeading)) {
+        console.log(`❌ Step 2 Failed (NaN returned). AI output: ${step2Text}`);
+        return res.status(200).json({ output: `Unable to locate "${destination}" in the current street view. You might be too far away, or the storefront is hidden. Try moving a block closer.` });
+      }
 
       // ==========================================
       // TYPESCRIPT MATH CALCULATION (Bulletproof Turn Logic)
@@ -262,7 +385,14 @@ export class OpenAIService {
         
         const direction = diff > 0 ? "RIGHT" : "LEFT";
         const degrees = Math.abs(diff);
+        
+        if (degrees === 180) {
+        turnInstruction = "Your destination is directly behind you. Turn around 180°.";
+      } else if (degrees === 135) {
+        turnInstruction = `Your destination is behind you to your ${direction}. Turn 135° to your ${direction}.`;
+      } else {
         turnInstruction = `Turn ${degrees}° to your ${direction}.`;
+      }
       }
 
       // ==========================================
@@ -272,12 +402,14 @@ export class OpenAIService {
       const step3Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: `You are an orientation assistant for the blind. 
-          The system has mathematically calculated the required action: "${turnInstruction}".
-          Your job is to look at the user's current photo and provide physical, tactile landmarks to help them execute this instruction safely. 
-          Rule 1: Double-check Left vs Right in the photo.
-          Rule 2: Mention physical objects like trash cans, steps, or building corners. Do NOT mention elevated text signs.
-          Rule 3: Keep it conversational but concise.` },
+          { role: "system", content: `You are an orientation assistant for blind users. 
+          TASK: Guide the user to safely execute this calculated action: "${turnInstruction}" to reach "${destination}".
+          
+          CRITICAL RULES:
+          1. TARGET VISIBILITY OVERRIDE: First, look at the user's photo. If the entrance to "${destination}" is clearly visible directly in front of them in their photo, IGNORE the calculated action entirely and just say: "You are facing your destination. Move straight forward."
+          2. EXTREME CONCISENESS: Keep your response under 3 short sentences. No filler words.
+          3. NO POST-TURN GUESSING: Do NOT describe what the user will face *after* the turn (e.g., never say "Once you turn, you will see an open area").
+          4. TACTILE ANCHORS ONLY: Mention ONLY immediate physical objects next to the user (walls, curbs, construction barriers, parked cars) that help them pivot safely. Be definitive. Never use phrases like "There may be".` },
           { role: "user", content: [{ type: "image_url", image_url: { url: image } }] }
         ],
         temperature: 0.1
@@ -816,35 +948,4 @@ function createOverlaySvg(heading: number, segmentIndex: number): Buffer {
     </svg>
   `;
   return Buffer.from(svg);
-}
-
-async function processEightDirectionTiles(lat: number, lng: number): Promise<{ heading: number; base64: string }[]> {
-  console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
-  const headings = [0, 45, 90, 135, 180, 225, 270, 315];
-  const tilesData = [];
-  const rawBuffers: Buffer[] = [];
-  const apiKey = process.env.GOOGLE_API_KEY;
-
-  for (const hd of headings) {
-    const url = `https://maps.googleapis.com/maps/api/streetview?size=640x640&location=${lat},${lng}&heading=${hd}&fov=45&pitch=0&source=outdoor&key=${apiKey}`;
-    const response = await axios.get(url, { responseType: "arraybuffer" });
-    const buffer = Buffer.from(response.data);
-    rawBuffers.push(buffer);
-    tilesData.push({ heading: hd, base64: `data:image/jpeg;base64,${buffer.toString("base64")}` });
-  }
-
-  const compositeLayers: sharp.OverlayOptions[] = [];
-  rawBuffers.forEach((buffer, index) => {
-    const leftOffset = index * 640;
-    compositeLayers.push({ input: buffer, left: leftOffset, top: 0 });
-    compositeLayers.push({ input: createOverlaySvg(headings[index], index + 1), left: leftOffset, top: 0 });
-  });
-
-  const outputPath = path.resolve(__dirname, "../../debug-panorama-360.jpg");
-  await sharp({ create: { width: 5120, height: 640, channels: 3, background: { r: 0, g: 0, b: 0 } } })
-    .composite(compositeLayers)
-    .toFile(outputPath);
-  console.log(`✅ Debug panorama saved to: ${outputPath}`);
-
-  return tilesData;
 }
