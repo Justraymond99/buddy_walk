@@ -12,7 +12,7 @@ import feedbackRoute from "./routes/feedback"
 import mtaRoute from "./routes/mta"
 import lastMileTestLogRoute from "./routes/lastMileTestLog"
 import mongoose from "mongoose";
-import {databaseLink, config} from "./database";
+import { config } from "./database";
 import { setCompanionMemoryStore } from "./database/companionStoreMode";
 import { describeServerMode, isZeroConfigMode } from "./config/serverMode";
 import { mountUpstreamProxy } from "./middleware/upstreamProxy";
@@ -41,8 +41,9 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       ...config.options,
       serverSelectionTimeoutMS: 4000,
     });
-    console.log("Connect to the MongoDB successfully!");
-    console.log("DB LINK -> ", databaseLink);
+    console.log(
+      `[server] MongoDB connected (${mongoose.connection.name || "default database"}).`
+    );
   } catch (error) {
     console.warn("MongoDB unavailable — using in-memory store for metrics, chat logs, and companion:", error);
     setCompanionMemoryStore(true);
