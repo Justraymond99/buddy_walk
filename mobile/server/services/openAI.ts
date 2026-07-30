@@ -1949,15 +1949,56 @@ Keep the response to two short sentences and do not repeat the turn instruction.
 
 }
 
-function createOverlaySvg(heading: number, segmentIndex: number): Buffer {
+const PANORAMA_LABEL_GLYPHS: Record<string, string[]> = {
+  "0": ["11111", "10001", "10011", "10101", "11001", "10001", "11111"],
+  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+  "2": ["11110", "00001", "00001", "11110", "10000", "10000", "11111"],
+  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+  "4": ["10010", "10010", "10010", "11111", "00010", "00010", "00010"],
+  "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+  "6": ["01111", "10000", "10000", "11110", "10001", "10001", "01110"],
+  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "11110"],
+  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+  G: ["01110", "10001", "10000", "10111", "10001", "10001", "01110"],
+  I: ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+  V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+  W: ["10001", "10001", "10001", "10101", "10101", "10101", "01010"],
+  "|": ["00100", "00100", "00100", "00100", "00100", "00100", "00100"],
+  " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+};
+
+export function createPanoramaOverlaySvg(
+  heading: number,
+  segmentIndex: number
+): Buffer {
   const paddedHeading = String(heading).padStart(3, "0");
+  const label = `VIEW ${segmentIndex} | ${paddedHeading} DEG`;
+  const pixelSize = 5;
+  const glyphAdvance = 30;
+  const startX = 24;
+  const startY = 20;
+  const pixels: string[] = [];
+  for (const [glyphIndex, character] of [...label].entries()) {
+    const glyph = PANORAMA_LABEL_GLYPHS[character];
+    if (!glyph) continue;
+    glyph.forEach((row, rowIndex) => {
+      [...row].forEach((pixel, columnIndex) => {
+        if (pixel !== "1") return;
+        pixels.push(
+          `<rect x="${startX + glyphIndex * glyphAdvance + columnIndex * pixelSize}" ` +
+          `y="${startY + rowIndex * pixelSize}" width="${pixelSize}" height="${pixelSize}" fill="#ffffff" />`
+        );
+      });
+    });
+  }
   const svg = `
     <svg width="640" height="640">
       <rect x="0" y="0" width="640" height="76" fill="rgba(0, 0, 0, 0.9)" />
       <rect x="0" y="0" width="8" height="640" fill="#00e0b8" />
-      <text x="24" y="51" font-family="Arial" font-size="34" font-weight="bold" fill="#ffffff">
-        VIEW ${segmentIndex} | ${paddedHeading} DEG
-      </text>
+      ${pixels.join("")}
     </svg>
   `;
   return Buffer.from(svg);
@@ -1974,7 +2015,7 @@ async function buildPanoramaDebugImage(tiles: { heading: number; base64: string 
     );
     compositeLayers.push({ input: imageBuffer, left: leftOffset, top: topOffset });
     compositeLayers.push({
-      input: createOverlaySvg(tile.heading, index + 1),
+      input: createPanoramaOverlaySvg(tile.heading, index + 1),
       left: leftOffset,
       top: topOffset,
     });
