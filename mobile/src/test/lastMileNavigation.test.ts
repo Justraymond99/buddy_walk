@@ -7,6 +7,8 @@ import {
   buildLastMileTurnInstruction,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
+  LAST_MILE_HEADINGS,
+  LAST_MILE_PANORAMA_FOV_DEGREES,
   LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
@@ -106,6 +108,27 @@ test("buildAlignedHeadingInstruction keeps aligned guidance rough", () => {
     buildAlignedHeadingInstruction("Whole Foods", 320),
     "Whole Foods is roughly 1,050 feet ahead on your current heading. Keep this heading and continue with your primary navigation."
   );
+});
+
+test("close aligned guidance does not inflate the distance to 50 feet", () => {
+  assert.equal(
+    buildAlignedHeadingInstruction("CVS", 3),
+    "CVS is roughly 10 feet ahead on your current heading. Keep this heading and continue with your primary navigation."
+  );
+  assert.equal(
+    buildAlignedHeadingInstruction("Starbucks", 6),
+    "Starbucks is roughly 20 feet ahead on your current heading. Keep this heading and continue with your primary navigation."
+  );
+});
+
+test("panorama sectors cover 360 degrees once without overlap", () => {
+  assert.equal(LAST_MILE_HEADINGS.length * LAST_MILE_PANORAMA_FOV_DEGREES, 360);
+  for (let index = 1; index < LAST_MILE_HEADINGS.length; index += 1) {
+    assert.equal(
+      LAST_MILE_HEADINGS[index] - LAST_MILE_HEADINGS[index - 1],
+      LAST_MILE_PANORAMA_FOV_DEGREES
+    );
+  }
 });
 
 test("destination references are limited to the same frontage", () => {

@@ -23,6 +23,8 @@ import {
   buildLastMileTurnInstruction,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
+  LAST_MILE_HEADINGS,
+  LAST_MILE_PANORAMA_FOV_DEGREES,
   LAST_METERS_EXACT_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
@@ -748,7 +750,7 @@ export class OpenAIService {
       // ==========================================
       activeStage = "current-view matching";
       console.log("   ➤ Step 1: Locating User's Current View...");
-      const step1Prompt = `You will receive 8 panorama images explicitly labeled with their degrees (0°, 45°, etc.), followed by a user's photo. Identify which single panorama segment confidently matches the user's photo.
+      const step1Prompt = `You will receive 8 distinct, non-overlapping panorama images explicitly labeled with their center headings (000 DEG, 045 DEG, etc.), followed by a user's photo. Identify which single panorama segment confidently matches the user's photo.
 Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
 Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confidently matched. Do not return business names or explanations.`;
       const step1Response = await this.client.chat.completions.create({
@@ -768,13 +770,35 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         max_tokens: 12,
       });
       const step1Text = step1Response.choices[0].message.content?.trim() || "";
-      const currentHeading = parseLastMileHeading(step1Text);
+      const visuallyMatchedCurrentHeading = parseLastMileHeading(step1Text);
+      const compassCurrentHeading =
+        typeof deviceHeading === "number" && Number.isFinite(deviceHeading)
+          ? snapLastMileHeading(deviceHeading)
+          : null;
+      const currentHeading =
+        compassCurrentHeading ?? visuallyMatchedCurrentHeading;
+      const visualCompassDifference =
+        compassCurrentHeading !== null && visuallyMatchedCurrentHeading !== null
+          ? lastMileHeadingDifference(
+              compassCurrentHeading,
+              visuallyMatchedCurrentHeading
+            )
+          : undefined;
       testSteps.push({
         name: "current_view_match",
         prompt: step1Prompt,
-        response: step1Text,
+        response:
+          compassCurrentHeading === null
+            ? step1Text
+            : `COMPASS ${compassCurrentHeading}; VISUAL ${step1Text || "NOT_VISIBLE"}` +
+              (visualCompassDifference !== undefined
+                ? `; DIFFERENCE ${visualCompassDifference} DEG`
+                : ""),
         parsedHeading: currentHeading ?? undefined,
-        model: "gpt-4o-mini",
+        model:
+          compassCurrentHeading === null
+            ? "gpt-4o-mini"
+            : "device-compass+gpt-4o-mini",
         success: currentHeading !== null,
         error: currentHeading === null ? "Current view could not be matched." : undefined,
         tokenCount: step1Response.usage?.total_tokens,
@@ -829,10 +853,10 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
       const panoramaDateContext = panoramaDate
         ? `Street View reports that this panorama was captured in ${panoramaDate}.`
         : "Street View did not provide a capture date for this panorama.";
-      const step2Prompt = `You will receive one panorama grid containing 8 overlapping views explicitly labeled with their center headings. Find the storefront or sign for "${destination}". ${panoramaDateContext}
+      const step2Prompt = `You will receive one panorama grid containing 8 distinct, non-overlapping views explicitly labeled with their center headings. Find the storefront, sign, or entrance for "${destination}". ${panoramaDateContext}
 Google Maps places the verified destination near ${expectedTargetHeading} degrees from the panorama camera. Inspect that view and both neighboring views carefully, but use the map bearing only to focus the search, never as proof that the storefront is visible.
 Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
-Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
+Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. A different nearby business is not a match. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
       const step2Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -1056,6 +1080,7 @@ The validated turn instruction is: "${turnInstruction}"
 ${destinationReferenceContext}
 Describe at most two stable physical landmarks. Use the user's current photo for a landmark useful while turning in place. If a destination reference is provided, you may also describe one clearly visible entrance feature and must prefix it with "Street View reference:".
 Only mention stable, cane-detectable or tactile features such as a wall edge, curb, doorway recess, railing, or steps.
+Do not name, describe, or direct the user toward any business other than "${destinationPlaceName || destination}". If the requested destination's entrance is not verified, omit entrance guidance rather than substituting a neighboring storefront.
 Never claim that a reference-image feature is currently present or visible from the user's position. Never invent an object. Never say "look", "see", "watch", "keep an eye out", or promise that a path is clear.
 Do not instruct the user to walk forward or cross a street. If no reliable landmark is visible, reply exactly: NO_RELIABLE_LANDMARKS.
 Keep the response to two short sentences and do not repeat the turn instruction.`;
@@ -1911,12 +1936,13 @@ Keep the response to two short sentences and do not repeat the turn instruction.
 }
 
 function createOverlaySvg(heading: number, segmentIndex: number): Buffer {
+  const paddedHeading = String(heading).padStart(3, "0");
   const svg = `
     <svg width="640" height="640">
-      <rect x="0" y="0" width="10" height="640" fill="#000000" />
-      <rect x="20" y="20" width="220" height="45" rx="8" fill="rgba(0, 0, 0, 0.75)" />
-      <text x="30" y="50" font-family="Arial" font-size="22" font-weight="bold" fill="#00FFCC">
-        SEG ${segmentIndex}: ${heading}°
+      <rect x="0" y="0" width="640" height="76" fill="rgba(0, 0, 0, 0.9)" />
+      <rect x="0" y="0" width="8" height="640" fill="#00e0b8" />
+      <text x="24" y="51" font-family="Arial" font-size="34" font-weight="bold" fill="#ffffff">
+        VIEW ${segmentIndex} | ${paddedHeading} DEG
       </text>
     </svg>
   `;
@@ -1979,7 +2005,7 @@ async function processEightDirectionTiles(
   metadata: StreetViewMetadata;
 }> {
   console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
-  const headings = [0, 45, 90, 135, 180, 225, 270, 315];
+  const headings = [...LAST_MILE_HEADINGS];
   const apiKey = getGoogleMapsApiKey();
   const metadataUrl =
     `https://maps.googleapis.com/maps/api/streetview/metadata` +
@@ -2002,7 +2028,8 @@ async function processEightDirectionTiles(
     headings.map(async (heading) => {
       const url =
         `https://maps.googleapis.com/maps/api/streetview?size=640x640&${panoramaSelector}` +
-        `&heading=${heading}&fov=70&pitch=0&source=outdoor&return_error_code=true&key=${apiKey}`;
+        `&heading=${heading}&fov=${LAST_MILE_PANORAMA_FOV_DEGREES}` +
+        `&pitch=0&source=outdoor&return_error_code=true&key=${apiKey}`;
       const response = await axios.get(url, {
         responseType: "arraybuffer",
         timeout: 20_000,

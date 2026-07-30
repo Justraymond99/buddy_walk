@@ -1,4 +1,5 @@
 export const LAST_MILE_HEADINGS = [0, 45, 90, 135, 180, 225, 270, 315] as const;
+export const LAST_MILE_PANORAMA_FOV_DEGREES = 45;
 export const LAST_METERS_EXACT_RADIUS_METERS = 250;
 export const LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS = 75;
 
@@ -92,12 +93,16 @@ export function resolveVerifiedTargetHeading(
 }
 
 function formatLastMileDistance(distanceMeters: number): string {
-  return distanceMeters >= 1_000
-    ? `${(distanceMeters / 1_609.344).toFixed(1)} miles`
-    : `${Math.max(
-        50,
-        Math.round((distanceMeters * 3.28084) / 50) * 50
-      ).toLocaleString("en-US")} feet`;
+  if (distanceMeters >= 1_000) {
+    return `${(distanceMeters / 1_609.344).toFixed(1)} miles`;
+  }
+
+  const feet = distanceMeters * 3.28084;
+  const roundedFeet =
+    feet <= 100
+      ? Math.max(5, Math.round(feet / 5) * 5)
+      : Math.round(feet / 50) * 50;
+  return `${roundedFeet.toLocaleString("en-US")} feet`;
 }
 
 function formatLastMileDirection(bearing: number): string {
