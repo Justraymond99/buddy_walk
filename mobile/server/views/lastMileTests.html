@@ -282,7 +282,15 @@
           '<br>Phone heading: ' + esc(row.deviceHeading == null ? '' : Math.round(row.deviceHeading) + ' deg') +
           ' | Destination bearing: ' + esc(row.destinationBearing == null ? '' : Math.round(row.destinationBearing) + ' deg') +
           ' | Difference: ' + esc(row.headingDifferenceDegrees == null ? '' : Math.round(row.headingDifferenceDegrees) + ' deg') +
-          '<br>Current heading: ' + esc(row.currentHeading ?? '') +
+          '<br><strong>Heading comparison:</strong> Compass ' +
+          esc(row.compassHeading == null ? 'Unavailable' : Math.round(row.compassHeading) + ' deg') +
+          ' | Panorama ' +
+          esc(row.panoramaMatchedHeading == null ? 'No match' : Math.round(row.panoramaMatchedHeading) + ' deg') +
+          ' | Difference ' +
+          esc(row.headingComparisonDifference == null ? 'N/A' : Math.round(row.headingComparisonDifference) + ' deg') +
+          ' | ' +
+          esc(row.headingComparisonAgrees == null ? 'Not comparable' : row.headingComparisonAgrees ? 'Agree' : 'Disagree') +
+          '<br>Guidance heading (compass only): ' + esc(row.currentHeading ?? '') +
           ' | Target heading: ' + esc(row.targetHeading ?? '') +
           ' | Latency: ' + esc(row.latencyMs ?? '') + ' ms</div></div>' +
           '<div><span class="pill ' + statusClass(review) + '">' + esc(review) + '</span> <span class="pill">' + esc(success) + '</span></div>' +

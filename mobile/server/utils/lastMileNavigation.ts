@@ -64,6 +64,38 @@ export function isLastMileHeadingAligned(
   return lastMileHeadingDifference(currentHeading, targetHeading) <= toleranceDegrees;
 }
 
+export function compareCompassAndPanoramaHeadings(
+  deviceHeading: number | undefined,
+  panoramaMatchedHeading: number | null,
+  agreementToleranceDegrees = 45
+): {
+  compassHeading: number | null;
+  panoramaMatchedHeading: number | null;
+  authoritativeHeading: number | null;
+  differenceDegrees?: number;
+  agrees?: boolean;
+} {
+  const compassHeading =
+    typeof deviceHeading === "number" && Number.isFinite(deviceHeading)
+      ? snapLastMileHeading(deviceHeading)
+      : null;
+  const differenceDegrees =
+    compassHeading !== null && panoramaMatchedHeading !== null
+      ? lastMileHeadingDifference(compassHeading, panoramaMatchedHeading)
+      : undefined;
+
+  return {
+    compassHeading,
+    panoramaMatchedHeading,
+    authoritativeHeading: compassHeading,
+    differenceDegrees,
+    agrees:
+      differenceDegrees === undefined
+        ? undefined
+        : differenceDegrees <= agreementToleranceDegrees,
+  };
+}
+
 export function resolveVerifiedTargetHeading(
   visuallyMatchedHeading: number | null,
   expectedMapHeading: number,

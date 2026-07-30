@@ -5,6 +5,7 @@ import {
   buildLastMileApproachInstruction,
   buildLastMileRetakeInstruction,
   buildLastMileTurnInstruction,
+  compareCompassAndPanoramaHeadings,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
   LAST_MILE_HEADINGS,
@@ -94,6 +95,30 @@ test("heading alignment handles compass wraparound", () => {
   assert.equal(isLastMileHeadingAligned(350, 10), true);
   assert.equal(isLastMileHeadingAligned(350, 30), false);
   assert.throws(() => isLastMileHeadingAligned(0, 90, 181));
+});
+
+test("panorama heading is comparison-only and never replaces the compass", () => {
+  assert.deepEqual(compareCompassAndPanoramaHeadings(92, 135), {
+    compassHeading: 90,
+    panoramaMatchedHeading: 135,
+    authoritativeHeading: 90,
+    differenceDegrees: 45,
+    agrees: true,
+  });
+  assert.deepEqual(compareCompassAndPanoramaHeadings(undefined, 180), {
+    compassHeading: null,
+    panoramaMatchedHeading: 180,
+    authoritativeHeading: null,
+    differenceDegrees: undefined,
+    agrees: undefined,
+  });
+  assert.deepEqual(compareCompassAndPanoramaHeadings(5, null), {
+    compassHeading: 0,
+    panoramaMatchedHeading: null,
+    authoritativeHeading: 0,
+    differenceDegrees: undefined,
+    agrees: undefined,
+  });
 });
 
 test("verified panorama target preserves precise front-to-behind guidance", () => {

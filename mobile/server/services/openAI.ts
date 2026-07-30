@@ -21,6 +21,7 @@ import {
   buildLastMileApproachInstruction,
   buildLastMileRetakeInstruction,
   buildLastMileTurnInstruction,
+  compareCompassAndPanoramaHeadings,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
   LAST_MILE_HEADINGS,
@@ -504,6 +505,11 @@ export class OpenAIService {
     let destinationBearing: number | undefined;
     let headingDifferenceDegrees: number | undefined;
     let headingAligned: boolean | undefined;
+    let compassHeading: number | undefined;
+    let panoramaMatchedHeading: number | undefined;
+    let headingComparisonDifference: number | undefined;
+    let headingComparisonAgrees: boolean | undefined;
+    let currentHeading: number | undefined;
     let verifiedDestination: VerifiedNearbyDestination | undefined;
     let panoramaPhoto: string | undefined;
     let panoramaDate: string | undefined;
@@ -619,7 +625,10 @@ export class OpenAIService {
         });
       }
 
-      if (headingAligned) {
+      if (
+        headingAligned &&
+        destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS
+      ) {
         navigationMode = "aligned";
         testScenario = "heading_aligned";
         testSteps.unshift({
@@ -771,42 +780,64 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         max_tokens: 12,
       });
       const step1Text = step1Response.choices[0].message.content?.trim() || "";
-      const visuallyMatchedCurrentHeading = parseLastMileHeading(step1Text);
-      const compassCurrentHeading =
-        typeof deviceHeading === "number" && Number.isFinite(deviceHeading)
-          ? snapLastMileHeading(deviceHeading)
-          : null;
-      const currentHeading =
-        compassCurrentHeading ?? visuallyMatchedCurrentHeading;
-      const visualCompassDifference =
-        compassCurrentHeading !== null && visuallyMatchedCurrentHeading !== null
-          ? lastMileHeadingDifference(
-              compassCurrentHeading,
-              visuallyMatchedCurrentHeading
-            )
-          : undefined;
+      const comparison = compareCompassAndPanoramaHeadings(
+        deviceHeading,
+        parseLastMileHeading(step1Text)
+      );
+      compassHeading = comparison.compassHeading ?? undefined;
+      panoramaMatchedHeading = comparison.panoramaMatchedHeading ?? undefined;
+      headingComparisonDifference = comparison.differenceDegrees;
+      headingComparisonAgrees = comparison.agrees;
+      currentHeading = comparison.authoritativeHeading ?? undefined;
       testSteps.push({
-        name: "current_view_match",
+        name: "panorama_current_view_match",
         prompt: step1Prompt,
-        response:
-          compassCurrentHeading === null
-            ? step1Text
-            : `COMPASS ${compassCurrentHeading}; VISUAL ${step1Text || "NOT_VISIBLE"}` +
-              (visualCompassDifference !== undefined
-                ? `; DIFFERENCE ${visualCompassDifference} DEG`
-                : ""),
-        parsedHeading: currentHeading ?? undefined,
-        model:
-          compassCurrentHeading === null
-            ? "gpt-4o-mini"
-            : "device-compass+gpt-4o-mini",
-        success: currentHeading !== null,
-        error: currentHeading === null ? "Current view could not be matched." : undefined,
+        response: step1Text,
+        parsedHeading: panoramaMatchedHeading,
+        model: "gpt-4o-mini",
+        success: panoramaMatchedHeading !== undefined,
+        error:
+          panoramaMatchedHeading === undefined
+            ? "Panorama could not independently match the current view."
+            : undefined,
         tokenCount: step1Response.usage?.total_tokens,
       });
-      if (currentHeading === null) {
+      testSteps.push({
+        name: "compass_current_heading",
+        prompt:
+          "Record the phone compass heading independently. This is the only source permitted to control turn direction.",
+        response:
+          compassHeading === undefined
+            ? "COMPASS_UNAVAILABLE"
+            : `${compassHeading} DEG`,
+        parsedHeading: compassHeading,
+        model: "device-compass",
+        success: compassHeading !== undefined,
+        error:
+          compassHeading === undefined
+            ? "Phone compass heading was unavailable."
+            : undefined,
+      });
+      testSteps.push({
+        name: "heading_source_comparison",
+        prompt:
+          "Compare the independent compass and panorama headings without changing navigation guidance.",
+        response:
+          headingComparisonDifference === undefined
+            ? "NOT_COMPARABLE"
+            : `${headingComparisonAgrees ? "AGREE" : "DISAGREE"}: ` +
+              `${headingComparisonDifference} DEG DIFFERENCE`,
+        model: "deterministic-comparison",
+        success: headingComparisonDifference !== undefined,
+        error:
+          headingComparisonDifference === undefined
+            ? "Both heading sources were not available."
+            : undefined,
+      });
+      if (currentHeading === undefined) {
         const finalOutput =
-          "I could not confidently match your photo to the street panorama. Stop in a safe place and retake the photo while facing straight ahead.";
+          "Your phone compass heading was unavailable, so I will not calculate a turn. " +
+          "The panorama match was recorded for comparison only. Stop safely, check compass access, and try again.";
         const testLogId = await lastMileTestLogService.record({
           destination,
           lat,
@@ -827,13 +858,17 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           deviceHeading,
           headingDifferenceDegrees,
           headingAligned,
+          compassHeading,
+          panoramaMatchedHeading,
+          headingComparisonDifference,
+          headingComparisonAgrees,
           destinationReferenceUsed,
           navigationMode,
           testScenario,
           finalOutput,
           steps: testSteps,
           success: false,
-          error: "current_view_not_visible",
+          error: "compass_heading_unavailable",
           latencyMs: Date.now() - startedAt,
         });
         res.status(200).json({
@@ -841,7 +876,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           testLogId,
           mode: navigationMode,
           testScenario,
-          warning: "current_view_not_visible",
+          warning: "compass_heading_unavailable",
         });
         return;
       }
@@ -924,6 +959,10 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
             deviceHeading,
             headingDifferenceDegrees,
             headingAligned,
+            compassHeading,
+            panoramaMatchedHeading,
+            headingComparisonDifference,
+            headingComparisonAgrees,
             destinationReferenceUsed,
             navigationMode,
             testScenario,
@@ -1043,6 +1082,10 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           deviceHeading,
           headingDifferenceDegrees,
           headingAligned,
+          compassHeading,
+          panoramaMatchedHeading,
+          headingComparisonDifference,
+          headingComparisonAgrees,
           destinationReferenceUsed,
           navigationMode,
           testScenario,
@@ -1151,6 +1194,10 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         deviceHeading,
         headingDifferenceDegrees,
         headingAligned,
+        compassHeading,
+        panoramaMatchedHeading,
+        headingComparisonDifference,
+        headingComparisonAgrees,
         destinationReferenceUsed,
         navigationMode,
         testScenario,
