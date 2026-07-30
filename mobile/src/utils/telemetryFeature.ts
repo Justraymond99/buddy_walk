@@ -9,6 +9,29 @@ export type TelemetryFeature =
   | 'location_qa'
   | 'general';
 
+export function looksLikeBareDestination(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 120 || /[?!]/.test(trimmed)) return false;
+  if (
+    /^(?:hi|hello|thanks|thank you|what|who|why|how|when|is|are|can|could|would|should|tell|describe|explain)\b/i.test(
+      trimmed
+    )
+  ) {
+    return false;
+  }
+
+  const words = trimmed.split(/\s+/);
+  if (words.length > 8) return false;
+
+  return (
+    /\d/.test(trimmed) ||
+    /\b(?:street|st|avenue|ave|road|rd|boulevard|blvd|place|pl|plaza|square|park|station|terminal|store|market|pharmacy|bank|restaurant|cafe|coffee|library|hospital|hotel)\b/i.test(
+      trimmed
+    ) ||
+    /^[A-Z][\w'&.-]*(?:\s+[A-Z0-9][\w'&.-]*){0,5}$/.test(trimmed)
+  );
+}
+
 export function classifyFeature(input: {
   text: string;
   hasImage?: boolean;
@@ -19,7 +42,14 @@ export function classifyFeature(input: {
 
   if (input.savedAliases && input.savedAliases.length > 0) return 'saved_places';
   if (/train arriving|next .* train|subway|mta/.test(t)) return 'mta';
-  if (/how do i get|directions|walk to|get to|navigate to/.test(t)) return 'directions';
+  if (
+    /how do i get|directions|walk to|get to|go to|head to|route to|take me to|bring me to|navigate to/.test(
+      t
+    ) ||
+    looksLikeBareDestination(input.text)
+  ) {
+    return 'directions';
+  }
   if (input.hasVideo || /describe the video/.test(t)) return 'video_qa';
   if (input.hasImage) return 'photo_qa';
   if (/what street|intersection|near me|where am i|what direction/.test(t)) return 'location_qa';

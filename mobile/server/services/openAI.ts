@@ -36,6 +36,7 @@ import type { LastMileTestScenario } from "../utils/lastMileNavigation";
 import {
   extractNearbyPlaceQuery,
   isNearbyPlaceCandidateRelevant,
+  looksLikeBareDestinationQuery,
   MAX_LOCAL_PLACE_DISTANCE_METERS,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
@@ -1221,7 +1222,19 @@ Keep the response to two short sentences and do not repeat the turn instruction.
     let toolUsed: string | undefined;
     const analytics = content.analytics;
     const requestHadCoords = !!content.coords;
-    const requestedNearbyQuery = extractNearbyPlaceQuery(content.text);
+    const requestAccuracy = content.coords?.accuracy;
+    const requestHadReliableCoords =
+      requestHadCoords &&
+      (typeof requestAccuracy !== "number" ||
+        requestAccuracy === 0 ||
+        requestAccuracy <= 1000);
+    const allowBareDestination =
+      analytics?.feature === "directions" ||
+      looksLikeBareDestinationQuery(content.text);
+    const requestedNearbyQuery = extractNearbyPlaceQuery(
+      content.text,
+      allowBareDestination
+    );
     const requiresVerifiedNearbyAnswer =
       analytics?.feature === "directions" ||
       requestedNearbyQuery !== null;
@@ -1293,10 +1306,11 @@ Keep the response to two short sentences and do not repeat the turn instruction.
       });
     };
 
-    if (requiresVerifiedNearbyAnswer && !requestHadCoords) {
+    if (requiresVerifiedNearbyAnswer && !requestHadReliableCoords) {
       const safeOutput =
-        "I could not determine your current location, so I will not guess at nearby directions. " +
-        "Check location access and try again.";
+        requestHadCoords
+          ? "Your location is not accurate enough for nearby directions. Enable precise location and try again."
+          : "I could not determine your current location, so I will not guess at nearby directions. Check location access and try again.";
       const updatedHistory = appendConversationHistory(content.analytics, {
         input: content.text,
         output: safeOutput,

@@ -28,20 +28,11 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
       },
     };
     const start = Date.now();
-    // Render owns location-aware routing and validates nearby place results.
-    // Never send a location-bearing request to the unvalidated legacy host.
-    let res;
-    try {
-      res = await withNetworkRetry(() =>
-        apiClient.post('/text', payload, { timeout: 120_000 })
-      );
-    } catch (renderError) {
-      if (payload.coords) {
-        throw renderError;
-      }
-      console.warn('sendTextRequest: Render failed, falling back to legacy AI host', renderError);
-      res = await aiClient.post('/text', payload, { timeout: 120_000 });
-    }
+    // Render owns verified local routing. Text requests must never fall back to
+    // the legacy AI host, even when location is unavailable.
+    const res = await withNetworkRetry(() =>
+      apiClient.post('/text', payload, { timeout: 120_000 })
+    );
     console.log(`Text request completed in ${Date.now() - start}ms`);
     return res.data as TextResponse;
   } catch (e) {

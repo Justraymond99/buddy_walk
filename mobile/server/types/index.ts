@@ -12,6 +12,7 @@ export interface textRequestBody {
   coords: {
     latitude: number;
     longitude: number,
+    accuracy?: number | null,
     heading?: number | null,
     orientation?: { alpha: number | null, beta: number | null, gamma: number | null }
   } | null;

@@ -1200,20 +1200,24 @@ export default function MainScreen({ navigation }: Props) {
           'I could not determine your location, so answers about nearby places may be wrong. ' +
             'Please check that location access is allowed.'
         );
-      } else if ((loc.coords.accuracy ?? 0) > 5000) {
-        // Browser IP-based estimates can be off by entire cities; warn rather
-        // than silently answering about the wrong place.
-        speak('Your location looks approximate, so nearby results may be off.');
+      } else if ((loc.coords.accuracy ?? 0) > 1000) {
+        // City-scale/IP estimates are unsafe for local destination selection.
+        speak(
+          'Your location is not accurate enough for nearby directions. ' +
+            'Please enable precise location and try again.'
+        );
       }
-      const coords: CustomCoords | null = loc
+      const hasReliableLocation =
+        !!loc && ((loc.coords.accuracy ?? 0) === 0 || (loc.coords.accuracy ?? 0) <= 1000);
+      const coords: CustomCoords | null = hasReliableLocation
         ? {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-            accuracy: loc.coords.accuracy ?? 0,
-            altitude: loc.coords.altitude,
-            altitudeAccuracy: loc.coords.altitudeAccuracy,
+            latitude: loc!.coords.latitude,
+            longitude: loc!.coords.longitude,
+            accuracy: loc!.coords.accuracy ?? 0,
+            altitude: loc!.coords.altitude,
+            altitudeAccuracy: loc!.coords.altitudeAccuracy,
             heading: headingRef.current,
-            speed: loc.coords.speed,
+            speed: loc!.coords.speed,
             orientation: null,
           }
         : null;

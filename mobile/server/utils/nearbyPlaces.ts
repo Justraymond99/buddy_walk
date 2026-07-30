@@ -103,7 +103,33 @@ export function normalizeNearbyPlaceQuery(query: string): string {
     .trim();
 }
 
-export function extractNearbyPlaceQuery(input: string): string | null {
+export function looksLikeBareDestinationQuery(input: string): boolean {
+  const text = input.trim();
+  if (!text || text.length > 120 || /[?!]/.test(text)) return false;
+  if (
+    /^(?:hi|hello|thanks|thank you|what|who|why|how|when|is|are|can|could|would|should|tell|describe|explain)\b/i.test(
+      text
+    )
+  ) {
+    return false;
+  }
+
+  const words = text.split(/\s+/);
+  if (words.length > 8) return false;
+
+  return (
+    /\d/.test(text) ||
+    /\b(?:street|st|avenue|ave|road|rd|boulevard|blvd|place|pl|plaza|square|park|station|terminal|store|market|pharmacy|bank|restaurant|cafe|coffee|library|hospital|hotel)\b/i.test(
+      text
+    ) ||
+    /^[A-Z][\w'&.-]*(?:\s+[A-Z0-9][\w'&.-]*){0,5}$/.test(text)
+  );
+}
+
+export function extractNearbyPlaceQuery(
+  input: string,
+  allowBareDestination = false
+): string | null {
   const text = input.trim();
   const patterns = [
     /(?:directions?|route|navigate|walk|head|take me|get me|bring me)\s+(?:to|toward|towards)\s+(.+)/i,
@@ -121,6 +147,19 @@ export function extractNearbyPlaceQuery(input: string): string | null {
     );
     if (/^(?:what|which|who|how|is|are)\b/i.test(query)) continue;
     if (query.length >= 2) return query;
+  }
+
+  if (allowBareDestination) {
+    const query = normalizeNearbyPlaceQuery(
+      text.replace(/[.!]+\s*$/, "").replace(/^(?:the|a|an)\s+/i, "")
+    );
+    if (
+      query.length >= 2 &&
+      query.length <= 120 &&
+      looksLikeBareDestinationQuery(text)
+    ) {
+      return query;
+    }
   }
 
   return null;

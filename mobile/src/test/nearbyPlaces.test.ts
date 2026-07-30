@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   extractNearbyPlaceQuery,
   isNearbyPlaceCandidateRelevant,
+  looksLikeBareDestinationQuery,
   MAX_LOCAL_PLACE_DISTANCE_METERS,
   nearbyPlaceDistanceMeters,
   normalizeNearbyPlaceQuery,
@@ -26,6 +27,22 @@ test("extractNearbyPlaceQuery isolates destinations from local requests", () => 
   assert.equal(extractNearbyPlaceQuery("Find a pharmacy nearby"), "pharmacy");
   assert.equal(extractNearbyPlaceQuery("What is near me?"), null);
   assert.equal(extractNearbyPlaceQuery("Tell me about package delivery"), null);
+});
+
+test("extractNearbyPlaceQuery only accepts bare destinations when explicitly allowed", () => {
+  assert.equal(extractNearbyPlaceQuery("FedEx"), null);
+  assert.equal(extractNearbyPlaceQuery("FedEx", true), "FedEx");
+  assert.equal(extractNearbyPlaceQuery("38 Warren St", true), "38 Warren St");
+  assert.equal(extractNearbyPlaceQuery("Hello", true), null);
+  assert.equal(extractNearbyPlaceQuery("What is FedEx?", true), null);
+});
+
+test("looksLikeBareDestinationQuery detects safe destination-shaped text", () => {
+  assert.equal(looksLikeBareDestinationQuery("FedEx"), true);
+  assert.equal(looksLikeBareDestinationQuery("Whole Foods"), true);
+  assert.equal(looksLikeBareDestinationQuery("38 Warren St"), true);
+  assert.equal(looksLikeBareDestinationQuery("Hello"), false);
+  assert.equal(looksLikeBareDestinationQuery("What is FedEx?"), false);
 });
 
 test("isNearbyPlaceCandidateRelevant rejects fuzzy brand substitutions", () => {
