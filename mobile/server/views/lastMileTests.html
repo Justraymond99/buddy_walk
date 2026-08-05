@@ -56,106 +56,73 @@
       font-size: 0.88rem;
     }
     button.primary, a.button.primary { background: var(--blue); border-color: var(--blue); }
+    button.secondary { background: #2a3039; border-color: #3b4351; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
     main { max-width: 1440px; margin: 0 auto; padding: 22px; }
-    .toolbar { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+    .toolbar { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-bottom: 20px; }
     .field label { display: block; color: var(--muted); font-size: 0.78rem; margin-bottom: 4px; }
     .field input, .field select { height: 36px; padding: 0 10px; }
+    
     .status { margin: 12px 0 18px; color: var(--muted); font-size: 0.9rem; }
-    .error {
-      display: none;
-      margin: 14px 0;
-      padding: 12px 14px;
-      border: 1px solid var(--red);
-      background: #3a1618;
-      border-radius: 6px;
-    }
-    .empty {
-      padding: 28px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      border-radius: 8px;
-      color: var(--muted);
-    }
-    .trial {
-      border: 1px solid var(--line);
-      background: var(--panel);
-      border-radius: 8px;
-      margin-bottom: 18px;
-      overflow: hidden;
-    }
-    .trial-head {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 12px;
-      align-items: start;
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--line);
-      background: #1b1f25;
-    }
-    .title { font-size: 1rem; font-weight: 800; margin-bottom: 5px; }
-    .meta { color: var(--muted); font-size: 0.86rem; line-height: 1.45; }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      height: 24px;
-      padding: 0 8px;
-      border-radius: 999px;
-      background: #2a3039;
-      color: var(--muted);
-      font-size: 0.78rem;
-      font-weight: 700;
-      white-space: nowrap;
-    }
+    .error { display: none; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--red); background: #3a1618; border-radius: 6px; }
+    .empty { padding: 28px; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; color: var(--muted); text-align: center; }
+    
+    /* Table Styles */
+    table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    thead { background: #1b1f25; }
+    th, td { padding: 12px 16px; border-bottom: 1px solid var(--line); text-align: left; font-size: 0.9rem; }
+    th { color: var(--muted); font-weight: 700; white-space: nowrap; }
+    tbody tr:hover { background: #1b1f25; }
+    
+    /* Phase Badges */
+    .phase-badge { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; white-space: nowrap; }
+    .phase-pass { background: #0d3d1e; color: #3fb950; }
+    .phase-fail { background: #3d1418; color: #f85149; }
+    .phase-skip { background: #3a2f0d; color: #d29922; }
+    .phase-na   { background: #21262d; color: #6e7681; }
+    
+    /* Review Status Pills */
+    .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px; background: #2a3039; color: var(--muted); font-size: 0.78rem; font-weight: 700; }
     .pill.pass { color: #dcfce7; background: #14532d; }
     .pill.partial { color: #fef3c7; background: #713f12; }
     .pill.fail { color: #fee2e2; background: #7f1d1d; }
-    .body {
-      display: grid;
-      grid-template-columns: 380px minmax(0, 1fr);
-      gap: 16px;
-      padding: 16px;
-    }
-    .images { display: grid; gap: 14px; align-content: start; }
+
+    /* Modal Styles */
+    #lmDetailOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 50; overflow-y: auto; padding: 20px; }
+    .modal-content { max-width: 900px; margin: 20px auto; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 24px; position: relative; }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .modal-header h2 { margin: 0; font-size: 1.4rem; }
+    
+    .test-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; font-size: 0.9rem; color: var(--muted); background: var(--panel); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--line); }
+    
+    /* Phase Blocks */
+    .phase-block { border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; background: var(--panel); }
+    .phase-block .phase-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 12px; font-size: 1.05rem; }
+    .phase-metric { color: var(--muted); font-size: 0.9rem; margin: 4px 0; line-height: 1.4; }
+    .phase-metric b { color: var(--text); }
+    
+    /* Raw Prompts Accordion */
+    .phase-raw { margin-top: 12px; font-size: 0.85rem; }
+    .phase-raw summary { cursor: pointer; color: var(--blue); font-weight: 600; user-select: none; }
+    .phase-raw pre { white-space: pre-wrap; background: #0b0d10; padding: 12px; border-radius: 6px; margin-top: 8px; border: 1px solid var(--line); color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; }
+    
+    /* Visuals Grid */
+    .images-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-bottom: 24px; }
     .image-wrap { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #0b0d10; }
-    .image-label { padding: 8px 10px; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--line); font-size: 0.82rem; }
-    img { display: block; width: 100%; max-height: 380px; object-fit: contain; background: #0b0d10; }
-    .panorama img { max-height: 300px; }
-    .steps { display: grid; gap: 12px; }
-    .step {
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 12px;
-      background: #13161a;
-    }
-    .step h3 { margin: 0 0 8px; font-size: 0.92rem; }
-    .step p { margin: 6px 0 0; line-height: 1.45; }
-    .prompt { color: var(--quiet); font-size: 0.82rem; }
-    .response { color: var(--text); }
-    .final {
-      border-left: 4px solid var(--blue);
-      padding: 12px;
-      background: #111827;
-      border-radius: 6px;
-      line-height: 1.5;
-    }
-    .review {
-      display: grid;
-      grid-template-columns: 150px minmax(0, 1fr) auto;
-      gap: 10px;
-      align-items: start;
-    }
-    .review select { width: 100%; height: 38px; padding: 0 8px; }
-    .review textarea {
-      width: 100%;
-      min-height: 74px;
-      padding: 8px 10px;
-      resize: vertical;
-      line-height: 1.35;
-    }
+    .image-label { padding: 8px 10px; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--line); font-size: 0.82rem; background: var(--panel); }
+    .image-wrap img { display: block; width: 100%; height: 200px; object-fit: contain; }
+
+    /* Review Section */
+    .review-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+    .review-section select { width: 100%; height: 38px; }
+    .review-section textarea { width: 100%; min-height: 80px; padding: 10px; resize: vertical; }
+
     .small { color: var(--quiet); font-size: 0.78rem; }
-    @media (max-width: 980px) {
-      header { position: static; }
-      .trial-head, .body, .review { grid-template-columns: 1fr; }
+    
+    @media (max-width: 768px) {
+      .review-section { grid-template-columns: 1fr; }
+      .test-meta { flex-direction: column; gap: 8px; }
+      th, td { padding: 10px; }
     }
   </style>
 </head>
@@ -163,30 +130,22 @@
   <header>
     <div>
       <h1>Buddy Walk - Last Meters Tests</h1>
-      <div class="small">Review field trials, compare photos, and save tester notes.</div>
+      <div class="small">Review field trials, compare phases, and save tester notes.</div>
     </div>
-    <div class="toolbar">
+    <div class="toolbar" style="margin:0;">
       <button id="refresh">Refresh</button>
-      <a class="button primary" id="download" href="#">CSV</a>
-      <a class="button" id="analytics" href="#">Analytics</a>
+      <a class="button primary" id="download" href="#">Export CSV</a>
     </div>
   </header>
+  
   <main>
     <div class="toolbar">
       <div class="field">
         <label for="limit">Limit</label>
-        <input id="limit" type="number" min="1" max="500" value="25" />
+        <input id="limit" type="number" min="1" max="500" value="50" />
       </div>
       <div class="field">
-        <label for="since">Since</label>
-        <input id="since" type="date" />
-      </div>
-      <div class="field">
-        <label for="until">Until</label>
-        <input id="until" type="date" />
-      </div>
-      <div class="field">
-        <label for="statusFilter">Review</label>
+        <label for="statusFilter">Review Status</label>
         <select id="statusFilter">
           <option value="">All</option>
           <option value="untested">Untested</option>
@@ -195,25 +154,62 @@
           <option value="fail">Fail</option>
         </select>
       </div>
-      <button class="primary" id="apply">Apply</button>
+      <div class="field">
+        <label for="textFilter">Destination</label>
+        <input id="textFilter" type="text" placeholder="e.g. CVS" />
+      </div>
+      <button class="primary" id="apply">Apply Filters</button>
     </div>
+    
     <div class="status" id="status">Loading...</div>
     <div class="error" id="error"></div>
-    <div id="trials"></div>
+    
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Destination</th>
+            <th>Mode / Scenario</th>
+            <th>Review</th>
+            <th>Phase 1 (Heading)</th>
+            <th>Phase 2 (Target)</th>
+            <th>Phase 3 (Fallback)</th>
+            <th>Phase 4 (Guidance)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="lmTestsList">
+          <tr><td colspan="9" class="empty">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </main>
+
+  <!-- Detail Modal Overlay -->
+  <div id="lmDetailOverlay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h2 id="lmDetailTitle">Test detail</h2>
+          <div class="small" id="lmDetailSubtitle"></div>
+        </div>
+        <button class="secondary" id="lmDetailClose">Close</button>
+      </div>
+      
+      <div id="lmDetailBody"></div>
+    </div>
+  </div>
 
   <script>
     var TOKEN = '__ADMIN_TOKEN__';
+    var activeTests = []; // Store currently loaded tests for modal access
 
     function qs() {
       var params = new URLSearchParams();
       if (TOKEN) params.set('token', TOKEN);
       params.set('includeImages', 'true');
-      params.set('limit', document.getElementById('limit').value || '25');
-      var since = document.getElementById('since').value;
-      var until = document.getElementById('until').value;
-      if (since) params.set('since', since);
-      if (until) params.set('until', until);
+      params.set('limit', document.getElementById('limit').value || '50');
       return '?' + params.toString();
     }
 
@@ -229,14 +225,12 @@
       });
     }
 
-    function idOf(row) {
-      return row._id || row.id || '';
-    }
+    function idOf(row) { return row._id || row.id || ''; }
 
     function fmtDate(value) {
-      if (!value) return '';
+      if (!value) return '—';
       var date = new Date(value);
-      return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+      return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
     }
 
     function showError(message) {
@@ -245,111 +239,223 @@
       el.textContent = message || '';
     }
 
-    function statusClass(status) {
-      return ['pass', 'partial', 'fail'].indexOf(status) >= 0 ? status : '';
+    // --- Phase Logic ---
+    function findStep(steps, name) {
+      return (steps || []).find(function (s) { return s.name === name; });
     }
 
-    function stepHtml(step, index) {
-      var heading = step.parsedHeading == null ? '' : ' - parsed ' + step.parsedHeading + ' deg';
-      var ok = step.success ? 'success' : 'failed';
-      return '<div class="step">' +
-        '<h3>Step ' + (index + 1) + ': ' + esc(step.name || 'AI call') + heading + '</h3>' +
-        '<div class="small">' + esc(step.model || '') + ' - ' + esc(ok) +
-        (step.tokenCount ? ' - ' + esc(step.tokenCount) + ' tokens' : '') + '</div>' +
-        '<p class="prompt">' + esc(step.prompt || '') + '</p>' +
-        '<p class="response">' + esc(step.response || step.error || '') + '</p>' +
+    function badge(status, label) {
+      var cls = { pass: 'phase-pass', fail: 'phase-fail', skip: 'phase-skip', na: 'phase-na' }[status] || 'phase-na';
+      var text = { pass: '✅ PASS', fail: '❌ FAIL', skip: '⏭ SKIPPED', na: '— N/A' }[status] || status;
+      return '<span class="phase-badge ' + cls + '">' + esc(label || text) + '</span>';
+    }
+
+    function buildPhases(test) {
+      var steps = test.steps || [];
+      var proximity = findStep(steps, 'proximity_gate');
+      var headingAlignment = findStep(steps, 'heading_alignment');
+      var heading1 = findStep(steps, 'panorama_current_view_match');
+      var compassStep = findStep(steps, 'compass_current_heading');
+      var compSource = findStep(steps, 'heading_source_comparison');
+      var target = findStep(steps, 'target_store_match');
+      var reference = findStep(steps, 'destination_reference_match');
+      var guidance = findStep(steps, 'accessible_guidance');
+
+      // Phase 1: Did we resolve a current heading?
+      var phase1Status = test.currentHeading !== undefined && test.currentHeading !== null ? 'pass' : 'fail';
+      if (test.testScenario === 'destination_unverified') phase1Status = 'na';
+
+      // Phase 2: Did we find it in the main panorama?
+      var phase2Status = target 
+        ? (target.success ? 'pass' : (reference ? 'skip' : 'fail')) 
+        : 'na';
+
+      // Phase 3: Did we find it via fallback reference?
+      var phase3Status = reference ? (reference.success ? 'pass' : 'fail') : 'na';
+
+      // Phase 4: Did we generate guidance successfully?
+      var phase4Status = guidance ? (guidance.success ? 'pass' : 'fail') : (test.turnInstruction ? 'pass' : 'na');
+
+      return {
+        phase1: {
+          status: phase1Status,
+          title: 'Phase 1 · Current Heading',
+          metrics: [
+            ['Panorama match', test.panoramaMatchedHeading != null ? test.panoramaMatchedHeading + '°' : '—'],
+            ['Phone compass', test.compassHeading != null ? test.compassHeading + '°' : '—'],
+            ['Comparison', compSource ? (compSource.response || '—') : '—'],
+            ['Authoritative heading used', test.currentHeading != null ? test.currentHeading + '°' : '—']
+          ],
+          raw: [proximity, headingAlignment, heading1, compassStep, compSource].filter(Boolean)
+        },
+        phase2: {
+          status: phase2Status,
+          title: 'Phase 2 · Locate Destination (Store Name + Panorama)',
+          metrics: [
+            ['AI response', target ? (target.response || '—') : '—'],
+            ['Panorama age', test.panoramaDate || 'unknown'],
+            ['Result', target && target.success ? (target.parsedHeading + '°') : 'Not visible in main panorama']
+          ],
+          raw: [target].filter(Boolean)
+        },
+        phase3: {
+          status: phase3Status,
+          title: 'Phase 3 · Visual Fallback (Reference Photo)',
+          metrics: reference ? [
+            ['Reference photo age', test.destinationPhotoDate || 'unknown'],
+            ['AI response', reference.response || '—'],
+            ['Resolved heading', reference.success && reference.parsedHeading != null ? reference.parsedHeading + '°' : '—']
+          ] : [['Triggered?', 'No — destination confirmed directly, or destination too far for fallback']],
+          raw: [reference].filter(Boolean)
+        },
+        phase4: {
+          status: phase4Status,
+          title: 'Phase 4 · Accessible Guidance',
+          metrics: [
+            ['Turn instruction', test.turnInstruction || '—'],
+            ['Landmarks generated', guidance ? (guidance.response || '—') : '—']
+          ],
+          raw: [guidance].filter(Boolean)
+        }
+      };
+    }
+
+    function renderPhaseBlock(phase) {
+      var metricsHtml = phase.metrics.map(function (m) {
+        return '<div class="phase-metric"><b>' + esc(m[0]) + ':</b> ' + esc(m[1]) + '</div>';
+      }).join('');
+      
+      var rawHtml = phase.raw.length ? (
+        '<details class="phase-raw"><summary>View AI step prompts & responses (' + phase.raw.length + ' calls)</summary>' +
+        phase.raw.map(function (r) {
+          var successTxt = r.success ? 'SUCCESS' : 'FAILED';
+          return '<pre><b>[' + esc(r.name) + ']</b> (' + esc(r.model) + ') - ' + successTxt + '\n\n' +
+            'PROMPT:\n' + esc(r.prompt || '—') + '\n\n' +
+            'RESPONSE:\n' + esc(r.response || r.error || '—') + '</pre>';
+        }).join('') +
+        '</details>'
+      ) : '';
+      
+      return (
+        '<div class="phase-block">' +
+          '<div class="phase-head"><span>' + esc(phase.title) + '</span>' + badge(phase.status) + '</div>' +
+          metricsHtml + rawHtml +
+        '</div>'
+      );
+    }
+
+    // --- Detail Modal Render ---
+    function openDetail(index) {
+      var test = activeTests[index];
+      if (!test) return;
+      
+      var phases = buildPhases(test);
+      var coords = [test.lat, test.lng].filter(function(v) { return v !== undefined; }).join(', ');
+      
+      document.getElementById('lmDetailTitle').textContent = test.destinationPlaceName || test.destination || 'Unknown Destination';
+      document.getElementById('lmDetailSubtitle').textContent = fmtDate(test.serverTs || test.createdAt) + ' | ' + coords;
+      
+      var imagesHtml = '<div class="images-grid">' +
+        '<div class="image-wrap"><div class="image-label">User Photo</div>' +
+        (test.userPhoto ? '<img src="' + esc(test.userPhoto) + '" alt="User photo" />' : '<div class="empty">No photo</div>') +
+        '</div>' +
+        '<div class="image-wrap"><div class="image-label">Panorama (' + esc(test.panoramaDate || 'N/A') + ')</div>' +
+        (test.panoramaPhoto ? '<img src="' + esc(test.panoramaPhoto) + '" alt="Panorama" />' : '<div class="empty">No panorama</div>') +
+        '</div>' +
+        (test.destinationPhoto ? 
+          '<div class="image-wrap"><div class="image-label">Fallback Ref (' + esc(test.destinationPhotoDate || 'N/A') + ')</div>' +
+          '<img src="' + esc(test.destinationPhoto) + '" alt="Reference" /></div>' : '') +
+        '</div>';
+
+      var reviewStatus = test.reviewerStatus || 'untested';
+      var reviewHtml = '<div class="review-section" data-id="' + esc(idOf(test)) + '">' +
+        '<div>' +
+          '<label class="small" style="display:block;margin-bottom:4px">Review Status</label>' +
+          '<select class="review-select">' +
+            '<option value="untested"' + (reviewStatus === 'untested' ? ' selected' : '') + '>Untested</option>' +
+            '<option value="pass"' + (reviewStatus === 'pass' ? ' selected' : '') + '>Pass</option>' +
+            '<option value="partial"' + (reviewStatus === 'partial' ? ' selected' : '') + '>Partial</option>' +
+            '<option value="fail"' + (reviewStatus === 'fail' ? ' selected' : '') + '>Fail</option>' +
+          '</select>' +
+        '</div>' +
+        '<div>' +
+          '<label class="small" style="display:block;margin-bottom:4px">Tester Notes</label>' +
+          '<textarea class="review-notes" placeholder="What did the participant experience?">' + esc(test.reviewerNotes || '') + '</textarea>' +
+        '</div>' +
+        '<div style="align-self:end"><button class="primary save-review-btn">Save Notes</button></div>' +
       '</div>';
+
+      var metaHtml = '<div class="test-meta">' +
+        '<div><b>Mode:</b> ' + esc(test.navigationMode || '—') + '</div>' +
+        '<div><b>Scenario:</b> ' + esc(test.testScenario || '—') + '</div>' +
+        '<div><b>Distance:</b> ' + (test.destinationDistanceMeters != null ? Math.round(test.destinationDistanceMeters) + ' m' : '—') + '</div>' +
+        '<div><b>Bearing:</b> ' + (test.destinationBearing != null ? Math.round(test.destinationBearing) + '°' : '—') + '</div>' +
+        '<div><b>Latency:</b> ' + (test.latencyMs != null ? test.latencyMs + ' ms' : '—') + '</div>' +
+      '</div>';
+
+      var finalGuidanceHtml = '<div class="phase-block" style="border: 2px solid var(--blue); background: rgba(59, 130, 246, 0.05);">' +
+        '<div class="phase-head"><span>Final Output sent to user</span></div>' +
+        '<div class="phase-metric" style="font-size: 1rem;">' + esc(test.finalOutput || test.error || '—') + '</div>' +
+      '</div>';
+
+      document.getElementById('lmDetailBody').innerHTML = imagesHtml + metaHtml + 
+        renderPhaseBlock(phases.phase1) +
+        renderPhaseBlock(phases.phase2) +
+        renderPhaseBlock(phases.phase3) +
+        renderPhaseBlock(phases.phase4) +
+        finalGuidanceHtml +
+        reviewHtml;
+
+      document.getElementById('lmDetailOverlay').style.display = 'block';
     }
 
-    function trialHtml(row) {
-      var id = idOf(row);
-      var review = row.reviewerStatus || 'untested';
-      var steps = (row.steps || []).map(stepHtml).join('');
-      var coords = [row.lat, row.lng].filter(function (v) { return v !== undefined; }).join(', ');
-      var success = row.success ? 'AI success' : 'AI failed';
-      return '<article class="trial" data-id="' + esc(id) + '">' +
-        '<div class="trial-head">' +
-          '<div><div class="title">' + esc(row.destination || 'Unknown destination') + '</div>' +
-          '<div class="meta">' + esc(fmtDate(row.serverTs)) + ' - ' + esc(coords) +
-          '<br>Panorama capture: ' + esc(row.panoramaDate || 'Date unavailable') +
-          ' | Street View: ' + esc(row.panoramaStatus || 'Unknown') +
-          '<br>Destination reference: ' + esc(row.destinationReferenceUsed ? 'Used' : 'Not used') +
-          (row.destinationPlaceName ? ' | ' + esc(row.destinationPlaceName) : '') +
-          '<br>Test scenario: ' + esc(row.testScenario || 'Not classified') +
-          ' | Navigation mode: ' + esc(row.navigationMode || 'Unknown') +
-          '<br>Destination types: ' + esc((row.destinationTypes || []).join(', ') || 'Unknown') +
-          ' | Destination distance: ' + esc(row.destinationDistanceMeters == null ? '' : Math.round(row.destinationDistanceMeters) + ' m') +
-          '<br>Phone heading: ' + esc(row.deviceHeading == null ? '' : Math.round(row.deviceHeading) + ' deg') +
-          ' | Destination bearing: ' + esc(row.destinationBearing == null ? '' : Math.round(row.destinationBearing) + ' deg') +
-          ' | Difference: ' + esc(row.headingDifferenceDegrees == null ? '' : Math.round(row.headingDifferenceDegrees) + ' deg') +
-          '<br><strong>Heading comparison:</strong> Compass ' +
-          esc(row.compassHeading == null ? 'Unavailable' : Math.round(row.compassHeading) + ' deg') +
-          ' | Panorama ' +
-          esc(row.panoramaMatchedHeading == null ? 'No match' : Math.round(row.panoramaMatchedHeading) + ' deg') +
-          ' | Difference ' +
-          esc(row.headingComparisonDifference == null ? 'N/A' : Math.round(row.headingComparisonDifference) + ' deg') +
-          ' | ' +
-          esc(row.headingComparisonAgrees == null ? 'Not comparable' : row.headingComparisonAgrees ? 'Agree' : 'Disagree') +
-          '<br>Guidance heading (compass only): ' + esc(row.currentHeading ?? '') +
-          ' | Target heading: ' + esc(row.targetHeading ?? '') +
-          ' | Latency: ' + esc(row.latencyMs ?? '') + ' ms</div></div>' +
-          '<div><span class="pill ' + statusClass(review) + '">' + esc(review) + '</span> <span class="pill">' + esc(success) + '</span></div>' +
-        '</div>' +
-        '<div class="body">' +
-          '<div class="images">' +
-            '<div class="image-wrap"><div class="image-label">User photo</div>' +
-            (row.userPhoto ? '<img src="' + esc(row.userPhoto) + '" alt="User-submitted Last Meters photo" />' : '<div class="empty">No user photo saved.</div>') +
-            '</div>' +
-            '<div class="image-wrap panorama"><div class="image-label">Panorama composite' +
-            (row.panoramaDate ? ' - captured ' + esc(row.panoramaDate) : '') + '</div>' +
-            (row.panoramaPhoto ? '<img src="' + esc(row.panoramaPhoto) + '" alt="Street View panorama composite" />' : '<div class="empty">No panorama saved.</div>') +
-            '</div>' +
-            (row.destinationPhoto ? '<div class="image-wrap"><div class="image-label">Destination-focused Street View' +
-            (row.destinationPhotoDate ? ' - captured ' + esc(row.destinationPhotoDate) : '') + '</div>' +
-            '<img src="' + esc(row.destinationPhoto) + '" alt="Street View image focused on the verified destination" />' +
-            '<div class="small">' + esc(row.destinationPlaceAddress || row.destinationPlaceName || '') + '</div></div>' : '') +
-          '</div>' +
-          '<div class="steps">' +
-            '<div class="final"><strong>Final guidance:</strong><br>' + esc(row.finalOutput || row.error || '') + '</div>' +
-            steps +
-            '<div class="review">' +
-              '<select aria-label="Review status">' +
-                '<option value="untested"' + (review === 'untested' ? ' selected' : '') + '>Untested</option>' +
-                '<option value="pass"' + (review === 'pass' ? ' selected' : '') + '>Pass</option>' +
-                '<option value="partial"' + (review === 'partial' ? ' selected' : '') + '>Partial</option>' +
-                '<option value="fail"' + (review === 'fail' ? ' selected' : '') + '>Fail</option>' +
-              '</select>' +
-              '<textarea aria-label="Tester notes" placeholder="Tester notes: what did the participant experience?">' + esc(row.reviewerNotes || '') + '</textarea>' +
-              '<button class="primary save-review">Save</button>' +
-            '</div>' +
-            '<div class="small">' + (row.reviewedAt ? 'Reviewed ' + esc(fmtDate(row.reviewedAt)) : 'No review saved yet.') + '</div>' +
-          '</div>' +
-        '</div>' +
-      '</article>';
-    }
-
-    function setExportLink() {
-      document.getElementById('download').href = '/api/last-mile-tests/export.csv' + qs();
-      document.getElementById('analytics').href = '/usage' + (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : '');
-    }
-
+    // --- Table Render ---
     function render(payload) {
       showError('');
       var rows = payload.data || [];
-      var filter = document.getElementById('statusFilter').value;
-      if (filter) {
-        rows = rows.filter(function (row) { return (row.reviewerStatus || 'untested') === filter; });
-      }
+      
+      // Client-side filtering
+      var statusFilter = document.getElementById('statusFilter').value;
+      var textFilter = document.getElementById('textFilter').value.toLowerCase().trim();
+      
+      activeTests = rows.filter(function (row) { 
+        var matchStatus = !statusFilter || (row.reviewerStatus || 'untested') === statusFilter;
+        var destStr = (row.destinationPlaceName || row.destination || '').toLowerCase();
+        var matchText = !textFilter || destStr.indexOf(textFilter) > -1;
+        return matchStatus && matchText;
+      });
+
       document.getElementById('status').textContent =
-        rows.length + ' trial' + (rows.length === 1 ? '' : 's') + ' shown - source: ' + (payload.source || 'unknown') +
-        ' - updated ' + new Date().toLocaleTimeString();
-      document.getElementById('trials').innerHTML = rows.length
-        ? rows.map(trialHtml).join('')
-        : '<div class="empty">No Last Meters trials yet. Run Last Meters in the app, then refresh this page.</div>';
+        activeTests.length + ' trial' + (activeTests.length === 1 ? '' : 's') + ' shown - updated ' + new Date().toLocaleTimeString();
+      
+      var el = document.getElementById('lmTestsList');
+      if (!activeTests.length) {
+        el.innerHTML = '<tr><td colspan="9" class="empty">No tests match the current filters.</td></tr>';
+        return;
+      }
+
+      el.innerHTML = activeTests.map(function (t, idx) {
+        var phases = buildPhases(t);
+        var review = t.reviewerStatus || 'untested';
+        var reviewCls = ['pass', 'partial', 'fail'].indexOf(review) >= 0 ? review : '';
+        
+        return '<tr>' +
+          '<td>' + esc(fmtDate(t.serverTs || t.createdAt)) + '</td>' +
+          '<td><strong>' + esc(t.destinationPlaceName || t.destination) + '</strong></td>' +
+          '<td><span class="small">' + esc(t.navigationMode) + '<br>' + esc(t.testScenario) + '</span></td>' +
+          '<td><span class="pill ' + reviewCls + '">' + esc(review) + '</span></td>' +
+          '<td>' + badge(phases.phase1.status) + '</td>' +
+          '<td>' + badge(phases.phase2.status) + '</td>' +
+          '<td>' + badge(phases.phase3.status) + '</td>' +
+          '<td>' + badge(phases.phase4.status) + '</td>' +
+          '<td><button class="secondary view-btn" data-idx="' + idx + '">View</button></td>' +
+        '</tr>';
+      }).join('');
     }
 
+    // --- API Interactions ---
     function load() {
-      setExportLink();
+      document.getElementById('download').href = '/api/last-mile-tests/export.csv' + qs();
       fetch('/api/last-mile-tests' + qs(), { headers: authHeaders() })
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -357,42 +463,64 @@
         })
         .then(render)
         .catch(function (error) {
-          showError('Could not load Last Meters tests. Check the admin token and server logs. ' + error.message);
+          showError('Could not load tests. Check token and logs. ' + error.message);
+          document.getElementById('lmTestsList').innerHTML = '<tr><td colspan="9" class="empty">Failed to load data.</td></tr>';
         });
     }
 
-    document.getElementById('trials').addEventListener('click', function (event) {
-      if (!event.target.classList.contains('save-review')) return;
-      var article = event.target.closest('.trial');
-      var id = article && article.getAttribute('data-id');
-      if (!id) {
-        showError('This row cannot be reviewed because it has no database id.');
-        return;
+    // --- Event Listeners ---
+    document.getElementById('refresh').addEventListener('click', load);
+    document.getElementById('apply').addEventListener('click', load);
+    
+    document.getElementById('lmDetailClose').addEventListener('click', function () {
+      document.getElementById('lmDetailOverlay').style.display = 'none';
+    });
+    
+    // Close modal on background click
+    document.getElementById('lmDetailOverlay').addEventListener('click', function (e) {
+      if (e.target === this) this.style.display = 'none';
+    });
+
+    // Delegated events for Table & Modal
+    document.body.addEventListener('click', function (e) {
+      // Handle "View" button in table
+      if (e.target.classList.contains('view-btn')) {
+        openDetail(Number(e.target.getAttribute('data-idx')));
       }
-      var reviewerStatus = article.querySelector('select').value;
-      var reviewerNotes = article.querySelector('textarea').value;
-      event.target.disabled = true;
-      event.target.textContent = 'Saving';
-      fetch('/api/last-mile-tests/' + encodeURIComponent(id) + '/review' + (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : ''), {
-        method: 'PATCH',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ reviewerStatus: reviewerStatus, reviewerNotes: reviewerNotes })
-      })
+      
+      // Handle "Save Notes" in modal
+      if (e.target.classList.contains('save-review-btn')) {
+        var container = e.target.closest('.review-section');
+        var id = container.getAttribute('data-id');
+        var reviewerStatus = container.querySelector('.review-select').value;
+        var reviewerNotes = container.querySelector('.review-notes').value;
+        
+        e.target.disabled = true;
+        e.target.textContent = 'Saving...';
+        
+        fetch('/api/last-mile-tests/' + encodeURIComponent(id) + '/review' + (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : ''), {
+          method: 'PATCH',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ reviewerStatus: reviewerStatus, reviewerNotes: reviewerNotes })
+        })
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
         })
-        .then(load)
-        .catch(function (error) { showError('Could not save review. ' + error.message); })
-        .finally(function () {
-          event.target.disabled = false;
-          event.target.textContent = 'Save';
+        .then(function() {
+          e.target.textContent = 'Saved!';
+          setTimeout(function() { e.target.textContent = 'Save Notes'; e.target.disabled = false; }, 2000);
+          load(); // Refresh underlying table to reflect new review status
+        })
+        .catch(function (error) {
+          alert('Could not save review: ' + error.message);
+          e.target.disabled = false;
+          e.target.textContent = 'Save Notes';
         });
+      }
     });
 
-    document.getElementById('refresh').addEventListener('click', load);
-    document.getElementById('apply').addEventListener('click', load);
-    document.getElementById('statusFilter').addEventListener('change', load);
+    // Init
     load();
   </script>
 </body>

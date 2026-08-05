@@ -85,14 +85,15 @@ export function compareCompassAndPanoramaHeadings(
       : undefined;
 
   return {
-    compassHeading,
-    panoramaMatchedHeading,
-    authoritativeHeading: compassHeading,
-    differenceDegrees,
-    agrees:
-      differenceDegrees === undefined
-        ? undefined
-        : differenceDegrees <= agreementToleranceDegrees,
+  compassHeading,
+  panoramaMatchedHeading,
+  // Prefer visual panorama matching; fallback to compass if AI didn't match
+  authoritativeHeading: panoramaMatchedHeading !== null ? panoramaMatchedHeading : compassHeading,
+  differenceDegrees,
+  agrees:
+    differenceDegrees === undefined
+      ? undefined
+      : differenceDegrees <= agreementToleranceDegrees,
   };
 }
 
@@ -130,10 +131,19 @@ function formatLastMileDistance(distanceMeters: number): string {
   }
 
   const feet = distanceMeters * 3.28084;
-  const roundedFeet =
-    feet <= 100
-      ? Math.max(5, Math.round(feet / 5) * 5)
-      : Math.round(feet / 50) * 50;
+
+  // For very short distances, round to nearest 5 feet
+  if (feet <= 30) {
+    const minFeet = Math.max(5, Math.round(feet / 5) * 5);
+    return `${minFeet} feet`;
+  }
+
+  // For 30-100 feet, round to nearest 10 feet
+  if (feet <= 100) {
+    return `${Math.round(feet / 10) * 10} feet`;
+  }
+
+  const roundedFeet = Math.round(feet / 50) * 50;
   return `${roundedFeet.toLocaleString("en-US")} feet`;
 }
 
@@ -214,15 +224,19 @@ export function buildLastMileTurnInstruction(
     throw new Error("Last Meters headings must be one of the eight panorama directions.");
   }
 
-  const difference = ((targetHeading - currentHeading + 540) % 360) - 180;
-  const degrees = Math.abs(difference);
+  let diff = (targetHeading - currentHeading) % 360;
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
 
-  if (degrees === 0) {
+  const degrees = Math.abs(diff);
+
+  if (degrees <= 15) {
     return "No turn needed. Keep facing forward.";
   }
-  if (degrees === 180) {
+  if (degrees >= 165) {
     return "Turn around 180 degrees without moving forward.";
   }
 
-  return `Turn ${degrees} degrees to your ${difference > 0 ? "right" : "left"}.`;
+  // Positive diff = Right, Negative diff = Left
+  return `Turn ${degrees} degrees to your ${diff > 0 ? "right" : "left"}.`;
 }

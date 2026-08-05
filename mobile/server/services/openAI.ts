@@ -890,9 +890,10 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         ? `Street View reports that this panorama was captured in ${panoramaDate}.`
         : "Street View did not provide a capture date for this panorama.";
       const step2Prompt = `You will receive one panorama grid containing 8 distinct, non-overlapping views explicitly labeled with their center headings. Find the storefront, sign, or entrance for "${destination}". ${panoramaDateContext}
-Google Maps places the verified destination near ${expectedTargetHeading} degrees from the panorama camera. Inspect that view and both neighboring views carefully, but use the map bearing only to focus the search, never as proof that the storefront is visible.
-Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
-Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. A different nearby business is not a match. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
+      Google Maps places the verified destination near ${expectedTargetHeading} degrees from the panorama camera. Inspect that view and both neighboring views carefully, but use the map bearing only to focus the search, never as proof that the storefront is visible.
+      If the primary name text is partially obscured by a canopy, tree, or awning, look carefully at side banners, architectural markers, or window logos before deciding it is NOT_VISIBLE.
+      Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
+      Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. A different nearby business is not a match. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
       const step2Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -977,6 +978,8 @@ Use NOT_VISIBLE unless the requested destination is clearly identifiable in the 
             testLogId,
             mode: navigationMode,
             testScenario,
+            currentHeading,
+            targetHeading,
             warning: "destination_not_visible_move_closer",
           });
           return;
@@ -1101,6 +1104,8 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           testLogId,
           mode: navigationMode,
           testScenario,
+          currentHeading,
+          targetHeading,
           warning: "destination_not_visible",
         });
         return;
@@ -1214,6 +1219,8 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         testLogId,
         mode: navigationMode,
         testScenario,
+        currentHeading,
+        targetHeading,
       });
 
     } catch (error: any) {
