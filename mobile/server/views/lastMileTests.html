@@ -109,8 +109,17 @@
     /* Visuals Grid */
     .images-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-bottom: 24px; }
     .image-wrap { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #0b0d10; }
-    .image-label { padding: 8px 10px; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--line); font-size: 0.82rem; background: var(--panel); }
-    .image-wrap img { display: block; width: 100%; height: 200px; object-fit: contain; }
+    
+    /* Updated Image Label for the Rotate Button */
+    .image-label { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--line); font-size: 0.82rem; background: var(--panel); }
+    .rotate-btn { background: #2a3039; border: 1px solid var(--line); color: var(--text); border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; cursor: pointer; }
+    .rotate-btn:hover { background: #3b4351; }
+    
+    /* Rotatable image container */
+    .img-container { height: 200px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .rotatable-img { max-width: 100%; max-height: 100%; object-fit: contain; transition: transform 0.2s ease; }
+    
+    .image-wrap > img { display: block; width: 100%; height: 200px; object-fit: contain; }
 
     /* Review Section */
     .review-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 12px; align-items: start; }
@@ -268,7 +277,6 @@
       var modBStatus = test.currentHeading !== undefined && test.currentHeading !== null ? 'pass' : 'fail';
       if (test.testScenario === 'destination_unverified') modBStatus = 'na';
 
-      // Module C considers fallback logic internally
       var modCStatus = modC_target 
         ? (modC_target.success ? 'pass' : (modC_reference && modC_reference.success ? 'pass' : 'fail')) 
         : 'na';
@@ -365,15 +373,17 @@
       document.getElementById('lmDetailTitle').textContent = test.destinationPlaceName || test.destination || 'Unknown Destination';
       document.getElementById('lmDetailSubtitle').textContent = fmtDate(test.serverTs || test.createdAt) + ' | ' + coords;
       
+      // Injecting the rotate button directly into the User Photo label
       var imagesHtml = '<div class="images-grid">' +
-        '<div class="image-wrap"><div class="image-label">I1. User Photo</div>' +
-        (test.userPhoto ? '<img src="' + esc(test.userPhoto) + '" alt="User photo" />' : '<div class="empty">No photo</div>') +
+        '<div class="image-wrap">' +
+          '<div class="image-label"><span>I1. User Photo</span> <button type="button" class="rotate-btn">Rotate</button></div>' +
+          (test.userPhoto ? '<div class="img-container"><img src="' + esc(test.userPhoto) + '" alt="User photo" class="rotatable-img" data-angle="0" /></div>' : '<div class="empty">No photo</div>') +
         '</div>' +
-        '<div class="image-wrap"><div class="image-label">I3. Panorama (' + esc(test.panoramaDate || 'N/A') + ')</div>' +
+        '<div class="image-wrap"><div class="image-label"><span>I3. Panorama (' + esc(test.panoramaDate || 'N/A') + ')</span></div>' +
         (test.panoramaPhoto ? '<img src="' + esc(test.panoramaPhoto) + '" alt="Panorama" />' : '<div class="empty">No panorama</div>') +
         '</div>' +
         (test.destinationPhoto ? 
-          '<div class="image-wrap"><div class="image-label">Google Street View Ref (' + esc(test.destinationPhotoDate || 'N/A') + ')</div>' +
+          '<div class="image-wrap"><div class="image-label"><span>Google Street View Ref (' + esc(test.destinationPhotoDate || 'N/A') + ')</span></div>' +
           '<img src="' + esc(test.destinationPhoto) + '" alt="Reference" /></div>' : '') +
         '</div>';
 
@@ -502,6 +512,22 @@
     document.body.addEventListener('click', function (e) {
       if (e.target.classList.contains('view-btn')) {
         openDetail(Number(e.target.getAttribute('data-idx')));
+      }
+      
+      // Dynamic image rotation handler
+      if (e.target.classList.contains('rotate-btn')) {
+        var wrap = e.target.closest('.image-wrap');
+        var img = wrap.querySelector('.rotatable-img');
+        if (img) {
+          var currentAngle = parseInt(img.getAttribute('data-angle') || '0', 10);
+          var newAngle = (currentAngle + 90) % 360;
+          img.setAttribute('data-angle', newAngle);
+          
+          // Adjust scale when rotated vertically to prevent clipping inside the 200px container
+          var scale = (newAngle === 90 || newAngle === 270) ? 0.75 : 1; 
+          img.style.transform = 'rotate(' + newAngle + 'deg) scale(' + scale + ')';
+        }
+        return;
       }
       
       if (e.target.classList.contains('save-review-btn')) {
