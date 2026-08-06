@@ -2167,6 +2167,7 @@ async function resizeDataUrlImage(dataUrl: string, maxWidth: number, quality: nu
   try {
     const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
     const outputBuffer = await sharp(Buffer.from(base64Data, "base64"))
+      .rotate()
       .resize({ width: maxWidth, withoutEnlargement: true })
       .jpeg({ quality })
       .toBuffer();
