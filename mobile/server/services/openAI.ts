@@ -170,22 +170,29 @@ async function getVerifiedNearbyDestination(
   // store name or address. Text Search supplies a second local candidate set;
   // distance filtering below still prevents an out-of-state result.
   if (!nearbyPlace) {
-    const textResponse = await axios.get(
-      "https://maps.googleapis.com/maps/api/place/textsearch/json",
-      {
-        params: {
-          query: nearbyQuery,
-          location: `${lat},${lng}`,
-          radius: maxDistanceMeters,
-          key: getGoogleMapsApiKey(),
-        },
-        timeout: 20_000,
+    try {
+      const textResponse = await axios.get(
+        "https://maps.googleapis.com/maps/api/place/textsearch/json",
+        {
+          params: {
+            query: nearbyQuery,
+            location: `${lat},${lng}`,
+            radius: maxDistanceMeters,
+            key: getGoogleMapsApiKey(),
+          },
+          timeout: 20_000,
+        }
+      );
+      if (textResponse.data.status === "OK") {
+        candidates = candidates.concat(textResponse.data.results ?? []);
+      } else if (textResponse.data.status !== "ZERO_RESULTS") {
+        console.warn(
+          `[Last Meters] Text Search fallback unavailable: ${textResponse.data.status}`
+        );
       }
-    );
-    if (!["OK", "ZERO_RESULTS"].includes(textResponse.data.status)) {
-      throw new Error(`Google Places Text Search returned ${textResponse.data.status}.`);
+    } catch (error) {
+      console.warn("[Last Meters] Text Search fallback request failed:", error);
     }
-    candidates = candidates.concat(textResponse.data.results ?? []);
     nearbyPlace = selectNearbyPlaceCandidate(
       candidates.filter((candidate: any) =>
         isNearbyPlaceCandidateRelevant(candidate, nearbyQuery)
