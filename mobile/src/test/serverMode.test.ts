@@ -24,6 +24,13 @@ describe('serverMode', () => {
     assert.equal(describeServerMode().mode, 'self-hosted');
   });
 
+  it('does not let zero-config override existing AI keys', () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.ZERO_CONFIG = 'true';
+    assert.equal(isZeroConfigMode(), false);
+    assert.equal(describeServerMode().mode, 'self-hosted');
+  });
+
   it('normalizes upstream root', () => {
     process.env.UPSTREAM_API_ROOT = 'https://buddywalk.app/api/';
     assert.equal(getUpstreamApiRoot(), 'https://buddywalk.app');

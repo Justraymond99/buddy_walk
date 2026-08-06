@@ -3,12 +3,14 @@
 # Deploy: https://dashboard.render.com → New → Blueprint → select this repo.
 # Public URL: https://buddy-walk-api.onrender.com
 #
-# No API keys or MongoDB required. Render auto-generates ADMIN_TOKEN.
+# OpenAI and Google Maps keys are read from the service environment.
+# Render auto-generates ADMIN_TOKEN.
 # After deploy, open:
 #   https://buddy-walk-api.onrender.com/usage?token=YOUR_ADMIN_TOKEN
 #
-# AI / speech / MTA requests are proxied to buddywalk.app in the background.
-# Telemetry, feedback, chat logs, thumbs, and companion data stay on YOUR server.
+# If API keys are missing, AI / speech / MTA requests are proxied to
+# buddywalk.app in the background. Telemetry, feedback, chat logs, thumbs, and
+# companion data stay on YOUR server.
 services:
   - type: web
     name: buddy-walk-api
@@ -28,5 +30,3 @@ services:
         generateValue: true
       - key: UPSTREAM_API_ROOT
         value: https://buddywalk.app
-      - key: ZERO_CONFIG
-        value: "true"

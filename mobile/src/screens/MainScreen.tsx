@@ -17,7 +17,7 @@ import { Text, Button, IconButton } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
-import { Magnetometer, Accelerometer } from 'expo-sensors';
+import { Accelerometer } from 'expo-sensors';
 import * as Network from 'expo-network';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -160,7 +160,7 @@ export default function MainScreen({ navigation }: Props) {
   const [feedbackVisible, setFeedbackVisible] = useState(false);
 
   const locationRef = useRef<Location.LocationObject | null>(null);
-  const headingRef = useRef<number>(0);
+  const headingRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
@@ -194,6 +194,11 @@ export default function MainScreen({ navigation }: Props) {
   useEffect(() => { userInputRef.current = userInput; }, [userInput]);
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { recordingModeRef.current = recordingMode; }, [recordingMode]);
+  useEffect(() => {
+    if (capturedImage || capturedVideoUri || webVideoFrames?.length) {
+      cameraReadyRef.current = false;
+    }
+  }, [capturedImage, capturedVideoUri, webVideoFrames]);
 
   function clearRecordingTimer(): void {
     if (recordingTimerRef.current) {
@@ -252,7 +257,7 @@ export default function MainScreen({ navigation }: Props) {
 
   useEffect(() => {
     let locationSub: Location.LocationSubscription | null = null;
-    let magnetometerSub: ReturnType<typeof Magnetometer.addListener> | null = null;
+    let headingSub: Location.LocationSubscription | null = null;
 
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -272,26 +277,27 @@ export default function MainScreen({ navigation }: Props) {
           { accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 2 },
           (loc) => { locationRef.current = loc; }
         );
+        if (Platform.OS !== 'web') {
+          try {
+            headingSub = await Location.watchHeadingAsync((heading) => {
+              if (heading.accuracy < 2) return;
+              const degrees =
+                heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
+              if (Number.isFinite(degrees)) {
+                headingRef.current = (degrees + 360) % 360;
+              }
+            });
+          } catch (e) {
+            console.warn('Compass heading unavailable:', e);
+          }
+        }
       }
     })();
 
-    // The magnetometer doesn't exist on web — guard so the screen still mounts
-    // (heading just stays at its default for browser testers).
-    if (Platform.OS !== 'web') {
-      try {
-        Magnetometer.setUpdateInterval(500);
-        magnetometerSub = Magnetometer.addListener(({ x, y }) => {
-          let angle = Math.atan2(y, x) * (180 / Math.PI);
-          headingRef.current = (angle + 360) % 360;
-        });
-      } catch (e) {
-        console.warn('Magnetometer unavailable:', e);
-      }
-    }
-
+    // Low-accuracy readings remain unset so Last Meters uses panorama matching.
     return () => {
       locationSub?.remove();
-      magnetometerSub?.remove();
+      headingSub?.remove();
     };
   }, []);
 
@@ -505,7 +511,7 @@ export default function MainScreen({ navigation }: Props) {
   }, []);
 
   /** expo-camera requires onCameraReady before takePicture/recordAsync. */
-  async function waitForCameraReady(timeoutMs = 5000): Promise<boolean> {
+  async function waitForCameraReady(timeoutMs = 2500): Promise<boolean> {
     if (cameraReadyRef.current) return true;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -547,7 +553,11 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
     try {
-      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.4,
+        skipProcessing: Platform.OS !== 'web',
+      });
       const dataUrl = photoToDataUrl(photo);
       if (dataUrl) {
         setCapturedVideoUri(null);
@@ -605,7 +615,7 @@ export default function MainScreen({ navigation }: Props) {
     try {
       videoRecordStartedRef.current = true;
       beginRecordingFeedback();
-      await resetAudioForPlayback();
+      await prepareAudioForRecording();
       AccessibilityInfo.announceForAccessibility('Video recording started');
       // recordAsync resolves when stopRecording is called or maxDuration is reached
       const video = await cameraRef.current.recordAsync({ maxDuration: MAX_VIDEO_DURATION_MS / 1000 });
@@ -1083,7 +1093,7 @@ export default function MainScreen({ navigation }: Props) {
 
     setLoading(true);
     void stopSpeaking();
-    AccessibilityInfo.announceForAccessibility('Calculating precise last meters navigation. This may take a moment.');
+    AccessibilityInfo.announceForAccessibility('Checking your distance and surroundings. This may take a moment.');
 
     try {
       let loc = locationRef.current;
@@ -1095,6 +1105,7 @@ export default function MainScreen({ navigation }: Props) {
       const data = await sendLastMileRequest({
         lat: loc.coords.latitude,
         lng: loc.coords.longitude,
+        heading: headingRef.current ?? undefined,
         image: capturedImage,
         destination: rawDestination
       });
@@ -1106,11 +1117,17 @@ export default function MainScreen({ navigation }: Props) {
         setUserInput('');
         setCapturedImage(null);
         cameraReadyRef.current = false;
-        void track(Events.AnswerReceived, { feature: 'last_mile' });
+        void track(Events.AnswerReceived, {
+          feature: 'last_mile',
+          navigationMode: data.mode || 'unknown',
+        });
       }
     } catch (e) {
       console.error('Last Meters Error:', e);
-      const errMsg = 'Error calculating last meters navigation. Please try again.';
+      const detail = e instanceof Error ? e.message : '';
+      const errMsg = detail
+        ? `Last Meters error: ${detail}`
+        : 'Error calculating last meters navigation. Please try again.';
       setAiResponse(errMsg);
       speak(errMsg, { preferDevice: true });
     } finally {
@@ -1183,20 +1200,24 @@ export default function MainScreen({ navigation }: Props) {
           'I could not determine your location, so answers about nearby places may be wrong. ' +
             'Please check that location access is allowed.'
         );
-      } else if ((loc.coords.accuracy ?? 0) > 5000) {
-        // Browser IP-based estimates can be off by entire cities; warn rather
-        // than silently answering about the wrong place.
-        speak('Your location looks approximate, so nearby results may be off.');
+      } else if ((loc.coords.accuracy ?? 0) > 1000) {
+        // City-scale/IP estimates are unsafe for local destination selection.
+        speak(
+          'Your location is not accurate enough for nearby directions. ' +
+            'Please enable precise location and try again.'
+        );
       }
-      const coords: CustomCoords | null = loc
+      const hasReliableLocation =
+        !!loc && ((loc.coords.accuracy ?? 0) === 0 || (loc.coords.accuracy ?? 0) <= 1000);
+      const coords: CustomCoords | null = hasReliableLocation
         ? {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-            accuracy: loc.coords.accuracy ?? 0,
-            altitude: loc.coords.altitude,
-            altitudeAccuracy: loc.coords.altitudeAccuracy,
+            latitude: loc!.coords.latitude,
+            longitude: loc!.coords.longitude,
+            accuracy: loc!.coords.accuracy ?? 0,
+            altitude: loc!.coords.altitude,
+            altitudeAccuracy: loc!.coords.altitudeAccuracy,
             heading: headingRef.current,
-            speed: loc.coords.speed,
+            speed: loc!.coords.speed,
             orientation: null,
           }
         : null;
@@ -1618,14 +1639,13 @@ export default function MainScreen({ navigation }: Props) {
             <Text style={styles.submitLabel}>Submit</Text>
           </Pressable>
 
-          {/* New Last Meters Button */}
           <Pressable
             onPressIn={() => tapMedium()}
             onPress={() => void handleLastMileNavigation()}
             style={({ pressed }) => [
-              styles.submitButton, 
-              pressed && styles.submitButtonPressed, 
-              { backgroundColor: '#00FFCC', marginTop: 4 } // Added top margin for spacing, custom color
+              styles.submitButton,
+              pressed && styles.submitButtonPressed,
+              { backgroundColor: '#00FFCC', marginTop: 4 },
             ]}
             accessibilityLabel="Calculate precise last meters navigation"
             accessibilityRole="button"
@@ -1633,18 +1653,6 @@ export default function MainScreen({ navigation }: Props) {
           >
             <Text style={styles.submitLabel}>Last Meters</Text>
           </Pressable>
-
-          {loading && (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#f8f8ff" />
-              <Text style={styles.loadingText}>Loading response...</Text>
-              {displayQuestion ? (
-                <Text style={styles.pendingQuestion} accessibilityRole="text">
-                  Your question: {displayQuestion}
-                </Text>
-              ) : null}
-            </View>
-          )}
 
           {loading && (
             <View style={styles.loadingContainer}>

@@ -5,22 +5,57 @@ import dotenv from "dotenv";
 import { ChatCompletionContentPartImage, ChatCompletionContentPartText } from "openai/resources";
 import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { aiRequestLogService } from "./aiRequestLog";
+import { lastMileTestLogService } from "./lastMileTestLog";
 import { getSubwayArrivals } from "./mta";
 import { extractTrainLineFromText } from "../../src/utils/trainLine";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
-import fs from "fs";
-import path from "path";
 import sharp from "sharp";
 import {
   appendConversationHistory,
   formatHistoryForPrompt,
   getConversationHistory,
 } from "../utils/conversationHistory";
+import {
+  buildAlignedHeadingInstruction,
+  buildLastMileApproachInstruction,
+  buildLastMileRetakeInstruction,
+  buildLastMileTurnInstruction,
+  compareCompassAndPanoramaHeadings,
+  isLastMileHeadingAligned,
+  lastMileHeadingDifference,
+  LAST_MILE_HEADINGS,
+  LAST_MILE_PANORAMA_FOV_DEGREES,
+  LAST_METERS_EXACT_RADIUS_METERS,
+  parseDestinationVisibility,
+  parseLastMileHeading,
+  resolveVerifiedTargetHeading,
+  shouldUseDestinationReference,
+  snapLastMileHeading,
+} from "../utils/lastMileNavigation";
+import type { LastMileTestScenario } from "../utils/lastMileNavigation";
+import {
+  extractNearbyPlaceQuery,
+  isNearbyPlaceCandidateRelevant,
+  looksLikeBareDestinationQuery,
+  MAX_LOCAL_PLACE_DISTANCE_METERS,
+  normalizeNearbyPlaceQuery,
+  selectNearbyPlaceCandidate,
+  selectNearbyPlaceCandidates,
+} from "../utils/nearbyPlaces";
 dotenv.config();
 
+function getGoogleMapsApiKey(): string {
+  const apiKey =
+    process.env.GOOGLE_MAPS_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Google Maps API key is not configured on the server.");
+  }
+  return apiKey;
+}
+
 async function geocodeCoordinates(latitude: number, longitude: number) {
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${process.env.GOOGLE_API_KEY}`;
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${getGoogleMapsApiKey()}`;
   try {
     const response = await axios.get(url);
     //console.log('Google Geocoding API response:', response.data);
@@ -76,6 +111,267 @@ function calculateHeading(from: LatLng, to: LatLng): number {
   return (heading + 360) % 360;
 }
 
+interface DestinationStreetViewReference {
+  photo: string;
+  date?: string;
+  status: string;
+  placeName: string;
+  placeAddress: string;
+  targetHeading: number;
+}
+
+interface VerifiedNearbyDestination {
+  placeId: string;
+  placeName: string;
+  placeAddress: string;
+  types: string[];
+  location: LatLng;
+  distanceMeters: number;
+}
+
+async function getVerifiedNearbyDestination(
+  lat: number,
+  lng: number,
+  destination: string,
+  maxDistanceMeters = MAX_LOCAL_PLACE_DISTANCE_METERS
+): Promise<VerifiedNearbyDestination> {
+  const nearbyQuery = normalizeNearbyPlaceQuery(destination);
+  if (!nearbyQuery) {
+    throw new Error("Destination name was empty after normalization.");
+  }
+
+  const locationResponse = await axios.get(
+    "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+    {
+      params: {
+        location: `${lat},${lng}`,
+        rankby: "distance",
+        keyword: nearbyQuery,
+        key: getGoogleMapsApiKey(),
+      },
+      timeout: 20_000,
+    }
+  );
+  if (!["OK", "ZERO_RESULTS"].includes(locationResponse.data.status)) {
+    throw new Error(`Nearby Places returned ${locationResponse.data.status}.`);
+  }
+
+  const nearbyPlace = selectNearbyPlaceCandidate(
+    (locationResponse.data.results ?? []).filter((candidate: any) =>
+      isNearbyPlaceCandidateRelevant(candidate, nearbyQuery)
+    ),
+    { lat, lng },
+    maxDistanceMeters
+  );
+  const placeLocation = nearbyPlace?.geometry?.location;
+  if (
+    !nearbyPlace?.place_id ||
+    typeof placeLocation?.lat !== "number" ||
+    typeof placeLocation.lng !== "number"
+  ) {
+    throw new Error(
+      `No verified ${nearbyQuery} was found within ${Math.round(maxDistanceMeters / 1_000)} kilometers.`
+    );
+  }
+
+  return {
+    placeId: nearbyPlace.place_id,
+    placeName: nearbyPlace.name || nearbyQuery,
+    placeAddress: nearbyPlace.vicinity || nearbyPlace.name || nearbyQuery,
+    types: nearbyPlace.types ?? [],
+    location: { lat: placeLocation.lat, lng: placeLocation.lng },
+    distanceMeters: nearbyPlace.distanceMeters,
+  };
+}
+
+async function getDestinationStreetViewReference(
+  lat: number,
+  lng: number,
+  destination: string,
+  resolvedDestination?: VerifiedNearbyDestination
+): Promise<DestinationStreetViewReference> {
+  const nearbyQuery = normalizeNearbyPlaceQuery(destination);
+  if (!nearbyQuery) {
+    throw new Error("Destination name was empty after normalization.");
+  }
+  const nearbyPlace =
+    resolvedDestination ??
+    await getVerifiedNearbyDestination(lat, lng, nearbyQuery, 2_000);
+  const placeLocation = nearbyPlace.location;
+  if (nearbyPlace.distanceMeters < 3) {
+    throw new Error("Destination coordinates are too close to determine an entrance direction.");
+  }
+
+  const metadataResponse = await axios.get<StreetViewMetadata>(
+    "https://maps.googleapis.com/maps/api/streetview/metadata",
+    {
+      params: {
+        location: `${placeLocation.lat},${placeLocation.lng}`,
+        radius: 100,
+        source: "outdoor",
+        key: getGoogleMapsApiKey(),
+      },
+      timeout: 20_000,
+    }
+  );
+  const metadata = metadataResponse.data;
+  if (metadata.status !== "OK" || !metadata.location) {
+    throw new Error(`Destination Street View metadata returned ${metadata.status}.`);
+  }
+
+  const cameraHeading = calculateHeading(metadata.location, {
+    lat: placeLocation.lat,
+    lng: placeLocation.lng,
+  });
+  const imageResponse = await axios.get(
+    "https://maps.googleapis.com/maps/api/streetview",
+    {
+      params: {
+        size: "640x640",
+        ...(metadata.pano_id
+          ? { pano: metadata.pano_id }
+          : { location: `${placeLocation.lat},${placeLocation.lng}` }),
+        heading: cameraHeading.toFixed(1),
+        fov: 80,
+        pitch: 0,
+        source: "outdoor",
+        return_error_code: true,
+        key: getGoogleMapsApiKey(),
+      },
+      responseType: "arraybuffer",
+      timeout: 20_000,
+    }
+  );
+
+  return {
+    photo: `data:image/jpeg;base64,${Buffer.from(imageResponse.data).toString("base64")}`,
+    date: metadata.date,
+    status: metadata.status,
+    placeName: nearbyPlace.placeName,
+    placeAddress: nearbyPlace.placeAddress,
+    targetHeading: snapLastMileHeading(
+      calculateHeading(
+        { lat, lng },
+        { lat: placeLocation.lat, lng: placeLocation.lng }
+      )
+    ),
+  };
+}
+
+interface VerifiedWalkingDirections {
+  placeName: string;
+  placeAddress: string;
+  distanceMeters: number;
+  directionsText: string;
+  route: VerifiedWalkingRoute;
+}
+
+interface VerifiedWalkingRouteStep {
+  index: number;
+  instruction: string;
+  distance: { text: string; value: number };
+  duration: { text: string; value: number };
+  maneuver: string;
+  startLocation: LatLng;
+  endLocation: LatLng;
+  travelMode?: string;
+}
+
+interface VerifiedWalkingRoute {
+  destination: { name?: string; address?: string } & LatLng;
+  origin: LatLng;
+  totalDistance: { text: string; value: number };
+  totalDuration: { text: string; value: number };
+  steps: VerifiedWalkingRouteStep[];
+  polyline?: string;
+  travelMode: string;
+}
+
+function plainGoogleInstruction(value: string): string {
+  return value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function getVerifiedNearbyWalkingDirections(
+  lat: number,
+  lng: number,
+  destination: string
+): Promise<VerifiedWalkingDirections> {
+  const nearbyPlace = await getVerifiedNearbyDestination(lat, lng, destination);
+
+  const routeResponse = await axios.get(
+    "https://maps.googleapis.com/maps/api/directions/json",
+    {
+      params: {
+        mode: "walking",
+        origin: `${lat},${lng}`,
+        destination: `place_id:${nearbyPlace.placeId}`,
+        key: getGoogleMapsApiKey(),
+      },
+      timeout: 20_000,
+    }
+  );
+  const routeLeg = routeResponse.data.routes?.[0]?.legs?.[0];
+  if (routeResponse.data.status !== "OK" || !routeLeg) {
+    throw new Error(`Directions returned ${routeResponse.data.status}.`);
+  }
+
+  const routeDistanceMeters = Number(routeLeg.distance?.value ?? 0);
+  if (
+    !Number.isFinite(routeDistanceMeters) ||
+    routeDistanceMeters <= 0 ||
+    routeDistanceMeters > MAX_LOCAL_PLACE_DISTANCE_METERS
+  ) {
+    throw new Error("Verified walking route is outside the local distance limit.");
+  }
+
+  const routeSteps: VerifiedWalkingRouteStep[] = (routeLeg.steps ?? []).map(
+    (step: any, index: number) => ({
+      index,
+      instruction: plainGoogleInstruction(step.html_instructions || ""),
+      distance: step.distance,
+      duration: step.duration,
+      maneuver: step.maneuver || "",
+      startLocation: step.start_location,
+      endLocation: step.end_location,
+      travelMode: step.travel_mode,
+    })
+  );
+  const directionsText = routeSteps
+    .map(
+      (step, index) =>
+        `Step ${index + 1}) ${step.instruction} for ${step.distance.text}`
+    )
+    .join("\n");
+
+  return {
+    placeName: nearbyPlace.placeName,
+    placeAddress: nearbyPlace.placeAddress,
+    distanceMeters: nearbyPlace.distanceMeters,
+    directionsText,
+    route: {
+      destination: {
+        name: nearbyPlace.placeName,
+        address: nearbyPlace.placeAddress,
+        lat: nearbyPlace.location.lat,
+        lng: nearbyPlace.location.lng,
+      },
+      origin: { lat, lng },
+      totalDistance: routeLeg.distance,
+      totalDuration: routeLeg.duration,
+      steps: routeSteps,
+      polyline: routeResponse.data.routes[0].overview_polyline?.points,
+      travelMode: "WALKING",
+    },
+  };
+}
+
 // --- 4. Main Logic ---
 async function getStreetViewWithHeading(address: string): Promise<string | null> {
   try {
@@ -84,7 +380,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     // Step A: Geocode Address (Find the House)
     const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
       address
-    )}&key=${process.env.GOOGLE_API_KEY}`;
+    )}&key=${getGoogleMapsApiKey()}`;
     
     const geoRes = await fetch(geoUrl);
     const geoData = (await geoRes.json()) as GeocodeResponse;
@@ -98,7 +394,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
 
     // Step B: Find Nearest Panorama (Find the Car)
     // The Metadata API returns the specific lat/lng where the car was standing
-    const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${houseLoc.lat},${houseLoc.lng}&key=${process.env.GOOGLE_API_KEY}`;
+    const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${houseLoc.lat},${houseLoc.lng}&key=${getGoogleMapsApiKey()}`;
     
     const metaRes = await fetch(metaUrl);
     const metaData = (await metaRes.json()) as StreetViewMetadataResponse;
@@ -115,7 +411,7 @@ async function getStreetViewWithHeading(address: string): Promise<string | null>
     console.log(`   Calculated Heading: ${heading.toFixed(2)}°`);
 
     // Step D: Construct Final URL
-    const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${process.env.GOOGLE_API_KEY}`;
+    const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${getGoogleMapsApiKey()}`;
     
     console.log(`\n✅ Final Image URL:\n${finalUrl}`);
     return finalUrl;
@@ -191,113 +487,51 @@ export class OpenAIService {
     }
   }
 
-  private async getNewestPanoramaId(lat: number, lng: number): Promise<string | null> {
-    try {
-      const apiKey = process.env.GOOGLE_API_KEY;
-      
-      // Define a 5-point grid: Center, North, South, East, West
-      const offsets = [
-        { dLat: 0, dLng: 0 },
-        { dLat: 0.0001, dLng: 0 },
-        { dLat: -0.0001, dLng: 0 },
-        { dLat: 0, dLng: 0.0001 },
-        { dLat: 0, dLng: -0.0001 }
-      ];
-  
-      // Fire all metadata requests concurrently
-      const requests = offsets.map(offset => {
-        const testLat = lat + offset.dLat;
-        const testLng = lng + offset.dLng;
-        const url = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${testLat},${testLng}&radius=50&source=outdoor&key=${apiKey}`;
-        return axios.get(url).catch(() => null);
-      });
-  
-      const responses = await Promise.all(requests);
-  
-      // Extract valid responses and default missing dates to '2000-01' for sorting purposes
-      const validPanos = responses
-        .filter(res => res && res.data && res.data.status === "OK")
-        .map(res => ({
-          pano_id: res!.data.pano_id,
-          date: res!.data.date || "2000-01",
-        }));
-  
-      if (validPanos.length === 0) return null;
-  
-      // Sort descending so the newest date comes first
-      validPanos.sort((a, b) => b.date.localeCompare(a.date));
-      console.log(`\n📸 Grid Scan: Found ${validPanos.length} panos. Best date: ${validPanos[0].date}, PanoID: ${validPanos[0].pano_id}`);
-      
-      return validPanos[0].pano_id;
-  
-    } catch (error: any) {
-      console.error("❌ ERROR fetching metadata grid:", error.message);
-      return null;
-    }
-  }
-
-  private async processEightDirectionTiles(lat: number, lng: number, panoId: string | null): Promise<{ heading: number; base64: string }[]> {
-    console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
-    
-    // Exactly 8 segments to cover a full 360-degree view (45 degrees per tile)
-    const headings = [0, 45, 90, 135, 180, 225, 270, 315];
-    const apiKey = process.env.GOOGLE_API_KEY;
-    
-    // 1. Download all 8 tiles in parallel to maximize speed
-    const tilePromises = headings.map(async (hd) => {
-      // If we found a recent panoId, use it. Otherwise fallback to lat/lng.
-      const locationOrPano = panoId ? `pano=${panoId}` : `location=${lat},${lng}`;
-      const url = `https://maps.googleapis.com/maps/api/streetview?size=640x640&${locationOrPano}&heading=${hd}&fov=45&pitch=0&source=outdoor&key=${apiKey}`;
-      
-      const response = await axios.get(url, { responseType: "arraybuffer" });
-      const buffer = Buffer.from(response.data);
-      
-      // We return both the buffer (for Sharp) and the base64 (for OpenAI)
-      return { 
-        heading: hd, 
-        buffer: buffer, 
-        base64: `data:image/jpeg;base64,${buffer.toString("base64")}` 
-      };
-    });
-
-    const results = await Promise.all(tilePromises);
-
-    // 2. --- DEBUG LOGIC: RECREATE THE JPG FOR VISUAL CONFIRMATION ---
-    try {
-      const compositeLayers: sharp.OverlayOptions[] = [];
-      
-      results.forEach((tile, index) => {
-        const leftOffset = index * 640;
-        
-        // Add the image layer
-        compositeLayers.push({ input: tile.buffer, left: leftOffset, top: 0 });
-        
-        // Add the SVG text overlay (assuming createOverlaySvg is defined at the bottom of your file)
-        compositeLayers.push({ input: createOverlaySvg(tile.heading, index + 1), left: leftOffset, top: 0 });
-      });
-
-      // Stitch the 8 images together into a single 5120x640 file
-      const outputPath = path.resolve(__dirname, "../../debug-panorama-360.jpg");
-      await sharp({ create: { width: 5120, height: 640, channels: 3, background: { r: 0, g: 0, b: 0 } } })
-        .composite(compositeLayers)
-        .toFile(outputPath);
-        
-      console.log(`✅ Debug panorama saved to: ${outputPath}`);
-    } catch (err) {
-      console.error("❌ Error saving debug panorama:", err);
-    }
-    // -----------------------------------------------------------------
-
-    // 3. Return only the data required by the OpenAI pipeline (strip out the raw buffer to save memory)
-    return results.map(r => ({ heading: r.heading, base64: r.base64 }));
-  }
-
-  // =====================================================================
   // --- LAST METERS NAVIGATION PIPELINE ---
-  // =====================================================================
-  
-  async lastMileRequest(ctx: AppContext, lat: number, lng: number, image: string, destination: string) {
+  async lastMileRequest(
+    ctx: AppContext,
+    lat: number,
+    lng: number,
+    image: string,
+    destination: string,
+    deviceHeading?: number
+  ) {
     const { res } = ctx;
+    const startedAt = Date.now();
+    let activeStage = "destination proximity check";
+    let navigationMode: "approach" | "exact" | "aligned" | undefined;
+    let testScenario: LastMileTestScenario | undefined;
+    let destinationDistanceMeters: number | undefined;
+    let destinationBearing: number | undefined;
+    let headingDifferenceDegrees: number | undefined;
+    let headingAligned: boolean | undefined;
+    let compassHeading: number | undefined;
+    let panoramaMatchedHeading: number | undefined;
+    let headingComparisonDifference: number | undefined;
+    let headingComparisonAgrees: boolean | undefined;
+    let currentHeading: number | undefined;
+    let verifiedDestination: VerifiedNearbyDestination | undefined;
+    let panoramaPhoto: string | undefined;
+    let panoramaDate: string | undefined;
+    let panoramaStatus: string | undefined;
+    let panoramaHeadings: number[] = [];
+    let destinationPhoto: string | undefined;
+    let destinationPhotoDate: string | undefined;
+    let destinationPhotoStatus: string | undefined;
+    let destinationPlaceName: string | undefined;
+    let destinationPlaceAddress: string | undefined;
+    let destinationTypes: string[] = [];
+    let destinationReferenceUsed = false;
+    const testSteps: {
+      name: string;
+      prompt: string;
+      response?: string;
+      parsedHeading?: number;
+      model: string;
+      success: boolean;
+      error?: string;
+      tokenCount?: number;
+    }[] = [];
 
     console.log("\n==================================================");
     console.log("📥 [BACKEND] HIT RECEIVED ON /api/last-mile route!");
@@ -307,23 +541,216 @@ export class OpenAIService {
     console.log("==================================================");
 
     try {
-      const debugPhotoPath = path.resolve(__dirname, "../../debug-user-photo.jpg");
-      const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
-      fs.writeFileSync(debugPhotoPath, base64Data, 'base64');
-      console.log(`📸 User photo saved to: ${debugPhotoPath}`);
-    } catch (err) {
-      console.error("Error saving debug photo:", err);
-    }
+      const proximityPrompt =
+        `Resolve "${destination}" near the user's coordinates and use exact ` +
+        `panorama matching only within ${LAST_METERS_EXACT_RADIUS_METERS} meters.`;
+      try {
+        verifiedDestination = await getVerifiedNearbyDestination(
+          lat,
+          lng,
+          destination
+        );
+        destinationDistanceMeters = verifiedDestination.distanceMeters;
+        destinationPlaceName = verifiedDestination.placeName;
+        destinationPlaceAddress = verifiedDestination.placeAddress;
+        destinationTypes = verifiedDestination.types;
+      } catch (proximityError) {
+        testScenario = "destination_unverified";
+        const message =
+          proximityError instanceof Error
+            ? proximityError.message
+            : "Destination proximity lookup failed.";
+        testSteps.push({
+          name: "proximity_gate",
+          prompt: proximityPrompt,
+          response: "DESTINATION_NOT_VERIFIED",
+          model: "google-places",
+          success: false,
+          error: message,
+        });
+        const finalOutput =
+          `I could not verify a nearby ${destination} from your current location. ` +
+          "Try a more specific name or street address.";
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaHeadings,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationTypes,
+          destinationDistanceMeters,
+          deviceHeading,
+          testScenario,
+          finalOutput,
+          steps: testSteps,
+          success: false,
+          error: "destination_not_verified",
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          testScenario,
+          warning: "destination_not_verified",
+        });
+        return;
+      }
 
-    try {
-      // 0. Obtaining the most recent panorama ID and processing the tiles.
-      const bestPanoId = await this.getNewestPanoramaId(lat, lng);
-      const tiles = await this.processEightDirectionTiles(lat, lng, bestPanoId);
-      
-      const panoramaImagesMsg: any[] = [];
+      destinationBearing = calculateHeading(
+        { lat, lng },
+        verifiedDestination.location
+      );
+      if (typeof deviceHeading === "number") {
+        headingDifferenceDegrees = lastMileHeadingDifference(
+          deviceHeading,
+          destinationBearing
+        );
+        headingAligned = isLastMileHeadingAligned(
+          deviceHeading,
+          destinationBearing
+        );
+        testSteps.push({
+          name: "heading_alignment",
+          prompt:
+            "Compare the phone compass heading with the verified destination bearing.",
+          response:
+            `${headingAligned ? "ALIGNED" : "MISALIGNED"}: phone ` +
+            `${deviceHeading.toFixed(1)} degrees, destination ` +
+            `${destinationBearing.toFixed(1)} degrees, difference ` +
+            `${headingDifferenceDegrees.toFixed(1)} degrees`,
+          model: "deterministic-compass",
+          success: true,
+        });
+      }
+
+      if (
+        headingAligned &&
+        destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS
+      ) {
+        navigationMode = "aligned";
+        testScenario = "heading_aligned";
+        testSteps.unshift({
+          name: "proximity_gate",
+          prompt: proximityPrompt,
+          response:
+            `${destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS ? "APPROACH_ONLY" : "EXACT_RANGE"}: ` +
+            `${Math.round(destinationDistanceMeters)} meters`,
+          model: "google-places",
+          success: true,
+        });
+        const finalOutput = buildAlignedHeadingInstruction(
+          verifiedDestination.placeName,
+          destinationDistanceMeters
+        );
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaHeadings,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationTypes,
+          destinationDistanceMeters,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
+          navigationMode,
+          testScenario,
+          finalOutput,
+          steps: testSteps,
+          success: true,
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          mode: navigationMode,
+          testScenario,
+          warning: "heading_already_aligned",
+        });
+        return;
+      }
+
+      if (destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS) {
+        navigationMode = "approach";
+        testScenario = "test_b_approach";
+        const finalOutput = buildLastMileApproachInstruction(
+          verifiedDestination.placeName,
+          destinationDistanceMeters,
+          destinationBearing
+        );
+        testSteps.push({
+          name: "proximity_gate",
+          prompt: proximityPrompt,
+          response:
+            `APPROACH_ONLY: ${Math.round(destinationDistanceMeters)} meters, ` +
+            `${destinationBearing.toFixed(1)} degrees`,
+          model: "google-places",
+          success: true,
+        });
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaHeadings,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationTypes,
+          destinationDistanceMeters,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
+          navigationMode,
+          testScenario,
+          finalOutput,
+          steps: testSteps,
+          success: true,
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          mode: navigationMode,
+          testScenario,
+          warning: "destination_too_far",
+        });
+        return;
+      }
+
+      navigationMode = "exact";
+      testSteps.push({
+        name: "proximity_gate",
+        prompt: proximityPrompt,
+        response: `EXACT: ${Math.round(destinationDistanceMeters)} meters`,
+        model: "google-places",
+        success: true,
+      });
+      activeStage = "panorama download";
+      const panorama = await processEightDirectionTiles(lat, lng);
+      const { tiles } = panorama;
+      panoramaDate = panorama.metadata.date;
+      panoramaStatus = panorama.metadata.status;
+      panoramaHeadings = tiles.map((tile) => tile.heading);
+      const panoramaOrigin = panorama.metadata.location ?? { lat, lng };
+      const expectedTargetHeading = snapLastMileHeading(
+        calculateHeading(panoramaOrigin, verifiedDestination.location)
+      );
+      activeStage = "panorama assembly";
+      panoramaPhoto = await buildPanoramaDebugImage(tiles);
+      const panoramaOverviewMsg: any[] = [];
       tiles.forEach((tile) => {
-        panoramaImagesMsg.push({ type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` });
-        panoramaImagesMsg.push({ type: "image_url", image_url: { url: tile.base64 } });
+        const label = { type: "text", text: `--- PANORAMA IMAGE AT ${tile.heading}° ---` };
+        panoramaOverviewMsg.push(label);
+        panoramaOverviewMsg.push({
+          type: "image_url",
+          image_url: { url: tile.base64, detail: "low" },
+        });
       });
 
       console.log(`\n🤖 Running 3-Step Architecture for target: [${destination}]...`);
@@ -331,91 +758,418 @@ export class OpenAIService {
       // ==========================================
       // STEP 1: FIND USER HEADING (User Photo + Panorama)
       // ==========================================
+      activeStage = "current-view matching";
       console.log("   ➤ Step 1: Locating User's Current View...");
+      const step1Prompt = `You will receive 8 distinct, non-overlapping panorama images explicitly labeled with their center headings (000 DEG, 045 DEG, etc.), followed by a user's photo. Identify which single panorama segment confidently matches the user's photo.
+Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
+Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confidently matched. Do not return business names or explanations.`;
       const step1Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: "You will receive 8 panorama images explicitly labeled with their degrees (0°, 45°, etc.), followed by a user's photo. Identify which panorama segment visually matches the user's photo. Reply ONLY with the integer number of the degrees (e.g., 315)." },
-          { role: "user", content: [...panoramaImagesMsg, { type: "text", text: "--- USER'S CURRENT PHOTO ---" }, { type: "image_url", image_url: { url: image } }] }
+          { role: "system", content: step1Prompt },
+          {
+            role: "user",
+            content: [
+              ...panoramaOverviewMsg,
+              { type: "text", text: "--- USER'S CURRENT PHOTO ---" },
+              { type: "image_url", image_url: { url: image, detail: "low" } },
+            ],
+          }
         ],
-        temperature: 0.0
+        temperature: 0.0,
+        max_tokens: 12,
       });
-      
       const step1Text = step1Response.choices[0].message.content?.trim() || "";
-      const currentHeading = parseInt(step1Text);
-
-      // 🛡️ GUARDRAIL STEP 1: Controlling NaN results
-      if (isNaN(currentHeading)) {
-        console.log(`❌ Step 1 Failed (NaN returned). AI output: ${step1Text}`);
-        return res.status(200).json({ output: "Unable to determine your current orientation from the photo. Please adjust your camera angle and take another photo." });
+      const comparison = compareCompassAndPanoramaHeadings(
+        deviceHeading,
+        parseLastMileHeading(step1Text)
+      );
+      compassHeading = comparison.compassHeading ?? undefined;
+      panoramaMatchedHeading = comparison.panoramaMatchedHeading ?? undefined;
+      headingComparisonDifference = comparison.differenceDegrees;
+      headingComparisonAgrees = comparison.agrees;
+      currentHeading = comparison.authoritativeHeading ?? undefined;
+      testSteps.push({
+        name: "panorama_current_view_match",
+        prompt: step1Prompt,
+        response: step1Text,
+        parsedHeading: panoramaMatchedHeading,
+        model: "gpt-4o-mini",
+        success: panoramaMatchedHeading !== undefined,
+        error:
+          panoramaMatchedHeading === undefined
+            ? "Panorama could not independently match the current view."
+            : undefined,
+        tokenCount: step1Response.usage?.total_tokens,
+      });
+      testSteps.push({
+        name: "compass_current_heading",
+        prompt:
+          "Record the phone compass heading independently. This is the only source permitted to control turn direction.",
+        response:
+          compassHeading === undefined
+            ? "COMPASS_UNAVAILABLE"
+            : `${compassHeading} DEG`,
+        parsedHeading: compassHeading,
+        model: "device-compass",
+        success: compassHeading !== undefined,
+        error:
+          compassHeading === undefined
+            ? "Phone compass heading was unavailable."
+            : undefined,
+      });
+      testSteps.push({
+        name: "heading_source_comparison",
+        prompt:
+          "Compare the independent compass and panorama headings without changing navigation guidance.",
+        response:
+          headingComparisonDifference === undefined
+            ? "NOT_COMPARABLE"
+            : `${headingComparisonAgrees ? "AGREE" : "DISAGREE"}: ` +
+              `${headingComparisonDifference} DEG DIFFERENCE`,
+        model: "deterministic-comparison",
+        success: headingComparisonDifference !== undefined,
+        error:
+          headingComparisonDifference === undefined
+            ? "Both heading sources were not available."
+            : undefined,
+      });
+      if (currentHeading === undefined) {
+        const finalOutput =
+          "Your phone compass heading was unavailable, so I will not calculate a turn. " +
+          "The panorama match was recorded for comparison only. Stop safely, check compass access, and try again.";
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaPhoto,
+          panoramaDate,
+          panoramaStatus,
+          panoramaHeadings,
+          destinationPhoto,
+          destinationPhotoDate,
+          destinationPhotoStatus,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationTypes,
+          destinationDistanceMeters,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
+          compassHeading,
+          panoramaMatchedHeading,
+          headingComparisonDifference,
+          headingComparisonAgrees,
+          destinationReferenceUsed,
+          navigationMode,
+          testScenario,
+          finalOutput,
+          steps: testSteps,
+          success: false,
+          error: "compass_heading_unavailable",
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          mode: navigationMode,
+          testScenario,
+          warning: "compass_heading_unavailable",
+        });
+        return;
       }
 
       // ==========================================
       // STEP 2: FIND TARGET HEADING (Text Name + Panorama ONLY - NO USER PHOTO)
       // ==========================================
+      activeStage = "destination matching";
       console.log("   ➤ Step 2: Locating Target Store...");
+      const panoramaDateContext = panoramaDate
+        ? `Street View reports that this panorama was captured in ${panoramaDate}.`
+        : "Street View did not provide a capture date for this panorama.";
+      const step2Prompt = `You will receive one panorama grid containing 8 distinct, non-overlapping views explicitly labeled with their center headings. Find the storefront, sign, or entrance for "${destination}". ${panoramaDateContext}
+      Google Maps places the verified destination near ${expectedTargetHeading} degrees from the panorama camera. Inspect that view and both neighboring views carefully, but use the map bearing only to focus the search, never as proof that the storefront is visible.
+      If the primary name text is partially obscured by a canopy, tree, or awning, look carefully at side banners, architectural markers, or window logos before deciding it is NOT_VISIBLE.
+      Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
+      Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. A different nearby business is not a match. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
       const step2Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: `You will receive 8 panorama images explicitly labeled with their degrees. Find the storefront or sign for "${destination}" from the panorama image ONLY. If the destination is NOT clearly visible in ANY of the images, you MUST reply with 'NaN'. If it is visible, reply ONLY with the exact integer number of the degrees where it is located (e.g., 45). Do not guess or assume.` },
-          { role: "user", content: panoramaImagesMsg }
+          { role: "system", content: step2Prompt },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "--- LABELED PANORAMA GRID ---" },
+              { type: "image_url", image_url: { url: panoramaPhoto, detail: "high" } },
+            ],
+          }
         ],
-        temperature: 0.0
+        temperature: 0.0,
+        max_tokens: 12,
       });
-      
       const step2Text = step2Response.choices[0].message.content?.trim() || "";
-      const targetHeading = parseInt(step2Text);
+      const visuallyMatchedTargetHeading = parseLastMileHeading(step2Text);
+      let targetHeading = resolveVerifiedTargetHeading(
+        visuallyMatchedTargetHeading,
+        expectedTargetHeading
+      );
+      const visualMatchAgreesWithMap = targetHeading !== null;
+      if (visualMatchAgreesWithMap) {
+        testScenario = "test_a_visible";
+      }
+      testSteps.push({
+        name: "target_store_match",
+        prompt: step2Prompt,
+        response: step2Text,
+        parsedHeading: targetHeading ?? undefined,
+        model: "gpt-4o-mini",
+        success: visualMatchAgreesWithMap,
+        error:
+          visuallyMatchedTargetHeading === null
+            ? "Destination was not visible in the panorama."
+            : visualMatchAgreesWithMap
+              ? undefined
+              : "Visual destination heading disagreed with the verified map bearing.",
+        tokenCount: step2Response.usage?.total_tokens,
+      });
+      if (targetHeading === null) {
+        if (!shouldUseDestinationReference(destinationDistanceMeters)) {
+          navigationMode = "approach";
+          testScenario = "test_b_approach";
+          const finalOutput = buildLastMileRetakeInstruction(
+            verifiedDestination.placeName,
+            destinationDistanceMeters,
+            destinationBearing
+          );
+          const testLogId = await lastMileTestLogService.record({
+            destination,
+            lat,
+            lng,
+            userPhoto: await resizeDataUrlImage(image, 1024, 76),
+            panoramaPhoto,
+            panoramaDate,
+            panoramaStatus,
+            panoramaHeadings,
+            destinationPlaceName,
+            destinationPlaceAddress,
+            destinationTypes,
+            destinationDistanceMeters,
+            destinationBearing,
+            deviceHeading,
+            headingDifferenceDegrees,
+            headingAligned,
+            compassHeading,
+            panoramaMatchedHeading,
+            headingComparisonDifference,
+            headingComparisonAgrees,
+            destinationReferenceUsed,
+            navigationMode,
+            testScenario,
+            currentHeading,
+            finalOutput,
+            steps: testSteps,
+            success: true,
+            latencyMs: Date.now() - startedAt,
+          });
+          res.status(200).json({
+            output: finalOutput,
+            testLogId,
+            mode: navigationMode,
+            testScenario,
+            currentHeading,
+            targetHeading,
+            warning: "destination_not_visible_move_closer",
+          });
+          return;
+        }
 
-      // 🛡️ GUARDRAIL STEP 2: Controlling NaN results
-      if (isNaN(targetHeading)) {
-        console.log(`❌ Step 2 Failed (NaN returned). AI output: ${step2Text}`);
-        return res.status(200).json({ output: `Unable to locate "${destination}" in the current street view. You might be too far away, or the storefront is hidden. Try moving a block closer.` });
+        testScenario = "test_a_reference";
+        activeStage = "destination reference lookup";
+        console.log("   Step 2B: Fetching a destination-focused Street View reference...");
+        const referencePrompt =
+          `Fetch a Street View image aimed at the verified nearby location for "${destination}", ` +
+          "then confirm the destination in that image.";
+        try {
+          const reference = await getDestinationStreetViewReference(
+            lat,
+            lng,
+            destination,
+            verifiedDestination
+          );
+          destinationPhoto = reference.photo;
+          destinationPhotoDate = reference.date;
+          destinationPhotoStatus = reference.status;
+          destinationPlaceName = reference.placeName;
+          destinationPlaceAddress = reference.placeAddress;
+
+          activeStage = "destination reference verification";
+          const destinationDateContext = reference.date
+            ? `Street View reports that this image was captured in ${reference.date}.`
+            : "Street View did not provide a capture date for this image.";
+          const step2bPrompt = `You will receive a destination-focused Street View image for the verified nearby place "${reference.placeName}" at "${reference.placeAddress}". ${destinationDateContext}
+Reply with exactly one token: VISIBLE or NOT_VISIBLE.
+Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to the named destination. Do not infer identity from the prompt, nearby businesses, or a generic building entrance.`;
+          const step2bResponse = await this.client.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: step2bPrompt },
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "--- DESTINATION-FOCUSED STREET VIEW ---" },
+                  { type: "image_url", image_url: { url: reference.photo, detail: "high" } },
+                ],
+              },
+            ],
+            temperature: 0.0,
+            max_tokens: 8,
+          });
+          const step2bText = step2bResponse.choices[0].message.content?.trim() || "";
+          destinationReferenceUsed = parseDestinationVisibility(step2bText);
+          if (destinationReferenceUsed) {
+            targetHeading = reference.targetHeading;
+          }
+          testSteps.push({
+            name: "destination_reference_match",
+            prompt: step2bPrompt,
+            response: step2bText,
+            parsedHeading: destinationReferenceUsed ? reference.targetHeading : undefined,
+            model: "gpt-4o-mini",
+            success: destinationReferenceUsed,
+            error: destinationReferenceUsed
+              ? undefined
+              : "Destination was not confirmed in the focused Street View image.",
+            tokenCount: step2bResponse.usage?.total_tokens,
+          });
+        } catch (referenceError) {
+          const message =
+            referenceError instanceof Error
+              ? referenceError.message
+              : "Destination reference lookup failed.";
+          console.error("Destination Street View fallback failed:", message);
+          testSteps.push({
+            name: "destination_reference_match",
+            prompt: referencePrompt,
+            model: "google-street-view",
+            success: false,
+            error: message,
+          });
+        }
+      }
+      if (targetHeading === null) {
+        const ageWarning = panoramaDate
+          ? ` The available Street View image is dated ${panoramaDate} and may be outdated.`
+          : "";
+        const finalOutput =
+          `I could not confirm ${destination} in the street panorama.${ageWarning} ` +
+          "Do not turn based on this result. Move closer using your primary navigation and try Last Meters again.";
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaPhoto,
+          panoramaDate,
+          panoramaStatus,
+          panoramaHeadings,
+          destinationPhoto,
+          destinationPhotoDate,
+          destinationPhotoStatus,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationTypes,
+          destinationDistanceMeters,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
+          compassHeading,
+          panoramaMatchedHeading,
+          headingComparisonDifference,
+          headingComparisonAgrees,
+          destinationReferenceUsed,
+          navigationMode,
+          testScenario,
+          currentHeading,
+          finalOutput,
+          steps: testSteps,
+          success: false,
+          error: "destination_not_visible",
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          mode: navigationMode,
+          testScenario,
+          currentHeading,
+          targetHeading,
+          warning: "destination_not_visible",
+        });
+        return;
       }
 
       // ==========================================
       // TYPESCRIPT MATH CALCULATION (Bulletproof Turn Logic)
       // ==========================================
-      let turnInstruction = "";
-      if (currentHeading === targetHeading) {
-        turnInstruction = "No turn needed. Move straight forward.";
-      } else {
-        let diff = targetHeading - currentHeading;
-        if (diff < -180) diff += 360;
-        if (diff > 180) diff -= 360;
-        
-        const direction = diff > 0 ? "RIGHT" : "LEFT";
-        const degrees = Math.abs(diff);
-        
-        if (degrees === 180) {
-        turnInstruction = "Your destination is directly behind you. Turn around 180°.";
-      } else if (degrees === 135) {
-        turnInstruction = `Your destination is behind you to your ${direction}. Turn 135° to your ${direction}.`;
-      } else {
-        turnInstruction = `Turn ${degrees}° to your ${direction}.`;
-      }
-      }
+      const turnInstruction = buildLastMileTurnInstruction(currentHeading, targetHeading);
 
       // ==========================================
       // STEP 3: ACCESSIBLE GUIDANCE & LANDMARKS
       // ==========================================
+      activeStage = "accessible guidance";
       console.log("   ➤ Step 3: Generating Accessible Guidance...");
+      const destinationReferenceContext = destinationReferenceUsed
+        ? `A separate Street View image for "${destinationPlaceName}" is also provided. It was captured ${destinationPhotoDate || "on an unknown date"} and may be outdated. Use it only as historical entrance context, never as proof of current conditions.`
+        : "No separate destination reference image is provided.";
+      const step3Prompt = `You are an orientation assistant for a blind pedestrian.
+The validated turn instruction is: "${turnInstruction}"
+${destinationReferenceContext}
+Describe at most two stable physical landmarks. Use the user's current photo for a landmark useful while turning in place. If a destination reference is provided, you may also describe one clearly visible entrance feature and must prefix it with "Street View reference:".
+Only mention stable, cane-detectable or tactile features such as a wall edge, curb, doorway recess, railing, or steps.
+Do not name, describe, or direct the user toward any business other than "${destinationPlaceName || destination}". If the requested destination's entrance is not verified, omit entrance guidance rather than substituting a neighboring storefront.
+Never claim that a reference-image feature is currently present or visible from the user's position. Never invent an object. Never say "look", "see", "watch", "keep an eye out", or promise that a path is clear.
+Do not instruct the user to walk forward or cross a street. If no reliable landmark is visible, reply exactly: NO_RELIABLE_LANDMARKS.
+Keep the response to two short sentences and do not repeat the turn instruction.`;
+      const step3UserContent: any[] = [
+        { type: "text", text: "--- USER'S CURRENT PHOTO ---" },
+        { type: "image_url", image_url: { url: image, detail: "high" } },
+      ];
+      if (destinationReferenceUsed && destinationPhoto) {
+        step3UserContent.push(
+          { type: "text", text: "--- DESTINATION-FOCUSED STREET VIEW REFERENCE ---" },
+          { type: "image_url", image_url: { url: destinationPhoto, detail: "high" } }
+        );
+      }
       const step3Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: `You are an orientation assistant for blind users. 
-          TASK: Guide the user to safely execute this calculated action: "${turnInstruction}" to reach "${destination}".
-          
-          CRITICAL RULES:
-          1. TARGET VISIBILITY OVERRIDE: First, look at the user's photo. If the entrance to "${destination}" is clearly visible directly in front of them in their photo, IGNORE the calculated action entirely and just say: "You are facing your destination. Move straight forward."
-          2. EXTREME CONCISENESS: Keep your response under 3 short sentences. No filler words.
-          3. NO POST-TURN GUESSING: Do NOT describe what the user will face *after* the turn (e.g., never say "Once you turn, you will see an open area").
-          4. TACTILE ANCHORS ONLY: Mention ONLY immediate physical objects next to the user (walls, curbs, construction barriers, parked cars) that help them pivot safely. Be definitive. Never use phrases like "There may be".` },
-          { role: "user", content: [{ type: "image_url", image_url: { url: image } }] }
+          { role: "system", content: step3Prompt },
+          { role: "user", content: step3UserContent }
         ],
-        temperature: 0.1
+        temperature: 0.1,
+        max_tokens: 100,
       });
 
-      const landmarksGuidance = step3Response.choices[0].message.content;
+      const step3Text = step3Response.choices[0].message.content?.trim() || "";
+      const landmarksGuidance =
+        !step3Text || /\bNO_RELIABLE_LANDMARKS\b/i.test(step3Text)
+          ? "No reliable physical landmark was identified. Turn in place without moving forward, then confirm your orientation before continuing."
+          : step3Text;
+      testSteps.push({
+        name: "accessible_guidance",
+        prompt: step3Prompt,
+        response: step3Text,
+        model: "gpt-4o-mini",
+        success: !!step3Text && !/\bNO_RELIABLE_LANDMARKS\b/i.test(step3Text),
+        error:
+          !step3Text || /\bNO_RELIABLE_LANDMARKS\b/i.test(step3Text)
+            ? "No reliable physical landmark was identified."
+            : undefined,
+        tokenCount: step3Response.usage?.total_tokens,
+      });
 
       // --- FINAL OUTPUT FOR TERMINAL ---
       console.log("\n💬 AI 3-Step Navigation Output:");
@@ -425,11 +1179,94 @@ export class OpenAIService {
       console.log("=========================================\n");
 
       const finalOutput = `${turnInstruction} Landmarks: ${landmarksGuidance}`;
-      res.status(200).json({ output: finalOutput });
+      const testLogId = await lastMileTestLogService.record({
+        destination,
+        lat,
+        lng,
+        userPhoto: await resizeDataUrlImage(image, 1024, 76),
+        panoramaPhoto,
+        panoramaDate,
+        panoramaStatus,
+        panoramaHeadings,
+        destinationPhoto,
+        destinationPhotoDate,
+        destinationPhotoStatus,
+        destinationPlaceName,
+        destinationPlaceAddress,
+        destinationTypes,
+        destinationDistanceMeters,
+        destinationBearing,
+        deviceHeading,
+        headingDifferenceDegrees,
+        headingAligned,
+        compassHeading,
+        panoramaMatchedHeading,
+        headingComparisonDifference,
+        headingComparisonAgrees,
+        destinationReferenceUsed,
+        navigationMode,
+        testScenario,
+        currentHeading,
+        targetHeading,
+        turnInstruction,
+        finalOutput,
+        steps: testSteps,
+        success: true,
+        latencyMs: Date.now() - startedAt,
+      });
+      res.status(200).json({
+        output: finalOutput,
+        testLogId,
+        mode: navigationMode,
+        testScenario,
+        currentHeading,
+        targetHeading,
+      });
 
     } catch (error: any) {
-      console.error("❌ OpenAI Request failed:", error.message);
-      res.status(500).json({ error: "Last meters calculation failed." });
+      const upstreamStatus = error?.status ?? error?.response?.status;
+      const failureReason =
+        typeof upstreamStatus === "number"
+          ? `upstream returned HTTP ${upstreamStatus}`
+          : typeof error?.code === "string"
+            ? error.code
+            : "unexpected backend error";
+      const clientError = `Last Meters failed during ${activeStage}: ${failureReason}.`;
+      console.error("❌ Last Meters request failed:", {
+        stage: activeStage,
+        status: upstreamStatus,
+        code: error?.code,
+        message: error?.message,
+      });
+      await lastMileTestLogService.record({
+        destination,
+        lat,
+        lng,
+        userPhoto: await resizeDataUrlImage(image, 1024, 76),
+        panoramaPhoto,
+        panoramaDate,
+        panoramaStatus,
+        panoramaHeadings,
+        destinationPhoto,
+        destinationPhotoDate,
+        destinationPhotoStatus,
+        destinationPlaceName,
+        destinationPlaceAddress,
+        destinationTypes,
+        destinationDistanceMeters,
+        destinationBearing,
+        deviceHeading,
+        headingDifferenceDegrees,
+        headingAligned,
+        destinationReferenceUsed,
+        navigationMode,
+        testScenario,
+        steps: testSteps,
+        success: false,
+        error: error?.message ?? "Last meters calculation failed.",
+        latencyMs: Date.now() - startedAt,
+      });
+      res.status(502).json({ error: clientError });
     }
   }
 
@@ -438,9 +1275,31 @@ export class OpenAIService {
     const startedAt = Date.now();
     let toolUsed: string | undefined;
     const analytics = content.analytics;
+    const requestHadCoords = !!content.coords;
+    const requestAccuracy = content.coords?.accuracy;
+    const requestHadReliableCoords =
+      requestHadCoords &&
+      (typeof requestAccuracy !== "number" ||
+        requestAccuracy === 0 ||
+        requestAccuracy <= 1000);
+    const allowBareDestination =
+      analytics?.feature === "directions" ||
+      looksLikeBareDestinationQuery(content.text);
+    const requestedNearbyQuery = extractNearbyPlaceQuery(
+      content.text,
+      allowBareDestination
+    );
+    const requiresVerifiedNearbyAnswer =
+      analytics?.feature === "directions" ||
+      requestedNearbyQuery !== null;
+    let verifiedNearbyAnswer = false;
+    let structuredRoute: VerifiedWalkingRoute | null = null;
     const imageCount = Array.isArray(content.image)
       ? content.image.filter((img) => img).length
       : 0;
+    const isDirectVisualRequest =
+      imageCount > 0 &&
+      (analytics?.feature === "photo_qa" || analytics?.feature === "video_qa");
 
     const recordAiRequest = async (
       success: boolean,
@@ -466,6 +1325,59 @@ export class OpenAIService {
       });
     };
 
+    const respondWithUnverifiedNearbyLocation = async (destinationLabel: string) => {
+      const safeOutput =
+        `I could not verify a nearby ${destinationLabel} from your current location. ` +
+        "Try a more specific name or street address.";
+      const updatedHistory = appendConversationHistory(content.analytics, {
+        input: content.text,
+        output: safeOutput,
+        data: "Nearby destination lookup failed; no unverified location was used.",
+      });
+      await recordAiRequest(false, {
+        outputLength: safeOutput.length,
+        errorCode: "nearby_destination_not_verified",
+      });
+      res.status(200).json({ output: safeOutput, history: updatedHistory, route: null });
+    };
+
+    const respondWithVerifiedWalkingDirections = async (
+      verified: VerifiedWalkingDirections
+    ) => {
+      const output =
+        `${verified.directionsText}\n` +
+        `Destination: ${verified.placeName}, ${verified.placeAddress}.`;
+      const updatedHistory = appendConversationHistory(content.analytics, {
+        input: content.text,
+        output,
+        data: `Verified local route to ${verified.placeName}.`,
+      });
+      await recordAiRequest(true, { outputLength: output.length });
+      res.status(200).json({
+        output,
+        history: updatedHistory,
+        route: verified.route,
+      });
+    };
+
+    if (requiresVerifiedNearbyAnswer && !requestHadReliableCoords) {
+      const safeOutput =
+        requestHadCoords
+          ? "Your location is not accurate enough for nearby directions. Enable precise location and try again."
+          : "I could not determine your current location, so I will not guess at nearby directions. Check location access and try again.";
+      const updatedHistory = appendConversationHistory(content.analytics, {
+        input: content.text,
+        output: safeOutput,
+        data: "Current location was unavailable; no place lookup was attempted.",
+      });
+      await recordAiRequest(false, {
+        outputLength: safeOutput.length,
+        errorCode: "current_location_unavailable",
+      });
+      res.status(200).json({ output: safeOutput, history: updatedHistory, route: null });
+      return;
+    }
+
     // console.log("hello world!!!")
     let systemContent = '';
     let completeAIPrompt = AIPrompt
@@ -488,21 +1400,62 @@ export class OpenAIService {
       });
     }
     // console.log(userContent)
-    if (content.coords) {
+    if (content.coords && !requiresVerifiedNearbyAnswer && !isDirectVisualRequest) {
       const geocodedCoords = await geocodeCoordinates(content.coords.latitude, content.coords.longitude)
       systemContent += `Current Address: ${geocodedCoords[0].formatted_address} `;
+    }
+    if (content.coords?.heading !== undefined) {
+      systemContent += `, Heading (Compass Direction): ${content.coords.heading}`;
+    }
+    if (content.coords?.orientation) {
+      systemContent += `, Orientation - Alpha: ${content.coords.orientation.alpha}, Beta: ${content.coords.orientation.beta}, Gamma: ${content.coords.orientation.gamma}`;
+    }
+    if (!content.coords) content.coords = { latitude: 0, longitude: 0 }
 
-      if (content.coords.heading !== undefined) {
-        systemContent += `, Heading (Compass Direction): ${content.coords.heading}`;
+    if (requiresVerifiedNearbyAnswer) {
+      const nearbyQuery = requestedNearbyQuery;
+      if (!nearbyQuery) {
+        await respondWithUnverifiedNearbyLocation("destination");
+        return;
       }
-
-      if (content.coords.orientation) {
-        systemContent += `, Orientation - Alpha: ${content.coords.orientation.alpha}, Beta: ${content.coords.orientation.beta}, Gamma: ${content.coords.orientation.gamma}`;
+      try {
+        const verifiedDirections = await getVerifiedNearbyWalkingDirections(
+          content.coords.latitude,
+          content.coords.longitude,
+          nearbyQuery
+        );
+        toolUsed = "verifiedNearbyWalkingDirections";
+        verifiedNearbyAnswer = true;
+        structuredRoute = verifiedDirections.route;
+        if (imageCount === 0) {
+          await respondWithVerifiedWalkingDirections(verifiedDirections);
+          return;
+        }
+        completeAIPrompt += directionsPrompt;
+        relevantData = `Directions:\n${verifiedDirections.directionsText}`;
+        systemContent +=
+          `\nVerified nearby destination: ${verifiedDirections.placeName}, ` +
+          `${verifiedDirections.placeAddress}, approximately ` +
+          `${Math.round(verifiedDirections.distanceMeters)} meters away.\n` +
+          relevantData;
+      } catch (error) {
+        console.error("Verified nearby directions lookup failed:", error);
+        await respondWithUnverifiedNearbyLocation(nearbyQuery);
+        return;
       }
     }
-    else content.coords = { latitude: 0, longitude: 0 }
 
     try {
+      if (verifiedNearbyAnswer) {
+        console.log("Using deterministic nearby walking directions.");
+      } else if (isDirectVisualRequest) {
+        toolUsed =
+          analytics?.feature === "video_qa"
+            ? "videoDescription"
+            : "imageDescription";
+        completeAIPrompt +=
+          analytics?.feature === "video_qa" ? videoPrompt : imagePrompt;
+      } else {
       const parsedRequest = await this.parseUserRequest(ctx, content.text, content.coords.latitude, content.coords.longitude)
       // console.log("parsedRequest: ", parsedRequest)
       console.log(parsedRequest?.choices[0].message)
@@ -514,13 +1467,46 @@ export class OpenAIService {
         const parsedArgs = JSON.parse(parsedRequest.choices[0].message.tool_calls![0].function.arguments)
         //get link
         const { link } = parsedArgs;
-        console.log(link + `&key=${process.env.GOOGLE_API_KEY}`)
+        console.log("Calling Google Maps tool:", parsedRequest.choices[0].message.tool_calls![0].function.name)
+        if (toolUsed === "generateGoogleDirectionAPILink" && !verifiedNearbyAnswer) {
+          const fallbackDestination = String(parsedArgs.destination || "").trim();
+          if (!requestHadCoords || !fallbackDestination) {
+            await respondWithUnverifiedNearbyLocation(
+              fallbackDestination || "destination"
+            );
+            return;
+          }
+          try {
+            const verifiedDirections = await getVerifiedNearbyWalkingDirections(
+              content.coords.latitude,
+              content.coords.longitude,
+              fallbackDestination
+            );
+            verifiedNearbyAnswer = true;
+            structuredRoute = verifiedDirections.route;
+            if (imageCount === 0) {
+              await respondWithVerifiedWalkingDirections(verifiedDirections);
+              return;
+            }
+            completeAIPrompt += directionsPrompt;
+            relevantData = `Directions:\n${verifiedDirections.directionsText}`;
+            systemContent +=
+              `\nVerified nearby destination: ${verifiedDirections.placeName}, ` +
+              `${verifiedDirections.placeAddress}, approximately ` +
+              `${Math.round(verifiedDirections.distanceMeters)} meters away.\n` +
+              relevantData;
+          } catch (error) {
+            console.error("Fallback verified directions lookup failed:", error);
+            await respondWithUnverifiedNearbyLocation(fallbackDestination);
+            return;
+          }
+        }
         // console.log("parsedArgs", parsedArgs);  
         if (link !== undefined && parsedRequest.choices[0].message.tool_calls![0].function.name !== "generateTrainInformation") {
           //use link
           if (parsedRequest.choices[0].message.tool_calls![0].function.name === "getCrossStreets") {
             completeAIPrompt += crossStreetsPrompt;
-            const completeLink = link + `&key=${process.env.GOOGLE_API_KEY}`;
+            const completeLink = link + `&key=${getGoogleMapsApiKey()}`;
             userContent.push({
               type: 'image_url',
               image_url: {
@@ -532,7 +1518,7 @@ export class OpenAIService {
           }
 
           else {
-            const places: any = await axios.get(link + `&key=${process.env.GOOGLE_API_KEY}`);
+            const places: any = await axios.get(link + `&key=${getGoogleMapsApiKey()}`);
             //if its giving back a nearby places link
             if (places.data.results) {
               completeAIPrompt += nearbyPlacesPrompt;
@@ -553,7 +1539,7 @@ export class OpenAIService {
               let operatingHours = '';
               if (places.data.candidates[0].opening_hours) {
                 //console.log("user wants operating hours")
-                const placeInformation = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${places.data.candidates[0].place_id}&fields=opening_hours&key=${process.env.GOOGLE_API_KEY}`);
+                const placeInformation = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${places.data.candidates[0].place_id}&fields=opening_hours&key=${getGoogleMapsApiKey()}`);
                 operatingHours = placeInformation.data.result.opening_hours.weekday_text
               }
               systemContent += `Relevant Place Information: ${JSON.stringify(places.data.candidates[0], null, 2)}`
@@ -595,7 +1581,7 @@ export class OpenAIService {
           const { address } = parsedArgs;
           // console.log(address)
           const reqlink = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?location=
-            ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname%2Cgeometry&inputtype=textquery&input=${address.replace(/\s+/g, '%2C')}` + `&key=${process.env.GOOGLE_API_KEY}`;
+            ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname%2Cgeometry&inputtype=textquery&input=${address.replace(/\s+/g, '%2C')}` + `&key=${getGoogleMapsApiKey()}`;
           console.log(reqlink)
           const location: any = await axios.get(reqlink);
           // console.log(location)
@@ -683,38 +1669,88 @@ export class OpenAIService {
           staticMapUrl += `&markers=color:purple%7Clabel:R%7C${pedestrianRamps.map(
             ramp => `${ramp.location.coordinates[1]},${ramp.location.coordinates[0]}`).join('%7C')}`;
           // Add the API key to the static map URL
-          staticMapUrl += `&key=${process.env.GOOGLE_API_KEY}`;
+          staticMapUrl += `&key=${getGoogleMapsApiKey()}`;
 
           console.log(staticMapUrl);
         }
         // Directions with static map, doorfront, and features
-        else if (parsedRequest.choices[0].message.tool_calls![0].function.name === "generateGoogleDirectionAPILink") {
+        else if (
+          parsedRequest.choices[0].message.tool_calls![0].function.name ===
+            "generateGoogleDirectionAPILink" &&
+          !verifiedNearbyAnswer
+        ) {
           try {
             completeAIPrompt += directionsPrompt
             let formattedAddress = '';
+            let nearbyPlaceId: string | undefined;
             console.log("Generating Google Direction API Link")
             console.log(parsedArgs);
             // step 1: if destination is a store name, get the formatted address
             let cleanAddress;
             if (!parsedArgs.address) {
-              const reqlink = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${content.coords.latitude},${content.coords.longitude}&rankby=distance&keyword=${parsedArgs.destination.replace(/\s+/g, '%20')}&key=${process.env.GOOGLE_API_KEY}`;
-              console.log(reqlink)
-              const location: any = await axios.get(reqlink);
-              // console.log(location)
-              console.log(reqlink)
-              // const placeInformation = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${location.data.results[0].place_id}&fields=formatted_address&key=${process.env.GOOGLE_API_KEY}`);
-              // console.log(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${location.data.results[0].place_id}&fields=formatted_address&key=${process.env.GOOGLE_API_KEY}`)
-              formattedAddress = location.data.results[0].vicinity;
-              // console.log(`Formatted Address: ${formattedAddress}`);
-              // console.log("placeID call ",placeInformation.data.result.formatted_address);
+              const nearbyQuery = normalizeNearbyPlaceQuery(String(parsedArgs.destination || ""));
+              if (!nearbyQuery) {
+                throw new Error("Destination name was empty after normalization.");
+              }
+              const location = await axios.get(
+                "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+                {
+                  params: {
+                    location: `${content.coords.latitude},${content.coords.longitude}`,
+                    rankby: "distance",
+                    keyword: nearbyQuery,
+                    key: getGoogleMapsApiKey(),
+                  },
+                  timeout: 20_000,
+                }
+              );
+              if (!["OK", "ZERO_RESULTS"].includes(location.data.status)) {
+                throw new Error(`Nearby Places returned ${location.data.status}.`);
+              }
+              const nearbyPlace = selectNearbyPlaceCandidate(
+                (location.data.results ?? []).filter((candidate: any) =>
+                  isNearbyPlaceCandidateRelevant(candidate, nearbyQuery)
+                ),
+                {
+                  lat: content.coords.latitude,
+                  lng: content.coords.longitude,
+                }
+              );
+              if (!nearbyPlace?.place_id) {
+                  throw new Error(
+                    `No nearby ${nearbyQuery} was found within ` +
+                    `${MAX_LOCAL_PLACE_DISTANCE_METERS / 1_000} kilometers.`
+                  );
+              }
+
+              nearbyPlaceId = nearbyPlace.place_id;
+              formattedAddress = nearbyPlace.vicinity || nearbyPlace.name || nearbyQuery;
+              cleanAddress = nearbyPlace.name?.replace(/(\d+)(st|nd|rd|th)\b/gi, "$1");
+              systemContent +=
+                `Resolved nearby destination: ${nearbyPlace.name || nearbyQuery}, ` +
+                `${formattedAddress}, approximately ${Math.round(nearbyPlace.distanceMeters)} meters away.\n`;
             }
             else {
-              const reqlink = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?location=
-                ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname&inputtype=textquery&input=${parsedArgs.destination.replace(/\s+/g, '%2C')}` + `&key=${process.env.GOOGLE_API_KEY}`;
-              const location: any = await axios.get(reqlink);
-              // console.log(location)
+              const location = await axios.get(
+                "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
+                {
+                  params: {
+                    fields: "formatted_address,name,place_id",
+                    inputtype: "textquery",
+                    input: parsedArgs.destination,
+                    locationbias:
+                      `circle:50000@${content.coords.latitude},${content.coords.longitude}`,
+                    key: getGoogleMapsApiKey(),
+                  },
+                  timeout: 20_000,
+                }
+              );
+              if (location.data.status !== "OK" || !location.data.candidates?.[0]) {
+                throw new Error(`Address lookup returned ${location.data.status}.`);
+              }
               formattedAddress = location.data.candidates[0].formatted_address;
               cleanAddress = location.data.candidates[0].name.replace(/(\d+)(st|nd|rd|th)\b/gi, '$1');
+              nearbyPlaceId = location.data.candidates[0].place_id;
             }
             console.log(formattedAddress);
             
@@ -744,14 +1780,27 @@ export class OpenAIService {
             }
             // step 3: get route from starting location to destination (doorfront location if it exists)
             if (!doorLocation) {
-              doorLocation = formattedAddress;
+              doorLocation = nearbyPlaceId ? `place_id:${nearbyPlaceId}` : formattedAddress;
             }
-            const route = await axios.get(`https://maps.googleapis.com/maps/api/directions/json?mode=walking&origin=${content.coords.latitude},${content.coords.longitude}&destination=${doorLocation}&key=${process.env.GOOGLE_API_KEY}`);
+            const route = await axios.get(
+              "https://maps.googleapis.com/maps/api/directions/json",
+              {
+                params: {
+                  mode: "walking",
+                  origin: `${content.coords.latitude},${content.coords.longitude}`,
+                  destination: doorLocation,
+                  key: getGoogleMapsApiKey(),
+                },
+                timeout: 20_000,
+              }
+            );
+            if (route.data.status !== "OK" || !route.data.routes?.[0]?.legs?.[0]) {
+              throw new Error(`Directions returned ${route.data.status}.`);
+            }
             relevantData = "Directions:\n"
             for (let i = 0; i < route.data.routes[0].legs[0].steps.length; i++) {
               relevantData += `Step ${i + 1}) ${route.data.routes[0].legs[0].steps[i].html_instructions} for ${route.data.routes[0].legs[0].steps[i].distance.text} \n`
             }
-            console.log(`https://maps.googleapis.com/maps/api/directions/json?mode=walking&origin=${content.coords.latitude},${content.coords.longitude}&destination=${doorLocation}&key=${process.env.GOOGLE_API_KEY}`)
             systemContent += relevantData
             // // step 4: Take each lat/lng from each point in route --> can just use encoded polyline
             // const polyline = route.data.routes[0].overview_polyline.points;
@@ -821,11 +1870,23 @@ export class OpenAIService {
             //   doorfront: doorfrontData,
             // }
             // console.log(JSON.stringify(fullRouteData))
-
-
-
           } catch (error) {
-            systemContent += 'Sorry, I could not generate directions to that location. Please try another destination.'
+            console.error("Nearby directions lookup failed:", error);
+            const failedDestination = String(parsedArgs.destination || "that destination");
+            const safeOutput =
+              `I could not verify a nearby ${failedDestination} from your current location. ` +
+              "Try a more specific name or street address.";
+            const updatedHistory = appendConversationHistory(content.analytics, {
+              input: content.text,
+              output: safeOutput,
+              data: "Nearby destination lookup failed; no unverified location was used.",
+            });
+            await recordAiRequest(false, {
+              outputLength: safeOutput.length,
+              errorCode: "nearby_destination_not_verified",
+            });
+            res.status(200).json({ output: safeOutput, history: updatedHistory, route: null });
+            return;
           }
         }
         else if (parsedRequest.choices[0].message.tool_calls![0].function.name === "generateTrainInformation") {
@@ -852,6 +1913,7 @@ export class OpenAIService {
         }
 
       } else console.log("No tool calls found in OpenAI response");
+      }
       // const places = await fetchNearbyPlaces(content.coords.latitude, content.coords.longitude);
       // nearbyPlaces = places.map((place: { name: string }) => place.name).join(', ');
       // systemContent += ` Nearby Places: ${nearbyPlaces}`;
@@ -882,7 +1944,7 @@ export class OpenAIService {
           { role: 'system', content: combinedSystemMessage },
           { role: 'user', content: userContent }
         ],
-        model: 'gpt-4.1-mini',
+        model: isDirectVisualRequest ? 'gpt-4o-mini' : 'gpt-4.1-mini',
         temperature: 0.2,
         max_tokens: maxTokensForFeature(analytics?.feature),
       });
@@ -905,7 +1967,11 @@ export class OpenAIService {
         outputLength: outputText?.length ?? 0,
         tokenCount: chatCompletion.usage?.total_tokens,
       });
-      res.status(200).json({ output: outputText, history: updatedHistory });
+      res.status(200).json({
+        output: outputText,
+        history: updatedHistory,
+        route: structuredRoute,
+      });
     }
     catch (e: any) {
       console.error('Error with OpenAI API request:', e);
@@ -937,15 +2003,153 @@ export class OpenAIService {
 
 }
 
-function createOverlaySvg(heading: number, segmentIndex: number): Buffer {
+const PANORAMA_LABEL_GLYPHS: Record<string, string[]> = {
+  "0": ["11111", "10001", "10011", "10101", "11001", "10001", "11111"],
+  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+  "2": ["11110", "00001", "00001", "11110", "10000", "10000", "11111"],
+  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+  "4": ["10010", "10010", "10010", "11111", "00010", "00010", "00010"],
+  "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+  "6": ["01111", "10000", "10000", "11110", "10001", "10001", "01110"],
+  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "11110"],
+  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+  G: ["01110", "10001", "10000", "10111", "10001", "10001", "01110"],
+  I: ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+  V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+  W: ["10001", "10001", "10001", "10101", "10101", "10101", "01010"],
+  "|": ["00100", "00100", "00100", "00100", "00100", "00100", "00100"],
+  " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+};
+
+export function createPanoramaOverlaySvg(
+  heading: number,
+  segmentIndex: number
+): Buffer {
+  const paddedHeading = String(heading).padStart(3, "0");
+  const label = `VIEW ${segmentIndex} | ${paddedHeading} DEG`;
+  const pixelSize = 5;
+  const glyphAdvance = 30;
+  const startX = 24;
+  const startY = 20;
+  const pixels: string[] = [];
+  for (const [glyphIndex, character] of [...label].entries()) {
+    const glyph = PANORAMA_LABEL_GLYPHS[character];
+    if (!glyph) continue;
+    glyph.forEach((row, rowIndex) => {
+      [...row].forEach((pixel, columnIndex) => {
+        if (pixel !== "1") return;
+        pixels.push(
+          `<rect x="${startX + glyphIndex * glyphAdvance + columnIndex * pixelSize}" ` +
+          `y="${startY + rowIndex * pixelSize}" width="${pixelSize}" height="${pixelSize}" fill="#ffffff" />`
+        );
+      });
+    });
+  }
   const svg = `
     <svg width="640" height="640">
-      <rect x="0" y="0" width="10" height="640" fill="#000000" />
-      <rect x="20" y="20" width="220" height="45" rx="8" fill="rgba(0, 0, 0, 0.75)" />
-      <text x="30" y="50" font-family="Arial" font-size="22" font-weight="bold" fill="#00FFCC">
-        SEG ${segmentIndex}: ${heading}°
-      </text>
+      <rect x="0" y="0" width="640" height="76" fill="rgba(0, 0, 0, 0.9)" />
+      <rect x="0" y="0" width="8" height="640" fill="#00e0b8" />
+      ${pixels.join("")}
     </svg>
   `;
   return Buffer.from(svg);
+}
+
+async function buildPanoramaDebugImage(tiles: { heading: number; base64: string }[]): Promise<string> {
+  const compositeLayers: sharp.OverlayOptions[] = [];
+  tiles.forEach((tile, index) => {
+    const leftOffset = (index % 4) * 640;
+    const topOffset = Math.floor(index / 4) * 640;
+    const imageBuffer = Buffer.from(
+      tile.base64.replace(/^data:image\/\w+;base64,/, ""),
+      "base64"
+    );
+    compositeLayers.push({ input: imageBuffer, left: leftOffset, top: topOffset });
+    compositeLayers.push({
+      input: createPanoramaOverlaySvg(tile.heading, index + 1),
+      left: leftOffset,
+      top: topOffset,
+    });
+  });
+
+  const outputBuffer = await sharp({
+    create: { width: 2560, height: 1280, channels: 3, background: { r: 0, g: 0, b: 0 } },
+  })
+    .composite(compositeLayers)
+    .jpeg({ quality: 72 })
+    .toBuffer();
+
+  return `data:image/jpeg;base64,${outputBuffer.toString("base64")}`;
+}
+
+async function resizeDataUrlImage(dataUrl: string, maxWidth: number, quality: number): Promise<string> {
+  try {
+    const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+    const outputBuffer = await sharp(Buffer.from(base64Data, "base64"))
+      .resize({ width: maxWidth, withoutEnlargement: true })
+      .jpeg({ quality })
+      .toBuffer();
+    return `data:image/jpeg;base64,${outputBuffer.toString("base64")}`;
+  } catch (error) {
+    console.error("[LastMileTestLog] failed to compress user photo for storage:", error);
+    return dataUrl;
+  }
+}
+
+interface StreetViewMetadata {
+  status: string;
+  date?: string;
+  pano_id?: string;
+  location?: { lat: number; lng: number };
+}
+
+async function processEightDirectionTiles(
+  lat: number,
+  lng: number
+): Promise<{
+  tiles: { heading: number; base64: string }[];
+  metadata: StreetViewMetadata;
+}> {
+  console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
+  const headings = [...LAST_MILE_HEADINGS];
+  const apiKey = getGoogleMapsApiKey();
+  const metadataUrl =
+    `https://maps.googleapis.com/maps/api/streetview/metadata` +
+    `?location=${lat},${lng}&source=outdoor&key=${apiKey}`;
+  const metadataResponse = await axios.get<StreetViewMetadata>(metadataUrl, {
+    timeout: 20_000,
+  });
+  const metadata = metadataResponse.data;
+  if (metadata.status !== "OK") {
+    const metadataError = new Error(`Street View metadata returned ${metadata.status}.`);
+    Object.assign(metadataError, { code: `STREET_VIEW_${metadata.status}` });
+    throw metadataError;
+  }
+
+  const panoramaSelector = metadata.pano_id
+    ? `pano=${encodeURIComponent(metadata.pano_id)}`
+    : `location=${lat},${lng}`;
+
+  const tilesData = await Promise.all(
+    headings.map(async (heading) => {
+      const url =
+        `https://maps.googleapis.com/maps/api/streetview?size=640x640&${panoramaSelector}` +
+        `&heading=${heading}&fov=${LAST_MILE_PANORAMA_FOV_DEGREES}` +
+        `&pitch=0&source=outdoor&return_error_code=true&key=${apiKey}`;
+      const response = await axios.get(url, {
+        responseType: "arraybuffer",
+        timeout: 20_000,
+      });
+      const buffer = Buffer.from(response.data);
+      return {
+        heading,
+        base64: `data:image/jpeg;base64,${buffer.toString("base64")}`,
+      };
+    })
+  );
+
+  return { tiles: tilesData, metadata };
 }

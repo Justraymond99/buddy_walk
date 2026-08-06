@@ -92,6 +92,7 @@
       <a class="btn" id="dlAi" href="#">AI Requests CSV</a>
       <a class="btn" id="dlFeedback" href="#">Feedback CSV</a>
       <a class="btn" id="dlChat" href="#">Chat Logs CSV</a>
+      <a class="btn secondary" id="lastMeters" href="#">Last Meters Tests</a>
     </div>
   </header>
   <main>
@@ -168,6 +169,7 @@
       document.getElementById('dlAi').href = withToken('/api/telemetry/ai-requests.csv');
       document.getElementById('dlFeedback').href = withToken('/api/feedback/export.csv');
       document.getElementById('dlChat').href = withToken('/api/db/chatlogs.csv');
+      document.getElementById('lastMeters').href = withToken('/last-mile-tests');
     }
 
     function esc(s) {

@@ -19,13 +19,14 @@ export function getUpstreamApiRoot(): string {
 
 /** True when we should proxy AI routes instead of calling OpenAI/Gemini locally. */
 export function isZeroConfigMode(): boolean {
-  if (process.env.ZERO_CONFIG === '1' || process.env.ZERO_CONFIG === 'true') {
-    return true;
-  }
   if (process.env.ZERO_CONFIG === '0' || process.env.ZERO_CONFIG === 'false') {
     return false;
   }
-  return !hasOwnAiKeys();
+  const missingOwnAiKeys = !hasOwnAiKeys();
+  if (process.env.ZERO_CONFIG === '1' || process.env.ZERO_CONFIG === 'true') {
+    return missingOwnAiKeys;
+  }
+  return missingOwnAiKeys;
 }
 
 export function describeServerMode(): {
