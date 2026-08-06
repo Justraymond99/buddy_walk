@@ -21,6 +21,7 @@ import {
   buildLastMileApproachInstruction,
   buildLastMileRetakeInstruction,
   buildLastMileTurnInstruction,
+  calculateLastMileConfidence,
   compareCompassAndPanoramaHeadings,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
@@ -494,7 +495,8 @@ export class OpenAIService {
     lng: number,
     image: string,
     destination: string,
-    deviceHeading?: number
+    deviceHeading?: number,
+    gpsAccuracyMeters?: number
   ) {
     const { res } = ctx;
     const startedAt = Date.now();
@@ -509,6 +511,9 @@ export class OpenAIService {
     let panoramaMatchedHeading: number | undefined;
     let headingComparisonDifference: number | undefined;
     let headingComparisonAgrees: boolean | undefined;
+    let confidenceScore: number | undefined;
+    let confidenceLevel: "high" | "medium" | "low" | undefined;
+    let confidenceReasons: string[] | undefined;
     let currentHeading: number | undefined;
     let verifiedDestination: VerifiedNearbyDestination | undefined;
     let panoramaPhoto: string | undefined;
@@ -581,6 +586,7 @@ export class OpenAIService {
           destinationPlaceAddress,
           destinationTypes,
           destinationDistanceMeters,
+          gpsAccuracyMeters,
           deviceHeading,
           testScenario,
           finalOutput,
@@ -654,6 +660,7 @@ export class OpenAIService {
           destinationPlaceAddress,
           destinationTypes,
           destinationDistanceMeters,
+          gpsAccuracyMeters,
           destinationBearing,
           deviceHeading,
           headingDifferenceDegrees,
@@ -702,6 +709,7 @@ export class OpenAIService {
           destinationPlaceAddress,
           destinationTypes,
           destinationDistanceMeters,
+          gpsAccuracyMeters,
           destinationBearing,
           deviceHeading,
           headingDifferenceDegrees,
@@ -854,6 +862,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           destinationPlaceAddress,
           destinationTypes,
           destinationDistanceMeters,
+          gpsAccuracyMeters,
           destinationBearing,
           deviceHeading,
           headingDifferenceDegrees,
@@ -956,6 +965,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
             destinationPlaceAddress,
             destinationTypes,
             destinationDistanceMeters,
+            gpsAccuracyMeters,
             destinationBearing,
             deviceHeading,
             headingDifferenceDegrees,
@@ -1081,6 +1091,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           destinationPlaceAddress,
           destinationTypes,
           destinationDistanceMeters,
+          gpsAccuracyMeters,
           destinationBearing,
           deviceHeading,
           headingDifferenceDegrees,
@@ -1110,6 +1121,25 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
         });
         return;
       }
+
+      const confidence = calculateLastMileConfidence({
+        gpsAccuracyMeters,
+        panoramaCurrentViewMatched: panoramaMatchedHeading !== undefined,
+        compassPanoramaAgrees: headingComparisonAgrees,
+        destinationVisuallyMatched: visualMatchAgreesWithMap,
+        destinationReferenceVerified: destinationReferenceUsed,
+      });
+      confidenceScore = confidence.score;
+      confidenceLevel = confidence.level;
+      confidenceReasons = confidence.reasons;
+      testSteps.push({
+        name: "confidence_fusion",
+        prompt: "Combine GPS accuracy, compass/panorama agreement, user-image localization, and destination verification without changing the compass guidance heading.",
+        response: `${confidence.level.toUpperCase()}: ${Math.round(confidence.score * 100)}%`,
+        model: "deterministic-confidence",
+        success: confidence.level !== "low",
+        error: confidence.level === "low" ? confidence.reasons.join(" ") : undefined,
+      });
 
       // ==========================================
       // TYPESCRIPT MATH CALCULATION (Bulletproof Turn Logic)
@@ -1178,7 +1208,11 @@ Keep the response to two short sentences and do not repeat the turn instruction.
       console.log(`- 3rd Step (Guidance): ${turnInstruction} Landmarks: ${landmarksGuidance}`);
       console.log("=========================================\n");
 
-      const finalOutput = `${turnInstruction} Landmarks: ${landmarksGuidance}`;
+      const confidenceNotice =
+        confidence.level === "low"
+          ? " Confidence is low. Stop safely after turning and take another photo to confirm before moving forward."
+          : "";
+      const finalOutput = `${turnInstruction} Landmarks: ${landmarksGuidance}${confidenceNotice}`;
       const testLogId = await lastMileTestLogService.record({
         destination,
         lat,
@@ -1195,6 +1229,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationPlaceAddress,
         destinationTypes,
         destinationDistanceMeters,
+        gpsAccuracyMeters,
         destinationBearing,
         deviceHeading,
         headingDifferenceDegrees,
@@ -1203,6 +1238,9 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         panoramaMatchedHeading,
         headingComparisonDifference,
         headingComparisonAgrees,
+        confidenceScore,
+        confidenceLevel,
+        confidenceReasons,
         destinationReferenceUsed,
         navigationMode,
         testScenario,
@@ -1221,6 +1259,8 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         testScenario,
         currentHeading,
         targetHeading,
+        confidenceLevel,
+        confidenceScore,
       });
 
     } catch (error: any) {
@@ -1254,6 +1294,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationPlaceAddress,
         destinationTypes,
         destinationDistanceMeters,
+        gpsAccuracyMeters,
         destinationBearing,
         deviceHeading,
         headingDifferenceDegrees,

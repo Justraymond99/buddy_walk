@@ -51,7 +51,7 @@ export class OpenAIController {
   
   async lastMileRequest(req: Request, res: Response) {
     try {
-      const { lat, lng, heading, image, destination } = req.body;
+      const { lat, lng, gpsAccuracyMeters, heading, image, destination } = req.body;
       if (
         typeof lat !== "number" ||
         typeof lng !== "number" ||
@@ -62,6 +62,14 @@ export class OpenAIController {
             !Number.isFinite(heading) ||
             heading < 0 ||
             heading >= 360
+          )
+        ) ||
+        (
+          gpsAccuracyMeters !== undefined &&
+          (
+            typeof gpsAccuracyMeters !== "number" ||
+            !Number.isFinite(gpsAccuracyMeters) ||
+            gpsAccuracyMeters < 0
           )
         ) ||
         typeof image !== "string" ||
@@ -84,7 +92,8 @@ export class OpenAIController {
         lng,
         image,
         destination,
-        heading
+        heading,
+        gpsAccuracyMeters
       );
     } catch (error) {
       res.status(500).json({ error: "Internal server error" });

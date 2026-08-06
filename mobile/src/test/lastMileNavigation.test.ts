@@ -5,6 +5,7 @@ import {
   buildLastMileApproachInstruction,
   buildLastMileRetakeInstruction,
   buildLastMileTurnInstruction,
+  calculateLastMileConfidence,
   compareCompassAndPanoramaHeadings,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
@@ -119,6 +120,28 @@ test("panorama heading is comparison-only and never replaces the compass", () =>
     differenceDegrees: undefined,
     agrees: undefined,
   });
+});
+
+test("confidence fusion rewards independent agreement and flags weak localization", () => {
+  const strong = calculateLastMileConfidence({
+    gpsAccuracyMeters: 8,
+    panoramaCurrentViewMatched: true,
+    compassPanoramaAgrees: true,
+    destinationVisuallyMatched: true,
+    destinationReferenceVerified: false,
+  });
+  assert.equal(strong.level, "high");
+  assert.ok(strong.score >= 0.75);
+
+  const weak = calculateLastMileConfidence({
+    gpsAccuracyMeters: 75,
+    panoramaCurrentViewMatched: false,
+    compassPanoramaAgrees: false,
+    destinationVisuallyMatched: false,
+    destinationReferenceVerified: false,
+  });
+  assert.equal(weak.level, "low");
+  assert.ok(weak.reasons.length >= 3);
 });
 
 test("verified panorama target preserves precise front-to-behind guidance", () => {

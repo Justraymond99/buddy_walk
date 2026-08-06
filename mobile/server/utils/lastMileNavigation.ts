@@ -10,6 +10,78 @@ export type LastMileTestScenario =
   | "heading_aligned"
   | "destination_unverified";
 
+export type LastMileConfidenceLevel = "high" | "medium" | "low";
+
+export interface LastMileConfidenceInput {
+  gpsAccuracyMeters?: number;
+  panoramaCurrentViewMatched: boolean;
+  compassPanoramaAgrees?: boolean;
+  destinationVisuallyMatched: boolean;
+  destinationReferenceVerified: boolean;
+}
+
+export interface LastMileConfidence {
+  score: number;
+  level: LastMileConfidenceLevel;
+  reasons: string[];
+}
+
+/**
+ * Combines the independent evidence sources used in the last-meters study.
+ * It intentionally does not choose a guidance heading; the compass remains
+ * authoritative for that decision.
+ */
+export function calculateLastMileConfidence(
+  input: LastMileConfidenceInput
+): LastMileConfidence {
+  const reasons: string[] = [];
+  // The score starts low: a high-confidence result needs corroboration from
+  // several sources, not merely a verified map destination.
+  let score = 0.15;
+
+  if (input.gpsAccuracyMeters === undefined) {
+    reasons.push("Phone GPS accuracy was not available.");
+  } else if (input.gpsAccuracyMeters <= 15) {
+    score += 0.2;
+  } else if (input.gpsAccuracyMeters <= 40) {
+    score += 0.12;
+  } else {
+    score += 0.03;
+    reasons.push(`Phone GPS accuracy is about ${Math.round(input.gpsAccuracyMeters)} meters.`);
+  }
+
+  if (input.panoramaCurrentViewMatched) {
+    score += 0.2;
+  } else {
+    reasons.push("The user photo did not independently match the panorama.");
+  }
+
+  if (input.compassPanoramaAgrees === true) {
+    score += 0.15;
+  } else if (input.compassPanoramaAgrees === false) {
+    score += 0.02;
+    reasons.push("Compass and panorama headings disagree.");
+  } else {
+    reasons.push("Compass and panorama headings could not be compared.");
+  }
+
+  if (input.destinationVisuallyMatched) {
+    score += 0.2;
+  } else if (input.destinationReferenceVerified) {
+    score += 0.12;
+    reasons.push("Destination was verified with a separate Street View reference.");
+  } else {
+    reasons.push("Destination was not visually verified.");
+  }
+
+  const boundedScore = Math.max(0, Math.min(1, score));
+  return {
+    score: boundedScore,
+    level: boundedScore >= 0.75 ? "high" : boundedScore >= 0.55 ? "medium" : "low",
+    reasons,
+  };
+}
+
 const NOT_VISIBLE_PATTERN =
   /\b(?:not visible|not in view|cannot (?:identify|locate|match|see)|can't (?:identify|locate|match|see)|unknown|no match)\b/i;
 
@@ -85,15 +157,15 @@ export function compareCompassAndPanoramaHeadings(
       : undefined;
 
   return {
-  compassHeading,
-  panoramaMatchedHeading,
-  // Prefer visual panorama matching; fallback to compass if AI didn't match
-  authoritativeHeading: panoramaMatchedHeading !== null ? panoramaMatchedHeading : compassHeading,
-  differenceDegrees,
-  agrees:
-    differenceDegrees === undefined
-      ? undefined
-      : differenceDegrees <= agreementToleranceDegrees,
+    compassHeading,
+    panoramaMatchedHeading,
+    // Panorama is logged for evaluation but can never control guidance.
+    authoritativeHeading: compassHeading,
+    differenceDegrees,
+    agrees:
+      differenceDegrees === undefined
+        ? undefined
+        : differenceDegrees <= agreementToleranceDegrees,
   };
 }
 

@@ -28,6 +28,7 @@ export interface lastMileTestLogInterface {
   destinationPlaceAddress?: string;
   destinationTypes?: string[];
   destinationDistanceMeters?: number;
+  gpsAccuracyMeters?: number;
   destinationBearing?: number;
   deviceHeading?: number;
   headingDifferenceDegrees?: number;
@@ -36,6 +37,9 @@ export interface lastMileTestLogInterface {
   panoramaMatchedHeading?: number;
   headingComparisonDifference?: number;
   headingComparisonAgrees?: boolean;
+  confidenceScore?: number;
+  confidenceLevel?: "high" | "medium" | "low";
+  confidenceReasons?: string[];
   destinationReferenceUsed?: boolean;
   navigationMode?: "approach" | "exact" | "aligned";
   testScenario?: LastMileTestScenario;
@@ -83,6 +87,7 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   destinationPlaceAddress: { type: String },
   destinationTypes: [{ type: String }],
   destinationDistanceMeters: { type: Number },
+  gpsAccuracyMeters: { type: Number },
   destinationBearing: { type: Number },
   deviceHeading: { type: Number },
   headingDifferenceDegrees: { type: Number },
@@ -91,6 +96,9 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   panoramaMatchedHeading: { type: Number },
   headingComparisonDifference: { type: Number },
   headingComparisonAgrees: { type: Boolean },
+  confidenceScore: { type: Number },
+  confidenceLevel: { type: String, enum: ["high", "medium", "low"] },
+  confidenceReasons: [{ type: String }],
   destinationReferenceUsed: { type: Boolean, default: false },
   navigationMode: { type: String, enum: ["approach", "exact", "aligned"] },
   testScenario: {

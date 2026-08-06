@@ -257,6 +257,7 @@
       var heading1 = findStep(steps, 'panorama_current_view_match');
       var compassStep = findStep(steps, 'compass_current_heading');
       var compSource = findStep(steps, 'heading_source_comparison');
+      var confidence = findStep(steps, 'confidence_fusion');
       var target = findStep(steps, 'target_store_match');
       var reference = findStep(steps, 'destination_reference_match');
       var guidance = findStep(steps, 'accessible_guidance');
@@ -286,7 +287,7 @@
             ['Comparison', compSource ? (compSource.response || '—') : '—'],
             ['Authoritative heading used', test.currentHeading != null ? test.currentHeading + '°' : '—']
           ],
-          raw: [proximity, headingAlignment, heading1, compassStep, compSource].filter(Boolean)
+          raw: [proximity, headingAlignment, heading1, compassStep, compSource, confidence].filter(Boolean)
         },
         phase2: {
           status: phase2Status,

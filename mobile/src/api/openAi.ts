@@ -43,6 +43,7 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
 export async function sendLastMileRequest(data: {
   lat: number;
   lng: number;
+  gpsAccuracyMeters?: number;
   heading?: number;
   image: string;
   destination: string;

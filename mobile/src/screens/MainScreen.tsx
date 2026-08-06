@@ -1105,6 +1105,7 @@ export default function MainScreen({ navigation }: Props) {
       const data = await sendLastMileRequest({
         lat: loc.coords.latitude,
         lng: loc.coords.longitude,
+        gpsAccuracyMeters: loc.coords.accuracy ?? undefined,
         heading: headingRef.current ?? undefined,
         image: capturedImage,
         destination: rawDestination
