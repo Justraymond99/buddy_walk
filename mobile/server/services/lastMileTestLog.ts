@@ -39,6 +39,7 @@ export class LastMileTestLogService {
         .find(dateFilter ?? {})
         .sort({ serverTs: -1 })
         .limit(limit)
+        .allowDiskUse(true)
         .lean();
       return { source: "mongo", data };
     }

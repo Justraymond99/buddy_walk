@@ -18,6 +18,7 @@ import { describeServerMode, isZeroConfigMode } from "./config/serverMode";
 import { mountUpstreamProxy } from "./middleware/upstreamProxy";
 import { isMongoConnected } from "./database/usageStore";
 import { OpenAIController } from "./controllers/openAI";
+import lastMileTestLogModel from "./database/models/lastMileTestLog";
 
 dotenv.config();
 
@@ -44,6 +45,8 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     console.log(
       `[server] MongoDB connected (${mongoose.connection.name || "default database"}).`
     );
+    await lastMileTestLogModel.collection.createIndex({ serverTs: -1 });
+    console.log("[server] Last Meters dashboard index ready.");
   } catch (error) {
     console.warn("MongoDB unavailable — using in-memory store for metrics, chat logs, and companion:", error);
     setCompanionMemoryStore(true);
