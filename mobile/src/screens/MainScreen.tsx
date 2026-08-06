@@ -556,7 +556,8 @@ export default function MainScreen({ navigation }: Props) {
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.4,
-        skipProcessing: Platform.OS !== 'web',
+        skipProcessing: false,
+        exif: false,
       });
       const dataUrl = photoToDataUrl(photo);
       if (dataUrl) {

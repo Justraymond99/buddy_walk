@@ -375,15 +375,14 @@
       
       // Injecting the rotate button directly into the User Photo label
       var imagesHtml = '<div class="images-grid">' +
-        '<div class="image-wrap">' +
-          '<div class="image-label"><span>I1. User Photo</span> <button type="button" class="rotate-btn">Rotate</button></div>' +
-          (test.userPhoto ? '<div class="img-container"><img src="' + esc(test.userPhoto) + '" alt="User photo" class="rotatable-img" data-angle="0" /></div>' : '<div class="empty">No photo</div>') +
+        '<div class="image-wrap"><div class="image-label">I1. User Photo</div>' +
+        (test.userPhoto ? '<img src="' + esc(test.userPhoto) + '" alt="User photo" />' : '<div class="empty">No photo</div>') +
         '</div>' +
-        '<div class="image-wrap"><div class="image-label"><span>I3. Panorama (' + esc(test.panoramaDate || 'N/A') + ')</span></div>' +
+        '<div class="image-wrap"><div class="image-label">I3. Panorama (' + esc(test.panoramaDate || 'N/A') + ')</div>' +
         (test.panoramaPhoto ? '<img src="' + esc(test.panoramaPhoto) + '" alt="Panorama" />' : '<div class="empty">No panorama</div>') +
         '</div>' +
         (test.destinationPhoto ? 
-          '<div class="image-wrap"><div class="image-label"><span>Google Street View Ref (' + esc(test.destinationPhotoDate || 'N/A') + ')</span></div>' +
+          '<div class="image-wrap"><div class="image-label">Google Street View Ref (' + esc(test.destinationPhotoDate || 'N/A') + ')</div>' +
           '<img src="' + esc(test.destinationPhoto) + '" alt="Reference" /></div>' : '') +
         '</div>';
 
@@ -523,8 +522,16 @@
           var newAngle = (currentAngle + 90) % 360;
           img.setAttribute('data-angle', newAngle);
           
-          // Adjust scale when rotated vertically to prevent clipping inside the 200px container
-          var scale = (newAngle === 90 || newAngle === 270) ? 0.75 : 1; 
+          var scale = 1;
+          // Al rotar a 90 o 270 grados, aplicamos una escala basada en la relación de aspecto
+          // para forzar que la imagen llene el alto de la caja sin distorsionarse.
+          if (newAngle === 90 || newAngle === 270) {
+            // Evitamos errores de división por cero
+            if (img.naturalWidth > 0) {
+              scale = img.naturalHeight / img.naturalWidth;
+            }
+          }
+          
           img.style.transform = 'rotate(' + newAngle + 'deg) scale(' + scale + ')';
         }
         return;
