@@ -157,13 +157,43 @@ async function getVerifiedNearbyDestination(
     throw new Error(`Nearby Places returned ${locationResponse.data.status}.`);
   }
 
-  const nearbyPlace = selectNearbyPlaceCandidate(
-    (locationResponse.data.results ?? []).filter((candidate: any) =>
+  let candidates = locationResponse.data.results ?? [];
+  let nearbyPlace = selectNearbyPlaceCandidate(
+    candidates.filter((candidate: any) =>
       isNearbyPlaceCandidateRelevant(candidate, nearbyQuery)
     ),
     { lat, lng },
     maxDistanceMeters
   );
+
+  // Nearby Search can miss valid businesses when the user provides a full
+  // store name or address. Text Search supplies a second local candidate set;
+  // distance filtering below still prevents an out-of-state result.
+  if (!nearbyPlace) {
+    const textResponse = await axios.get(
+      "https://maps.googleapis.com/maps/api/place/textsearch/json",
+      {
+        params: {
+          query: nearbyQuery,
+          location: `${lat},${lng}`,
+          radius: maxDistanceMeters,
+          key: getGoogleMapsApiKey(),
+        },
+        timeout: 20_000,
+      }
+    );
+    if (!["OK", "ZERO_RESULTS"].includes(textResponse.data.status)) {
+      throw new Error(`Google Places Text Search returned ${textResponse.data.status}.`);
+    }
+    candidates = candidates.concat(textResponse.data.results ?? []);
+    nearbyPlace = selectNearbyPlaceCandidate(
+      candidates.filter((candidate: any) =>
+        isNearbyPlaceCandidateRelevant(candidate, nearbyQuery)
+      ),
+      { lat, lng },
+      maxDistanceMeters
+    );
+  }
   const placeLocation = nearbyPlace?.geometry?.location;
   if (
     !nearbyPlace?.place_id ||
