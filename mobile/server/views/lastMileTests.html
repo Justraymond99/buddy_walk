@@ -94,6 +94,10 @@
     .modal-header h2 { margin: 0; font-size: 1.4rem; }
     
     .test-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; font-size: 0.9rem; color: var(--muted); background: var(--panel); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--line); }
+    .failure-summary { margin-bottom: 16px; padding: 14px 16px; border: 1px solid var(--red); border-radius: 8px; background: #32161a; }
+    .failure-summary h3 { margin: 0 0 8px; font-size: 1rem; color: #fecaca; }
+    .failure-summary p { margin: 0; line-height: 1.45; color: var(--text); }
+    .failure-summary ul { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }
     
     /* Phase Blocks */
     .module-block { border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; background: var(--panel); }
@@ -362,6 +366,27 @@
       );
     }
 
+    function failureExplanation(test) {
+      if (test.success && !test.error) return '';
+
+      var explanations = {
+        destination_not_verified: 'Google Places could not confirm the requested destination within the local search area. The name may be ambiguous, the phone location may be inaccurate, or Google may not have returned the business.',
+        compass_heading_unavailable: 'The phone did not provide a usable compass reading. Buddy Walk did not calculate a turn because compass heading is required for guidance.',
+        destination_not_visible: 'The destination could not be visually confirmed in the Street View panorama or the nearby reference image. Buddy Walk intentionally withheld turn guidance.',
+        current_view_not_visible: 'The user photo could not be matched confidently to the Street View panorama.',
+      };
+      var summary = explanations[test.error] || 'This trial stopped before Buddy Walk could provide a fully verified localization result.';
+      var details = (test.steps || [])
+        .filter(function (step) { return step && !step.success && (step.error || step.response); })
+        .map(function (step) { return (step.name || 'Unknown stage') + ': ' + (step.error || step.response); });
+      if (test.error && !explanations[test.error]) details.unshift('Backend error: ' + test.error);
+      return '<section class="failure-summary">' +
+        '<h3>Why this run did not complete</h3>' +
+        '<p>' + esc(summary) + '</p>' +
+        (details.length ? '<ul>' + details.map(function (detail) { return '<li>' + esc(detail) + '</li>'; }).join('') + '</ul>' : '') +
+      '</section>';
+    }
+
     // --- Detail Modal Render ---
     function openDetail(index) {
       var test = activeTests[index];
@@ -422,7 +447,8 @@
         '<div class="module-metric" style="font-size: 1rem;">' + esc(test.finalOutput || test.error || '—') + '</div>' +
       '</div>';
 
-      document.getElementById('lmDetailBody').innerHTML = imagesHtml + metaHtml + 
+      var failureHtml = failureExplanation(test);
+      document.getElementById('lmDetailBody').innerHTML = imagesHtml + metaHtml + failureHtml +
         renderModuleBlock(modules.step0) +
         renderModuleBlock(modules.moduleB) +
         renderModuleBlock(modules.moduleC) +

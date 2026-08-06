@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import {
   View,
   ScrollView,
@@ -12,55 +12,69 @@ import {
   Vibration,
   Animated,
   AppState,
-} from 'react-native';
-import { Text, Button, IconButton } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
-import * as Location from 'expo-location';
-import { Accelerometer } from 'expo-sensors';
-import * as Network from 'expo-network';
-import { Audio } from 'expo-av';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+} from "react-native";
+import { Text, Button, IconButton } from "react-native-paper";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
+import * as Location from "expo-location";
+import { Accelerometer } from "expo-sensors";
+import * as Network from "expo-network";
+import { Audio } from "expo-av";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import CallAccessARideButton from '../components/CallAccessARideButton';
-import FeedbackModal from '../components/FeedbackModal';
-import AnswerFeedback from '../components/AnswerFeedback';
-import { sendTextRequest, sendLastMileRequest } from '../api/openAi';
-import { fetchMtaArrivals } from '../api/mta';
-import { createChatLog, addChatToChatLog } from '../api/chatLog';
-import { track, Events } from '../api/telemetry';
-import { classifyFeature, createRequestId } from '../utils/telemetryFeature';
+import CallAccessARideButton from "../components/CallAccessARideButton";
+import FeedbackModal from "../components/FeedbackModal";
+import AnswerFeedback from "../components/AnswerFeedback";
+import { sendTextRequest, sendLastMileRequest } from "../api/openAi";
+import { fetchMtaArrivals } from "../api/mta";
+import { createChatLog, addChatToChatLog } from "../api/chatLog";
+import { track, Events } from "../api/telemetry";
+import { classifyFeature, createRequestId } from "../utils/telemetryFeature";
 import {
   buildTrainQuestionWithLiveData,
   extractTrainLineFromText,
   isTrainArrivalQuestion,
-} from '../utils/trainLine';
-import { getToken } from '../api/token';
-import { warmApiBackend } from '../api/retry';
-import { transcribeAudio } from '../api/transcribe';
-import { useAuthSession } from '../navigation/authSession';
-import { RequestData, CustomCoords, RootStackParamList, NavRoute } from '../types';
-import { expandSavedAliases } from '../utils/savedPlaces';
-import { withLastMetersImageInstruction } from '../utils/briefAiInstruction';
-import { tap, tapMedium, notifySuccess } from '../utils/haptics';
-import { ensureMicrophonePermission } from '../utils/microphonePermission';
-import { prepareAudioForRecording, resetAudioForPlayback } from '../utils/audioSession';
-import { stopSpeaking, isSpeaking } from '../utils/speakText';
-import { announce, isScreenReaderActive } from '../utils/announce';
-import { rotateConversationId } from '../utils/conversationSession';
-import { unlockWebAudioForPlayback, isSafariBrowser } from '../utils/webAudioUnlock';
-import { extractVideoFrames } from '../utils/extractVideoFrames';
-import { startWebFrameCapture, WebFrameSession } from '../utils/webFrameCapture';
+} from "../utils/trainLine";
+import { getToken } from "../api/token";
+import { warmApiBackend } from "../api/retry";
+import { transcribeAudio } from "../api/transcribe";
+import { useAuthSession } from "../navigation/authSession";
+import {
+  RequestData,
+  CustomCoords,
+  RootStackParamList,
+  NavRoute,
+} from "../types";
+import { expandSavedAliases } from "../utils/savedPlaces";
+import { withLastMetersImageInstruction } from "../utils/briefAiInstruction";
+import { tap, tapMedium, notifySuccess } from "../utils/haptics";
+import { ensureMicrophonePermission } from "../utils/microphonePermission";
+import {
+  prepareAudioForRecording,
+  resetAudioForPlayback,
+} from "../utils/audioSession";
+import { stopSpeaking, isSpeaking } from "../utils/speakText";
+import { announce, isScreenReaderActive } from "../utils/announce";
+import { rotateConversationId } from "../utils/conversationSession";
+import {
+  unlockWebAudioForPlayback,
+  isSafariBrowser,
+} from "../utils/webAudioUnlock";
+import { extractVideoFrames } from "../utils/extractVideoFrames";
+import {
+  startWebFrameCapture,
+  WebFrameSession,
+} from "../utils/webFrameCapture";
 import {
   contentTypeForWebBlob,
   startWebAudioCapture,
   WebAudioSession,
-} from '../utils/webAudioCapture';
+} from "../utils/webAudioCapture";
 import {
   startWebSpeechRecognition,
   WebSpeechSession,
-} from '../utils/webSpeechRecognition';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
+} from "../utils/webSpeechRecognition";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
 const MIN_VIDEO_RECORD_MS = 900;
 const MAX_VIDEO_DURATION_MS = 30000;
@@ -81,8 +95,10 @@ const MAX_WALKING_METERS = 12000; // ~7.5 miles
 function routeTotalMeters(route: NavRoute | null | undefined): number {
   if (!route) return 0;
   const total = route.totalDistance?.value;
-  if (typeof total === 'number' && total > 0) return total;
-  return route.steps?.reduce((sum, s) => sum + (s.distance?.value ?? 0), 0) ?? 0;
+  if (typeof total === "number" && total > 0) return total;
+  return (
+    route.steps?.reduce((sum, s) => sum + (s.distance?.value ?? 0), 0) ?? 0
+  );
 }
 
 function isUnreasonableWalk(route: NavRoute | null | undefined): boolean {
@@ -96,44 +112,50 @@ const SHAKE_COOLDOWN_MS = 2000;
 // A real shake produces several strong spikes back-to-back; requiring a second
 // spike within this window rejects one-off jolts from footfalls.
 const SHAKE_WINDOW_MS = 700;
-const VOICE_INPUT_HINT = 'Shake the phone or tap this button to ask a question by voice.';
+const VOICE_INPUT_HINT =
+  "Shake the phone or tap this button to ask a question by voice.";
 
-type RecordingMode = 'idle' | 'recording-video' | 'recording-voice';
-type CaptureUiState = 'idle' | 'holding' | 'recording' | 'photo-ready' | 'video-ready';
+type RecordingMode = "idle" | "recording-video" | "recording-voice";
+type CaptureUiState =
+  | "idle"
+  | "holding"
+  | "recording"
+  | "photo-ready"
+  | "video-ready";
 
 function formatRecordingTime(totalSeconds: number): string {
   const m = Math.floor(totalSeconds / 60);
   const s = totalSeconds % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function getCaptureUiState(
   recordingMode: RecordingMode,
   hasPhotoCapture: boolean,
-  hasVideoCapture: boolean
+  hasVideoCapture: boolean,
 ): CaptureUiState {
-  if (recordingMode === 'recording-video') return 'recording';
-  if (hasVideoCapture) return 'video-ready';
-  if (hasPhotoCapture) return 'photo-ready';
-  return 'idle';
+  if (recordingMode === "recording-video") return "recording";
+  if (hasVideoCapture) return "video-ready";
+  if (hasPhotoCapture) return "photo-ready";
+  return "idle";
 }
 
 function captureStatusLabel(state: CaptureUiState): string {
   switch (state) {
-    case 'holding':
-      return 'Keep holding — video starting…';
-    case 'recording':
-      return 'Recording video — tap Stop Video';
-    case 'photo-ready':
-      return 'Photo captured — tap Retake to replace';
-    case 'video-ready':
-      return 'Video captured — tap Retake to replace';
+    case "holding":
+      return "Keep holding — video starting…";
+    case "recording":
+      return "Recording video — tap Stop Video";
+    case "photo-ready":
+      return "Photo captured — tap Retake to replace";
+    case "video-ready":
+      return "Video captured — tap Retake to replace";
     default:
-      return 'Take Photo  ·  Record Video';
+      return "Take Photo  ·  Record Video";
   }
 }
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Main'>;
+type Props = NativeStackScreenProps<RootStackParamList, "Main">;
 
 export default function MainScreen({ navigation }: Props) {
   const { signOut } = useAuthSession();
@@ -146,17 +168,17 @@ export default function MainScreen({ navigation }: Props) {
   // hold, since browsers can't run expo-video-thumbnails after the fact.
   const [webVideoFrames, setWebVideoFrames] = useState<string[] | null>(null);
   const webFrameSessionRef = useRef<WebFrameSession | null>(null);
-  const [userInput, setUserInput] = useState('');
-  const [displayQuestion, setDisplayQuestion] = useState('');
-  const [aiResponse, setAiResponse] = useState('');
+  const [userInput, setUserInput] = useState("");
+  const [displayQuestion, setDisplayQuestion] = useState("");
+  const [aiResponse, setAiResponse] = useState("");
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [recordingMode, setRecordingMode] = useState<RecordingMode>('idle');
+  const [recordingMode, setRecordingMode] = useState<RecordingMode>("idle");
   const [recordingElapsedSec, setRecordingElapsedSec] = useState(0);
 
-  const [currentChatId, setCurrentChatId] = useState('');
-  const [currentMessageId, setCurrentMessageId] = useState('');
+  const [currentChatId, setCurrentChatId] = useState("");
+  const [currentMessageId, setCurrentMessageId] = useState("");
   const [feedbackVisible, setFeedbackVisible] = useState(false);
 
   const locationRef = useRef<Location.LocationObject | null>(null);
@@ -165,21 +187,23 @@ export default function MainScreen({ navigation }: Props) {
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
-  const voiceTranscriptRef = useRef('');
+  const voiceTranscriptRef = useRef("");
   const webAudioSessionRef = useRef<WebAudioSession | null>(null);
   const webSpeechSessionRef = useRef<WebSpeechSession | null>(null);
-  const userInputRef = useRef('');
+  const userInputRef = useRef("");
   const azureTokenRef = useRef<{ token: string; region: string } | null>(null);
   const cameraReadyRef = useRef(false);
   const videoRecordStartedRef = useRef(false);
   const videoRecordingStartedAtRef = useRef<number | null>(null);
   // Snapshot of the question actually sent, so the chat log records it even
   // after userInput is cleared on submit.
-  const submittedInputRef = useRef('');
+  const submittedInputRef = useRef("");
   /** Only persist chat logs after a successful backend answer (not error placeholders). */
   const chatLogEligibleRef = useRef(false);
   // Fires a spoken "still working" cue if a response is taking a while.
-  const slowResponseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const slowResponseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const isOfflineRef = useRef(false);
   const lastShakeRef = useRef(0);
@@ -187,13 +211,23 @@ export default function MainScreen({ navigation }: Props) {
   const isListeningRef = useRef(false);
   const isTranscribingRef = useRef(false);
   const loadingRef = useRef(false);
-  const recordingModeRef = useRef<RecordingMode>('idle');
+  const recordingModeRef = useRef<RecordingMode>("idle");
 
-  useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
-  useEffect(() => { isTranscribingRef.current = isTranscribing; }, [isTranscribing]);
-  useEffect(() => { userInputRef.current = userInput; }, [userInput]);
-  useEffect(() => { loadingRef.current = loading; }, [loading]);
-  useEffect(() => { recordingModeRef.current = recordingMode; }, [recordingMode]);
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
+  useEffect(() => {
+    isTranscribingRef.current = isTranscribing;
+  }, [isTranscribing]);
+  useEffect(() => {
+    userInputRef.current = userInput;
+  }, [userInput]);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+  useEffect(() => {
+    recordingModeRef.current = recordingMode;
+  }, [recordingMode]);
   useEffect(() => {
     if (capturedImage || capturedVideoUri || webVideoFrames?.length) {
       cameraReadyRef.current = false;
@@ -209,7 +243,7 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   function beginRecordingFeedback(): void {
-    setRecordingMode('recording-video');
+    setRecordingMode("recording-video");
     videoRecordingStartedAtRef.current = Date.now();
     clearRecordingTimer();
     recordingTimerRef.current = setInterval(() => {
@@ -223,15 +257,23 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   useEffect(() => {
-    if (recordingMode !== 'recording-video') {
+    if (recordingMode !== "recording-video") {
       recDotOpacity.setValue(1);
       return;
     }
     const pulse = Animated.loop(
       Animated.sequence([
-        Animated.timing(recDotOpacity, { toValue: 0.25, duration: 550, useNativeDriver: true }),
-        Animated.timing(recDotOpacity, { toValue: 1, duration: 550, useNativeDriver: true }),
-      ])
+        Animated.timing(recDotOpacity, {
+          toValue: 0.25,
+          duration: 550,
+          useNativeDriver: true,
+        }),
+        Animated.timing(recDotOpacity, {
+          toValue: 1,
+          duration: 550,
+          useNativeDriver: true,
+        }),
+      ]),
     );
     pulse.start();
     return () => pulse.stop();
@@ -261,7 +303,7 @@ export default function MainScreen({ navigation }: Props) {
 
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
+      if (status === "granted") {
         // Seed an immediate fix so the very first question already carries
         // coordinates — the watcher's first callback can lag by seconds,
         // especially in browsers.
@@ -274,21 +316,28 @@ export default function MainScreen({ navigation }: Props) {
           // Watcher below may still succeed.
         }
         locationSub = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 2 },
-          (loc) => { locationRef.current = loc; }
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            distanceInterval: 2,
+          },
+          (loc) => {
+            locationRef.current = loc;
+          },
         );
-        if (Platform.OS !== 'web') {
+        if (Platform.OS !== "web") {
           try {
             headingSub = await Location.watchHeadingAsync((heading) => {
               if (heading.accuracy < 2) return;
               const degrees =
-                heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
+                heading.trueHeading >= 0
+                  ? heading.trueHeading
+                  : heading.magHeading;
               if (Number.isFinite(degrees)) {
                 headingRef.current = (degrees + 360) % 360;
               }
             });
           } catch (e) {
-            console.warn('Compass heading unavailable:', e);
+            console.warn("Compass heading unavailable:", e);
           }
         }
       }
@@ -317,9 +366,12 @@ export default function MainScreen({ navigation }: Props) {
   useEffect(() => {
     void warmApiBackend();
     void refreshAzureToken();
-    const id = setInterval(() => {
-      void refreshAzureToken();
-    }, 8 * 60 * 1000);
+    const id = setInterval(
+      () => {
+        void refreshAzureToken();
+      },
+      8 * 60 * 1000,
+    );
     return () => clearInterval(id);
   }, [refreshAzureToken]);
 
@@ -332,7 +384,7 @@ export default function MainScreen({ navigation }: Props) {
         if (!connected && !isOfflineRef.current) {
           isOfflineRef.current = true;
           Vibration.vibrate(NO_INTERNET_VIBRATION_PATTERN);
-          announce('No internet connection.');
+          announce("No internet connection.");
         } else if (connected && isOfflineRef.current) {
           isOfflineRef.current = false;
         }
@@ -341,7 +393,7 @@ export default function MainScreen({ navigation }: Props) {
     } catch (e) {
       // Listener unsupported on this platform (e.g. some browsers) — the app
       // still surfaces failures per-request, so silently skip live monitoring.
-      console.warn('Network state listener unavailable:', e);
+      console.warn("Network state listener unavailable:", e);
       return undefined;
     }
   }, []);
@@ -360,7 +412,7 @@ export default function MainScreen({ navigation }: Props) {
   useEffect(() => {
     // Motion sensors are heavily restricted in browsers (iOS Safari requires a
     // user-gesture permission prompt); shake gestures are native-only.
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === "web") return;
     Accelerometer.setUpdateInterval(150);
     const sub = Accelerometer.addListener(({ x, y, z }) => {
       const magnitude = Math.sqrt(x * x + y * y + z * z);
@@ -381,7 +433,7 @@ export default function MainScreen({ navigation }: Props) {
           isListeningRef.current ||
           isTranscribingRef.current ||
           loadingRef.current ||
-          recordingModeRef.current !== 'idle' ||
+          recordingModeRef.current !== "idle" ||
           !azureTokenRef.current
         ) {
           return;
@@ -392,16 +444,19 @@ export default function MainScreen({ navigation }: Props) {
       }
     });
     return () => sub.remove();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─── TTS ─────────────────────────────────────────────────────────────────
 
   // Routes through one channel: the OS screen reader when active, otherwise the
   // app's own TTS. Prevents the double narration of speaking + announcing.
-  const speak = useCallback((text: string, options?: { preferDevice?: boolean }) => {
-    announce(text, options);
-  }, []);
+  const speak = useCallback(
+    (text: string, options?: { preferDevice?: boolean }) => {
+      announce(text, options);
+    },
+    [],
+  );
 
   const toggleResponseSpeech = useCallback(async () => {
     if (!aiResponse.trim()) return;
@@ -422,14 +477,17 @@ export default function MainScreen({ navigation }: Props) {
   }, [speak]);
 
   const speakListeningPrompt = useCallback(async () => {
-    speak('Listening. Speak after this message, then tap again when finished.', {
-      preferDevice: true,
-    });
+    speak(
+      "Listening. Speak after this message, then tap again when finished.",
+      {
+        preferDevice: true,
+      },
+    );
 
     // Do not let the microphone record Buddy Walk's own prompt. Screen readers
     // do not expose completion state, so give their short announcement time to
     // finish; app TTS can be observed directly.
-    if (Platform.OS !== 'web' && isScreenReaderActive()) {
+    if (Platform.OS !== "web" && isScreenReaderActive()) {
       await new Promise((resolve) => setTimeout(resolve, 3500));
       return;
     }
@@ -450,13 +508,13 @@ export default function MainScreen({ navigation }: Props) {
     Vibration.vibrate(NO_INTERNET_VIBRATION_PATTERN);
   }, []);
 
-  const lastAutoSpokenRef = useRef('');
+  const lastAutoSpokenRef = useRef("");
 
   // ─── Auto-speak AI response once, then log ───────────────────────────────
 
   useEffect(() => {
     if (!aiResponse) {
-      lastAutoSpokenRef.current = '';
+      lastAutoSpokenRef.current = "";
       return;
     }
     if (lastAutoSpokenRef.current !== aiResponse) {
@@ -468,7 +526,7 @@ export default function MainScreen({ navigation }: Props) {
     const logEntry = {
       input: submittedInputRef.current,
       output: aiResponse,
-      imageURL: capturedImage ?? '',
+      imageURL: capturedImage ?? "",
       location: {
         lat: loc?.coords.latitude ?? 0,
         lon: loc?.coords.longitude ?? 0,
@@ -479,8 +537,8 @@ export default function MainScreen({ navigation }: Props) {
 
     (async () => {
       try {
-        const storedName = await AsyncStorage.getItem('name');
-        if (currentChatId === '') {
+        const storedName = await AsyncStorage.getItem("name");
+        if (currentChatId === "") {
           const res = await createChatLog({
             messages: [logEntry],
             ...(storedName ? { user: storedName } : {}),
@@ -491,17 +549,20 @@ export default function MainScreen({ navigation }: Props) {
             setCurrentMessageId(msgs[msgs.length - 1]._id);
           }
         } else {
-          const res = await addChatToChatLog({ id: currentChatId, chat: logEntry });
+          const res = await addChatToChatLog({
+            id: currentChatId,
+            chat: logEntry,
+          });
           if (res?.data?.messages) {
             const msgs = res.data.messages;
             setCurrentMessageId(msgs[msgs.length - 1]._id);
           }
         }
       } catch (e) {
-        console.error('Chat log error:', e);
+        console.error("Chat log error:", e);
       }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiResponse]);
 
   // ─── Camera: tap = photo, hold = video ───────────────────────────────────
@@ -522,7 +583,7 @@ export default function MainScreen({ navigation }: Props) {
   }
 
   async function toggleVideoCapture() {
-    if (recordingModeRef.current === 'recording-video') {
+    if (recordingModeRef.current === "recording-video") {
       await stopVideoRecording();
     } else {
       await startVideoRecording();
@@ -534,14 +595,16 @@ export default function MainScreen({ navigation }: Props) {
    * web returns a full data URL (sometimes in `uri` instead of `base64`).
    * Double-prefixing produces an invalid image the AI backend rejects.
    */
-  function photoToDataUrl(photo: { base64?: string; uri?: string } | null | undefined): string | null {
+  function photoToDataUrl(
+    photo: { base64?: string; uri?: string } | null | undefined,
+  ): string | null {
     if (!photo) return null;
     if (photo.base64) {
-      return photo.base64.startsWith('data:')
+      return photo.base64.startsWith("data:")
         ? photo.base64
         : `data:image/jpeg;base64,${photo.base64}`;
     }
-    if (photo.uri && photo.uri.startsWith('data:')) return photo.uri;
+    if (photo.uri && photo.uri.startsWith("data:")) return photo.uri;
     return null;
   }
 
@@ -549,7 +612,7 @@ export default function MainScreen({ navigation }: Props) {
     if (!cameraRef.current) return;
     const ready = await waitForCameraReady();
     if (!ready) {
-      speak('Camera is still starting. Try again in a moment.');
+      speak("Camera is still starting. Try again in a moment.");
       return;
     }
     try {
@@ -564,8 +627,11 @@ export default function MainScreen({ navigation }: Props) {
         setCapturedVideoUri(null);
         setWebVideoFrames(null);
         setCapturedImage(dataUrl);
-        setUserInput('Describe the image');
-        speak('Photo captured. Ready to describe the image.');
+        // disabled for testing
+        // setUserInput("Describe the image");
+        speak(
+          "Photo captured. Ready to describe the image or give last mile feedback.",
+        );
         notifySuccess();
         try {
           Vibration.vibrate([...PHOTO_CAPTURED_VIBRATION]);
@@ -574,11 +640,11 @@ export default function MainScreen({ navigation }: Props) {
         }
         void track(Events.PhotoCaptured);
       } else {
-        speak('Could not capture image');
+        speak("Could not capture image");
       }
     } catch (e) {
-      console.error('takePhoto error:', e);
-      speak('Could not capture image');
+      console.error("takePhoto error:", e);
+      speak("Could not capture image");
     }
   }
 
@@ -587,16 +653,16 @@ export default function MainScreen({ navigation }: Props) {
 
     // Web: no MediaRecorder/thumbnail pipeline — sample frames off the live
     // preview while the user holds, auto-stopping at the max duration.
-    if (Platform.OS === 'web') {
+    if (Platform.OS === "web") {
       const session = startWebFrameCapture();
       if (!session) {
-        speak('Camera is still starting. Try again in a moment.');
+        speak("Camera is still starting. Try again in a moment.");
         return;
       }
       webFrameSessionRef.current = session;
       videoRecordStartedRef.current = true;
       beginRecordingFeedback();
-      AccessibilityInfo.announceForAccessibility('Video recording started');
+      AccessibilityInfo.announceForAccessibility("Video recording started");
       setTimeout(() => {
         if (webFrameSessionRef.current === session) void stopVideoRecording();
       }, MAX_VIDEO_DURATION_MS);
@@ -605,40 +671,42 @@ export default function MainScreen({ navigation }: Props) {
 
     const micOk = await ensureMicrophonePermission();
     if (!micOk) {
-      speak('Microphone permission is required to record video.');
+      speak("Microphone permission is required to record video.");
       return;
     }
     const ready = await waitForCameraReady();
     if (!ready) {
-      speak('Camera is still starting. Try again in a moment.');
+      speak("Camera is still starting. Try again in a moment.");
       return;
     }
     try {
       videoRecordStartedRef.current = true;
       beginRecordingFeedback();
       await prepareAudioForRecording();
-      AccessibilityInfo.announceForAccessibility('Video recording started');
+      AccessibilityInfo.announceForAccessibility("Video recording started");
       // recordAsync resolves when stopRecording is called or maxDuration is reached
-      const video = await cameraRef.current.recordAsync({ maxDuration: MAX_VIDEO_DURATION_MS / 1000 });
+      const video = await cameraRef.current.recordAsync({
+        maxDuration: MAX_VIDEO_DURATION_MS / 1000,
+      });
       if (video?.uri) {
         setCapturedImage(null);
         setCapturedVideoUri(video.uri);
-        speak('Video recording ended. Ready to describe the video.');
-        setUserInput('Describe the video');
+        speak("Video recording ended. Ready to describe the video.");
+        setUserInput("Describe the video");
         notifySuccess();
         void track(Events.VideoRecorded, { platform: Platform.OS });
       }
     } catch (e) {
-      console.error('startVideoRecording error:', e);
-      const msg = e instanceof Error ? e.message : '';
+      console.error("startVideoRecording error:", e);
+      const msg = e instanceof Error ? e.message : "";
       if (/not ready/i.test(msg)) {
-        speak('Camera not ready. Wait a second, then try again.');
+        speak("Camera not ready. Wait a second, then try again.");
       } else {
-        speak('Could not capture video');
+        speak("Could not capture video");
       }
     } finally {
       videoRecordStartedRef.current = false;
-      setRecordingMode('idle');
+      setRecordingMode("idle");
       clearRecordingTimer();
     }
   }
@@ -646,13 +714,13 @@ export default function MainScreen({ navigation }: Props) {
   function finishVideoRecording(): void {
     videoRecordStartedRef.current = false;
     videoRecordingStartedAtRef.current = null;
-    setRecordingMode('idle');
+    setRecordingMode("idle");
     clearRecordingTimer();
     void resetAudioForPlayback();
   }
 
   async function stopVideoRecording() {
-    if (Platform.OS === 'web') {
+    if (Platform.OS === "web") {
       const session = webFrameSessionRef.current;
       if (!session) return;
       webFrameSessionRef.current = null;
@@ -662,16 +730,16 @@ export default function MainScreen({ navigation }: Props) {
         setCapturedImage(null);
         setCapturedVideoUri(null);
         setWebVideoFrames(frames);
-        setUserInput('Describe the video');
-        speak('Video recording ended. Ready to describe the video.');
+        setUserInput("Describe the video");
+        speak("Video recording ended. Ready to describe the video.");
         notifySuccess();
         void track(Events.VideoRecorded, {
-          platform: 'web',
+          platform: "web",
           frameCount: frames.length,
         });
       } else {
         setWebVideoFrames(null);
-        speak('Could not capture video');
+        speak("Could not capture video");
       }
       return;
     }
@@ -694,7 +762,7 @@ export default function MainScreen({ navigation }: Props) {
 
   const AZURE_RECORDING_OPTIONS: Audio.RecordingOptions = {
     android: {
-      extension: '.aac',
+      extension: ".aac",
       outputFormat: Audio.AndroidOutputFormat.AAC_ADTS,
       audioEncoder: Audio.AndroidAudioEncoder.AAC,
       sampleRate: 16000,
@@ -702,7 +770,7 @@ export default function MainScreen({ navigation }: Props) {
       bitRate: 128000,
     },
     ios: {
-      extension: '.wav',
+      extension: ".wav",
       outputFormat: Audio.IOSOutputFormat.LINEARPCM,
       audioQuality: Audio.IOSAudioQuality.HIGH,
       sampleRate: 16000,
@@ -716,13 +784,14 @@ export default function MainScreen({ navigation }: Props) {
     web: {},
   };
 
-  const AZURE_CONTENT_TYPE = Platform.OS === 'ios'
-    ? 'audio/wav; codecs=audio/pcm; samplerate=16000'
-    : 'audio/aac';
+  const AZURE_CONTENT_TYPE =
+    Platform.OS === "ios"
+      ? "audio/wav; codecs=audio/pcm; samplerate=16000"
+      : "audio/aac";
 
   const MIN_VOICE_RECORDING_MS = 1200;
-  const LISTENING_PLACEHOLDER = '🎙 Listening… speak your question';
-  const TRANSCRIBING_PLACEHOLDER = '⏳ Transcribing your question…';
+  const LISTENING_PLACEHOLDER = "🎙 Listening… speak your question";
+  const TRANSCRIBING_PLACEHOLDER = "⏳ Transcribing your question…";
 
   function isVoiceStatusText(text: string): boolean {
     const t = text.trim();
@@ -739,27 +808,27 @@ export default function MainScreen({ navigation }: Props) {
         slowResponseTimerRef.current = null;
       }
       setLoading(false);
-      setUserInput('');
-      setDisplayQuestion('');
-      submittedInputRef.current = '';
-      setAiResponse('');
+      setUserInput("");
+      setDisplayQuestion("");
+      submittedInputRef.current = "";
+      setAiResponse("");
       setCapturedImage(null);
       setCapturedVideoUri(null);
       setWebVideoFrames(null);
-      setCurrentChatId('');
-      setCurrentMessageId('');
+      setCurrentChatId("");
+      setCurrentMessageId("");
       chatLogEligibleRef.current = false;
-      lastAutoSpokenRef.current = '';
+      lastAutoSpokenRef.current = "";
       cameraReadyRef.current = false;
       if (options?.announceReset) {
         AccessibilityInfo.announceForAccessibility(
-          'New test started. Previous question, answer, and AI memory cleared.'
+          "New test started. Previous question, answer, and AI memory cleared.",
         );
-        announce('New test started.');
+        announce("New test started.");
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+    [],
   );
 
   async function startNewTest(): Promise<void> {
@@ -771,8 +840,8 @@ export default function MainScreen({ navigation }: Props) {
   // Force a clean AI session when the app is backgrounded/closed so a new
   // launch never inherits the previous session's chat history.
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'background' || state === 'inactive') {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "background" || state === "inactive") {
         rotateConversationId();
       }
     });
@@ -784,7 +853,7 @@ export default function MainScreen({ navigation }: Props) {
     webAudioSessionRef.current = null;
     webSpeechSessionRef.current?.abort();
     webSpeechSessionRef.current = null;
-    voiceTranscriptRef.current = '';
+    voiceTranscriptRef.current = "";
 
     if (audioRecordingRef.current) {
       try {
@@ -813,14 +882,24 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
     if (loadingRef.current) {
-      speak('Still loading the last answer. Please wait.');
+      speak("Still loading the last answer. Please wait.");
       return;
     }
+    // speech to text goes into the textbox.
+    // do not send it automatically
     setUserInput(trimmed);
-    setDisplayQuestion(trimmed);
+    // setDisplayQuestion(trimmed);
     Vibration.vibrate(SPEECH_CAPTURED_VIBRATION_PATTERN);
-    AccessibilityInfo.announceForAccessibility(`Question: ${trimmed}. Sending now.`);
-    await handleSubmit(trimmed);
+    // AccessibilityInfo.announceForAccessibility(
+    //   `Question: ${trimmed}. Sending now.`,
+    // );
+    AccessibilityInfo.announceForAccessibility(
+      `Question transcribed: ${trimmed}. Review it, then tap submit.`,
+    );
+    speak(`Question transcribed: ${trimmed}. Review it, then tap submit.`, {
+      preferDevice: true,
+    });
+    // await handleSubmit(trimmed);
   }
 
   async function toggleListening() {
@@ -831,26 +910,33 @@ export default function MainScreen({ navigation }: Props) {
     await startListening();
   }
 
-  async function transcribeWithAzure(audioBody: Blob | ArrayBuffer, contentType: string): Promise<string | null> {
+  async function transcribeWithAzure(
+    audioBody: Blob | ArrayBuffer,
+    contentType: string,
+  ): Promise<string | null> {
     const result = await transcribeAudio(audioBody, contentType);
     if (!result) return null;
-    if (result.status === 'Success') return result.transcript;
-    if (result.status === 'NoMatch' || result.status === 'InitialSilenceTimeout' || result.status === 'EmptyAudio') {
-      return '';
+    if (result.status === "Success") return result.transcript;
+    if (
+      result.status === "NoMatch" ||
+      result.status === "InitialSilenceTimeout" ||
+      result.status === "EmptyAudio"
+    ) {
+      return "";
     }
-    console.error('Azure STT unhandled status:', result.status);
+    console.error("Azure STT unhandled status:", result.status);
     return null;
   }
 
   async function startListening() {
-    if (Platform.OS === 'web') unlockWebAudioForPlayback();
+    if (Platform.OS === "web") unlockWebAudioForPlayback();
 
     if (loadingRef.current) {
-      speak('Still loading your last answer. Wait a moment, then try again.');
+      speak("Still loading your last answer. Wait a moment, then try again.");
       return;
     }
     if (isTranscribingRef.current) {
-      speak('Still transcribing your last question. Wait a moment.');
+      speak("Still transcribing your last question. Wait a moment.");
       return;
     }
     if (isListeningRef.current) return;
@@ -862,28 +948,32 @@ export default function MainScreen({ navigation }: Props) {
       await refreshAzureToken();
     }
     if (!azureTokenRef.current) {
-      speak('Voice input is unavailable. Make sure the backend is running and try again.');
-      if (Platform.OS !== 'web') {
+      speak(
+        "Voice input is unavailable. Make sure the backend is running and try again.",
+      );
+      if (Platform.OS !== "web") {
         Alert.alert(
-          'Voice Input Unavailable',
-          'Could not connect to the speech service. Make sure the backend is running and try again.'
+          "Voice Input Unavailable",
+          "Could not connect to the speech service. Make sure the backend is running and try again.",
         );
       }
       return;
     }
     const micOk = await ensureMicrophonePermission();
     if (!micOk) {
-      speak('Microphone permission is required for voice questions.');
+      speak("Microphone permission is required for voice questions.");
       return;
     }
 
     await speakListeningPrompt();
 
-    if (Platform.OS === 'web') {
+    if (Platform.OS === "web") {
       try {
         const session = await startWebAudioCapture();
         if (!session) {
-          speak('Could not start microphone. Check browser permissions and try again.');
+          speak(
+            "Could not start microphone. Check browser permissions and try again.",
+          );
           return;
         }
         webAudioSessionRef.current = session;
@@ -900,7 +990,7 @@ export default function MainScreen({ navigation }: Props) {
               voiceTranscriptRef.current = final;
               setUserInput(final);
             },
-            (message) => console.warn('live speech:', message)
+            (message) => console.warn("live speech:", message),
           );
           if (speech) {
             webSpeechSessionRef.current = speech;
@@ -913,16 +1003,18 @@ export default function MainScreen({ navigation }: Props) {
         setUserInput(LISTENING_PLACEHOLDER);
         void track(Events.VoiceStarted);
       } catch (e) {
-        console.error('startListening web error:', e);
+        console.error("startListening web error:", e);
         await resetVoiceUiState();
-        speak('Could not start microphone');
+        speak("Could not start microphone");
       }
       return;
     }
 
     try {
       await prepareAudioForRecording();
-      const { recording } = await Audio.Recording.createAsync(AZURE_RECORDING_OPTIONS);
+      const { recording } = await Audio.Recording.createAsync(
+        AZURE_RECORDING_OPTIONS,
+      );
       audioRecordingRef.current = recording;
       voiceRecordingStartedAtRef.current = Date.now();
       isListeningRef.current = true;
@@ -931,17 +1023,17 @@ export default function MainScreen({ navigation }: Props) {
       Vibration.vibrate(60);
       void track(Events.VoiceStarted);
     } catch (e) {
-      console.error('startListening error:', e);
+      console.error("startListening error:", e);
       await resetVoiceUiState();
       await resetAudioForPlayback();
-      speak('Could not start microphone. Tap again in a moment.');
+      speak("Could not start microphone. Tap again in a moment.");
     }
   }
 
   async function stopListening() {
-    if (Platform.OS === 'web') unlockWebAudioForPlayback();
+    if (Platform.OS === "web") unlockWebAudioForPlayback();
 
-    if (Platform.OS === 'web') {
+    if (Platform.OS === "web") {
       const session = webAudioSessionRef.current;
       const speech = webSpeechSessionRef.current;
       webAudioSessionRef.current = null;
@@ -951,13 +1043,18 @@ export default function MainScreen({ navigation }: Props) {
 
       const startedAt = voiceRecordingStartedAtRef.current;
       voiceRecordingStartedAtRef.current = null;
-      if (startedAt != null && Date.now() - startedAt < MIN_VOICE_RECORDING_MS) {
+      if (
+        startedAt != null &&
+        Date.now() - startedAt < MIN_VOICE_RECORDING_MS
+      ) {
         speech?.abort();
         if (session) await session.stop();
-        setUserInput('');
+        setUserInput("");
         setIsTranscribing(false);
         isTranscribingRef.current = false;
-        speak('I did not hear enough speech. Tap the voice button, speak, then tap it again.');
+        speak(
+          "I did not hear enough speech. Tap the voice button, speak, then tap it again.",
+        );
         return;
       }
 
@@ -968,7 +1065,7 @@ export default function MainScreen({ navigation }: Props) {
 
       try {
         const [liveText, blob] = await Promise.all([
-          speech ? speech.stop() : Promise.resolve(''),
+          speech ? speech.stop() : Promise.resolve(""),
           session ? session.stop() : Promise.resolve(null),
         ]);
 
@@ -977,25 +1074,28 @@ export default function MainScreen({ navigation }: Props) {
           await new Promise((resolve) => setTimeout(resolve, 50));
           unlockWebAudioForPlayback();
         }
-        speak('Transcribing your question.', { preferDevice: true });
+        speak("Transcribing your question.", { preferDevice: true });
 
         let text =
           liveText.trim() ||
           voiceTranscriptRef.current.trim() ||
           userInputRef.current.trim();
 
-        if (isVoiceStatusText(text)) text = '';
+        if (isVoiceStatusText(text)) text = "";
 
         if (!text && blob && blob.size > 0) {
-          const transcript = await transcribeWithAzure(blob, contentTypeForWebBlob(blob));
+          const transcript = await transcribeWithAzure(
+            blob,
+            contentTypeForWebBlob(blob),
+          );
           if (transcript === null) {
-            speak('Speech service error. Please try again.');
+            speak("Speech service error. Please try again.");
             return;
           }
           text = transcript.trim();
         }
 
-        voiceTranscriptRef.current = '';
+        voiceTranscriptRef.current = "";
         if (text && !isVoiceStatusText(text)) {
           setUserInput(text);
           setIsTranscribing(false);
@@ -1005,8 +1105,10 @@ export default function MainScreen({ navigation }: Props) {
           notifyNoSpeechHeard();
         }
       } catch (e) {
-        console.error('stopListening web error:', e);
-        speak('Voice recognition failed. Tap the voice button and speak again.');
+        console.error("stopListening web error:", e);
+        speak(
+          "Voice recognition failed. Tap the voice button and speak again.",
+        );
       } finally {
         setIsTranscribing(false);
         isTranscribingRef.current = false;
@@ -1023,14 +1125,19 @@ export default function MainScreen({ navigation }: Props) {
       setIsListening(false);
       const startedAt = voiceRecordingStartedAtRef.current;
       voiceRecordingStartedAtRef.current = null;
-      if (startedAt != null && Date.now() - startedAt < MIN_VOICE_RECORDING_MS) {
+      if (
+        startedAt != null &&
+        Date.now() - startedAt < MIN_VOICE_RECORDING_MS
+      ) {
         await audioRecordingRef.current.stopAndUnloadAsync();
         audioRecordingRef.current = null;
         await resetAudioForPlayback();
         setIsTranscribing(false);
         isTranscribingRef.current = false;
-        setUserInput('');
-        speak('I did not hear enough speech. Tap the voice button, speak, then tap it again.');
+        setUserInput("");
+        speak(
+          "I did not hear enough speech. Tap the voice button, speak, then tap it again.",
+        );
         return;
       }
       setIsTranscribing(true);
@@ -1043,20 +1150,23 @@ export default function MainScreen({ navigation }: Props) {
       audioRecordingRef.current = null;
       await new Promise((resolve) => setTimeout(resolve, 150));
       await resetAudioForPlayback();
-      speak('Transcribing your question.', { preferDevice: true });
+      speak("Transcribing your question.", { preferDevice: true });
 
       if (!uri || !azureTokenRef.current) {
         setIsTranscribing(false);
-        if (!uri) speak('Could not read the recording. Please try again.');
+        if (!uri) speak("Could not read the recording. Please try again.");
         return;
       }
 
       const audioData = await fetch(uri);
       const audioBlob = await audioData.arrayBuffer();
-      const transcript = await transcribeWithAzure(audioBlob, AZURE_CONTENT_TYPE);
+      const transcript = await transcribeWithAzure(
+        audioBlob,
+        AZURE_CONTENT_TYPE,
+      );
 
       if (transcript === null) {
-        speak('Speech service error. Please try again.');
+        speak("Speech service error. Please try again.");
         return;
       }
       const cleaned = transcript.trim();
@@ -1069,67 +1179,74 @@ export default function MainScreen({ navigation }: Props) {
         notifyNoSpeechHeard();
       }
     } catch (e) {
-      console.error('stopListening error:', e);
-      speak('Voice recognition failed. Tap the voice button and speak again.');
+      console.error("stopListening error:", e);
+      speak("Voice recognition failed. Tap the voice button and speak again.");
     } finally {
       setIsTranscribing(false);
       isTranscribingRef.current = false;
     }
   }
 
-// ─── Last Meters Navigation Feature ──────────────────────────────────────────
+  // ─── Last Meters Navigation Feature ──────────────────────────────────────────
 
   async function handleLastMileNavigation() {
     if (loading) return;
 
     const rawDestination = userInput.trim();
     if (!rawDestination) {
-      speak('Please enter the name of the store or destination first.', { preferDevice: true });
+      speak("Please enter the name of the store or destination first.", {
+        preferDevice: true,
+      });
       return;
     }
     if (!capturedImage) {
-      speak('Please take a photo of your surroundings first.', { preferDevice: true });
+      speak("Please take a photo of your surroundings first.", {
+        preferDevice: true,
+      });
       return;
     }
 
     setLoading(true);
     void stopSpeaking();
-    AccessibilityInfo.announceForAccessibility('Checking your distance and surroundings. This may take a moment.');
+    AccessibilityInfo.announceForAccessibility(
+      "Checking your distance and surroundings. This may take a moment.",
+    );
 
     try {
       let loc = locationRef.current;
       if (!loc) {
-        loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
         locationRef.current = loc;
       }
 
       const data = await sendLastMileRequest({
         lat: loc.coords.latitude,
         lng: loc.coords.longitude,
-        gpsAccuracyMeters: loc.coords.accuracy ?? undefined,
         heading: headingRef.current ?? undefined,
         image: capturedImage,
-        destination: rawDestination
+        destination: rawDestination,
       });
 
       if (data.output) {
         setAiResponse(data.output);
         speak(data.output, { preferDevice: true });
-        
-        setUserInput('');
+
+        setUserInput("");
         setCapturedImage(null);
         cameraReadyRef.current = false;
         void track(Events.AnswerReceived, {
-          feature: 'last_mile',
-          navigationMode: data.mode || 'unknown',
+          feature: "last_mile",
+          navigationMode: data.mode || "unknown",
         });
       }
     } catch (e) {
-      console.error('Last Meters Error:', e);
-      const detail = e instanceof Error ? e.message : '';
+      console.error("Last Meters Error:", e);
+      const detail = e instanceof Error ? e.message : "";
       const errMsg = detail
         ? `Last Meters error: ${detail}`
-        : 'Error calculating last meters navigation. Please try again.';
+        : "Error calculating last meters navigation. Please try again.";
       setAiResponse(errMsg);
       speak(errMsg, { preferDevice: true });
     } finally {
@@ -1142,7 +1259,7 @@ export default function MainScreen({ navigation }: Props) {
   async function handleSubmit(questionOverride?: string) {
     const raw = (questionOverride ?? userInput).trim();
     if (!raw || isVoiceStatusText(raw)) {
-      speak('Please enter a question first');
+      speak("Please enter a question first");
       return;
     }
     const question = raw;
@@ -1173,23 +1290,30 @@ export default function MainScreen({ navigation }: Props) {
     try {
       setLoading(true);
       void stopSpeaking();
-      AccessibilityInfo.announceForAccessibility('Loading response');
+      AccessibilityInfo.announceForAccessibility("Loading response");
 
       // A blind user otherwise has no feedback during a long wait, so reassure
       // them out loud if the backend is taking its time. The eventual answer
       // (or error) cancels this by starting its own speech.
-      if (slowResponseTimerRef.current) clearTimeout(slowResponseTimerRef.current);
+      if (slowResponseTimerRef.current)
+        clearTimeout(slowResponseTimerRef.current);
       slowResponseTimerRef.current = setTimeout(() => {
-        if (loadingRef.current) speak('Still working on your answer.', { preferDevice: true });
+        if (loadingRef.current)
+          speak("Still working on your answer.", { preferDevice: true });
       }, SLOW_RESPONSE_HINT_MS);
 
       let loc = locationRef.current;
       if (!loc) {
         try {
           loc = await Promise.race([
-            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+            Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            }),
             new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('location_timeout')), LOCATION_WAIT_MS)
+              setTimeout(
+                () => reject(new Error("location_timeout")),
+                LOCATION_WAIT_MS,
+              ),
             ),
           ]);
           locationRef.current = loc;
@@ -1199,18 +1323,20 @@ export default function MainScreen({ navigation }: Props) {
       }
       if (!loc) {
         speak(
-          'I could not determine your location, so answers about nearby places may be wrong. ' +
-            'Please check that location access is allowed.'
+          "I could not determine your location, so answers about nearby places may be wrong. " +
+            "Please check that location access is allowed.",
         );
       } else if ((loc.coords.accuracy ?? 0) > 1000) {
         // City-scale/IP estimates are unsafe for local destination selection.
         speak(
-          'Your location is not accurate enough for nearby directions. ' +
-            'Please enable precise location and try again.'
+          "Your location is not accurate enough for nearby directions. " +
+            "Please enable precise location and try again.",
         );
       }
       const hasReliableLocation =
-        !!loc && ((loc.coords.accuracy ?? 0) === 0 || (loc.coords.accuracy ?? 0) <= 1000);
+        !!loc &&
+        ((loc.coords.accuracy ?? 0) === 0 ||
+          (loc.coords.accuracy ?? 0) <= 1000);
       const coords: CustomCoords | null = hasReliableLocation
         ? {
             latitude: loc!.coords.latitude,
@@ -1225,26 +1351,34 @@ export default function MainScreen({ navigation }: Props) {
         : null;
 
       // Resolve any saved-place aliases like "home" or "work" before sending.
-      const { text: resolvedText, matched } = await expandSavedAliases(question);
+      const { text: resolvedText, matched } =
+        await expandSavedAliases(question);
       if (matched.length > 0) {
-        const aliasNames = matched.map(m => m.alias).join(', ');
-        AccessibilityInfo.announceForAccessibility(`Using saved place: ${aliasNames}`);
+        const aliasNames = matched.map((m) => m.alias).join(", ");
+        AccessibilityInfo.announceForAccessibility(
+          `Using saved place: ${aliasNames}`,
+        );
         void track(Events.SavedPlaceUsed, {
           count: matched.length,
           aliases: aliasNames.slice(0, 120),
         });
       }
 
-      let imagePayload: string | null | (string | null)[] = capturedImage ? [capturedImage] : [null];
+      let imagePayload: string | null | (string | null)[] = capturedImage
+        ? [capturedImage]
+        : [null];
       if (webVideoFrames && webVideoFrames.length > 0) {
         // Web "video": frames were already sampled live during the hold.
         imagePayload = webVideoFrames;
       } else if (capturedVideoUri) {
-        AccessibilityInfo.announceForAccessibility('Processing video frames');
+        AccessibilityInfo.announceForAccessibility("Processing video frames");
         const frames = await extractVideoFrames(capturedVideoUri);
         if (frames.length === 0) {
-          speak('Could not read the video. Try recording again.');
-          void track(Events.AnswerRejected, { reason: 'video_frames_failed', feature: 'video_qa' });
+          speak("Could not read the video. Try recording again.");
+          void track(Events.AnswerRejected, {
+            reason: "video_frames_failed",
+            feature: "video_qa",
+          });
           return;
         }
         imagePayload = frames;
@@ -1257,35 +1391,42 @@ export default function MainScreen({ navigation }: Props) {
           ? extractTrainLineFromText(resolvedText)
           : null;
       const isMtaOnlyQuestion =
-        !!trainLine && !capturedImage && !capturedVideoUri && !(webVideoFrames && webVideoFrames.length > 0);
+        !!trainLine &&
+        !capturedImage &&
+        !capturedVideoUri &&
+        !(webVideoFrames && webVideoFrames.length > 0);
 
       if (trainLine && coords) {
         try {
           const arrivals = await Promise.race([
             fetchMtaArrivals(trainLine, coords.latitude, coords.longitude),
             new Promise<string>((_, reject) =>
-              setTimeout(() => reject(new Error('mta_timeout')), MTA_LOOKUP_MS)
+              setTimeout(() => reject(new Error("mta_timeout")), MTA_LOOKUP_MS),
             ),
           ]);
           mtaDirectAnswer = arrivals;
-          textToSend = buildTrainQuestionWithLiveData(resolvedText, trainLine, arrivals);
+          textToSend = buildTrainQuestionWithLiveData(
+            resolvedText,
+            trainLine,
+            arrivals,
+          );
         } catch (e) {
-          console.warn('MTA prefetch failed', e);
+          console.warn("MTA prefetch failed", e);
           if (isMtaOnlyQuestion) {
             const message =
-              'Could not load live subway arrival times. Check your internet connection and try again.';
+              "Could not load live subway arrival times. Check your internet connection and try again.";
             setAiResponse(message);
             lastAutoSpokenRef.current = message;
             speak(message, { preferDevice: true });
-            setUserInput('');
+            setUserInput("");
             setCapturedImage(null);
             setCapturedVideoUri(null);
             setWebVideoFrames(null);
             void track(Events.AnswerFailed, {
               requestId,
-              feature: 'mta',
+              feature: "mta",
               latencyMs: Date.now() - requestStartedAt,
-              reason: 'mta_fetch_failed',
+              reason: "mta_fetch_failed",
             });
             return;
           }
@@ -1297,16 +1438,16 @@ export default function MainScreen({ navigation }: Props) {
         setAiResponse(mtaDirectAnswer);
         lastAutoSpokenRef.current = mtaDirectAnswer;
         speak(mtaDirectAnswer, { preferDevice: true });
-        setUserInput('');
+        setUserInput("");
         setCapturedImage(null);
         setCapturedVideoUri(null);
         setWebVideoFrames(null);
         void track(Events.AnswerReceived, {
           requestId,
-          feature: 'mta',
+          feature: "mta",
           latencyMs: Date.now() - requestStartedAt,
           hasRoute: false,
-          routeSource: 'none',
+          routeSource: "none",
           outputLength: mtaDirectAnswer.length,
         });
         return;
@@ -1318,7 +1459,7 @@ export default function MainScreen({ navigation }: Props) {
       const hasAttachedImagery = Array.isArray(imagePayload)
         ? imagePayload.some(Boolean)
         : !!imagePayload;
-      if (feature === 'directions' && hasAttachedImagery) {
+      if (feature === "directions" && hasAttachedImagery) {
         textToSend = withLastMetersImageInstruction(textToSend);
       }
 
@@ -1332,26 +1473,28 @@ export default function MainScreen({ navigation }: Props) {
       const res = await sendTextRequest(data);
       if (res?.output) {
         const structured =
-          res.route && res.route.steps && res.route.steps.length > 0 ? res.route : null;
+          res.route && res.route.steps && res.route.steps.length > 0
+            ? res.route
+            : null;
 
         if (structured && isUnreasonableWalk(structured)) {
           const miles = (routeTotalMeters(structured) * 0.00062137).toFixed(1);
           const dest =
             structured.destination?.name ||
             structured.destination?.address ||
-            'That destination';
+            "That destination";
           const message =
             `${dest} is about ${miles} miles away, which is too far to walk. ` +
             `It may not be the nearby place you meant — try a closer destination or use public transit.`;
           chatLogEligibleRef.current = true;
           setAiResponse(message);
-          setUserInput('');
+          setUserInput("");
           setCapturedImage(null);
           setCapturedVideoUri(null);
           setWebVideoFrames(null);
           void track(Events.AnswerRejected, {
-            reason: 'unreasonable_walk',
-            feature: 'directions',
+            reason: "unreasonable_walk",
+            feature: "directions",
             requestId,
           });
           return;
@@ -1359,7 +1502,7 @@ export default function MainScreen({ navigation }: Props) {
 
         chatLogEligibleRef.current = true;
         setAiResponse(res.output);
-        setUserInput('');
+        setUserInput("");
         setCapturedImage(null);
         setCapturedVideoUri(null);
         setWebVideoFrames(null);
@@ -1368,38 +1511,41 @@ export default function MainScreen({ navigation }: Props) {
           feature,
           latencyMs: Date.now() - requestStartedAt,
           hasRoute: !!structured,
-          routeSource: structured ? 'structured' : 'none',
+          routeSource: structured ? "structured" : "none",
           output: res.output.slice(0, 500),
           outputLength: res.output.length,
         });
       }
     } catch (e) {
-      console.error('handleSubmit error:', e);
+      console.error("handleSubmit error:", e);
       const maybeAxiosError = e as {
         code?: string;
         message?: string;
         response?: unknown;
       };
-      const isTimeout = maybeAxiosError?.code === 'ECONNABORTED';
+      const isTimeout = maybeAxiosError?.code === "ECONNABORTED";
       const isOffline =
         !isTimeout &&
-        (!maybeAxiosError?.response || maybeAxiosError?.message === 'Network Error');
+        (!maybeAxiosError?.response ||
+          maybeAxiosError?.message === "Network Error");
 
       if (isTimeout) {
-        setAiResponse('That took too long to answer. The server may be busy. Please try again.');
+        setAiResponse(
+          "That took too long to answer. The server may be busy. Please try again.",
+        );
       } else if (isOffline) {
         notifyNoInternetConnection();
         setAiResponse(
-          'Could not reach the Buddy Walk server. It may be waking up — wait a few seconds and try again.'
+          "Could not reach the Buddy Walk server. It may be waking up — wait a few seconds and try again.",
         );
       } else {
-        setAiResponse('An error occurred. Please try again.');
+        setAiResponse("An error occurred. Please try again.");
       }
       void track(Events.AnswerFailed, {
         requestId,
         feature,
         latencyMs: Date.now() - requestStartedAt,
-        reason: isTimeout ? 'timeout' : isOffline ? 'offline' : 'error',
+        reason: isTimeout ? "timeout" : isOffline ? "offline" : "error",
       });
     } finally {
       if (slowResponseTimerRef.current) {
@@ -1414,23 +1560,27 @@ export default function MainScreen({ navigation }: Props) {
   // ─── Sign out ─────────────────────────────────────────────────────────────
 
   function handleSignOutPress() {
-    Alert.alert('Sign out?', 'Are you sure you want to sign out of Buddy Walk?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            // Force a clean AI session so the next user never inherits this chat history.
-            resetConversationState();
-            await signOut();
-          } catch (e) {
-            console.error('Sign out error:', e);
-            Alert.alert('Could not sign out', 'Please try again.');
-          }
+    Alert.alert(
+      "Sign out?",
+      "Are you sure you want to sign out of Buddy Walk?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sign Out",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // Force a clean AI session so the next user never inherits this chat history.
+              resetConversationState();
+              await signOut();
+            } catch (e) {
+              console.error("Sign out error:", e);
+              Alert.alert("Could not sign out", "Please try again.");
+            }
+          },
         },
-      },
-    ]);
+      ],
+    );
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────
@@ -1442,36 +1592,38 @@ export default function MainScreen({ navigation }: Props) {
   const captureUiState = getCaptureUiState(
     recordingMode,
     hasPhotoCapture,
-    hasVideoCapture
+    hasVideoCapture,
   );
   const captureLabel = captureStatusLabel(captureUiState);
-  const isRecordingVideo = captureUiState === 'recording';
+  const isRecordingVideo = captureUiState === "recording";
 
   const cameraPreview = (
     <View
       style={[
         styles.cameraPreviewWrapper,
-        captureUiState === 'holding' && styles.cameraPreviewHolding,
-        captureUiState === 'recording' && styles.cameraPreviewRecording,
+        captureUiState === "holding" && styles.cameraPreviewHolding,
+        captureUiState === "recording" && styles.cameraPreviewRecording,
       ]}
     >
       <CameraView
         ref={cameraRef}
         style={styles.cameraPreview}
-        facing={'back' as CameraType}
+        facing={"back" as CameraType}
         mode="video"
         onCameraReady={onCameraReady}
       />
-      {captureUiState === 'holding' ? (
+      {captureUiState === "holding" ? (
         <View style={styles.captureOverlayHolding} pointerEvents="none">
           <Text style={styles.captureOverlayTitle}>KEEP HOLDING</Text>
           <Text style={styles.captureOverlaySub}>Video starts in a moment</Text>
         </View>
       ) : null}
-      {captureUiState === 'recording' ? (
+      {captureUiState === "recording" ? (
         <View style={styles.captureOverlayRecording} pointerEvents="none">
           <View style={styles.recBadge}>
-            <Animated.View style={[styles.recDot, { opacity: recDotOpacity }]} />
+            <Animated.View
+              style={[styles.recDot, { opacity: recDotOpacity }]}
+            />
             <Text style={styles.recBadgeText}>
               REC {formatRecordingTime(recordingElapsedSec)}
             </Text>
@@ -1483,12 +1635,14 @@ export default function MainScreen({ navigation }: Props) {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* ── Blue Section: Camera ── */}
         <View style={styles.blueSection}>
-          <Text style={styles.sectionLabel} accessibilityRole="header">
+          <Text style={styles.captureStatusLabel} accessibilityRole="header">
             {captureLabel}
           </Text>
 
@@ -1501,7 +1655,11 @@ export default function MainScreen({ navigation }: Props) {
                   onPressIn={() => tap()}
                   onPress={() => void takePhoto()}
                   disabled={isRecordingVideo}
-                  style={[styles.captureActionButton, styles.capturePhotoButton]}
+                  style={[
+                    styles.captureActionButton,
+                    styles.capturePhotoButton,
+                  ]}
+                  contentStyle={styles.captureActionContent}
                   labelStyle={styles.captureActionLabel}
                   accessibilityLabel="Take photo"
                   accessibilityHint="Captures a still photo from the camera"
@@ -1514,20 +1672,27 @@ export default function MainScreen({ navigation }: Props) {
                   onPress={() => void toggleVideoCapture()}
                   style={[
                     styles.captureActionButton,
-                    isRecordingVideo ? styles.captureStopButton : styles.captureVideoButton,
+                    isRecordingVideo
+                      ? styles.captureStopButton
+                      : styles.captureVideoButton,
                   ]}
+                  contentStyle={styles.captureActionContent}
                   labelStyle={
-                    isRecordingVideo ? styles.captureActionLabelOnDark : styles.captureActionLabel
+                    isRecordingVideo
+                      ? styles.captureActionLabelOnDark
+                      : styles.captureActionLabel
                   }
-                  accessibilityLabel={isRecordingVideo ? 'Stop video recording' : 'Record video'}
+                  accessibilityLabel={
+                    isRecordingVideo ? "Stop video recording" : "Record video"
+                  }
                   accessibilityHint={
                     isRecordingVideo
-                      ? 'Stops the current video recording'
-                      : 'Starts recording video from the camera'
+                      ? "Stops the current video recording"
+                      : "Starts recording video from the camera"
                   }
                   accessibilityState={{ busy: isRecordingVideo }}
                 >
-                  {isRecordingVideo ? 'Stop Video' : 'Record Video'}
+                  {isRecordingVideo ? "Stop Video" : "Record Video"}
                 </Button>
               </View>
             </View>
@@ -1540,20 +1705,23 @@ export default function MainScreen({ navigation }: Props) {
                 setCapturedImage(null);
                 setCapturedVideoUri(null);
                 setWebVideoFrames(null);
-                setAiResponse('');
+                setAiResponse("");
               }}
               style={[
                 styles.retakeButton,
-                hasVideoCapture ? styles.retakeButtonVideo : styles.retakeButtonPhoto,
+                hasVideoCapture
+                  ? styles.retakeButtonVideo
+                  : styles.retakeButtonPhoto,
               ]}
+              contentStyle={styles.retakeButtonContent}
               labelStyle={styles.retakeLabel}
               accessibilityLabel={
                 hasVideoCapture
-                  ? 'Retake video. Replace the captured video.'
-                  : 'Retake photo. Replace the captured photo.'
+                  ? "Retake video. Replace the captured video."
+                  : "Retake photo. Replace the captured photo."
               }
             >
-              {hasVideoCapture ? 'Retake Video' : 'Retake Photo'}
+              {hasVideoCapture ? "Retake Video" : "Retake Photo"}
             </Button>
           ) : (
             <Button
@@ -1577,10 +1745,10 @@ export default function MainScreen({ navigation }: Props) {
             onChangeText={setUserInput}
             placeholder={
               isListening
-                ? 'Speak now — your words appear here…'
+                ? "Speak now — your words appear here…"
                 : isTranscribing
-                  ? 'Transcribing your question…'
-                  : 'Example: What is in front of me?'
+                  ? "Transcribing your question…"
+                  : "Example: What is in front of me?"
             }
             placeholderTextColor="rgba(255,255,255,0.75)"
             style={styles.textInput}
@@ -1594,7 +1762,7 @@ export default function MainScreen({ navigation }: Props) {
           <Pressable
             onPressIn={() => {
               tap();
-              if (Platform.OS === 'web') unlockWebAudioForPlayback();
+              if (Platform.OS === "web") unlockWebAudioForPlayback();
             }}
             onPress={() => void toggleListening()}
             disabled={loading && !isListening}
@@ -1605,10 +1773,10 @@ export default function MainScreen({ navigation }: Props) {
             ]}
             accessibilityLabel={
               isTranscribing
-                ? 'Transcribing your question'
+                ? "Transcribing your question"
                 : isListening
-                  ? 'Stop listening and send your question'
-                  : 'Tap to speak your question'
+                  ? "Stop listening and transcribe your question"
+                  : "Tap to speak your question"
             }
             accessibilityHint={VOICE_INPUT_HINT}
             accessibilityRole="button"
@@ -1616,14 +1784,15 @@ export default function MainScreen({ navigation }: Props) {
             <Text
               style={[
                 styles.voiceButtonLabel,
-                (isListening || isTranscribing) && styles.voiceButtonLabelOnDark,
+                (isListening || isTranscribing) &&
+                  styles.voiceButtonLabelOnDark,
               ]}
             >
               {isTranscribing
-                ? '⏳ Transcribing…'
+                ? "⏳ Transcribing…"
                 : isListening
-                  ? '🎙 Listening — tap to send'
-                  : '🎙 Tap to Ask'}
+                  ? "🎙 Listening — tap when finished"
+                  : "🎙 Tap to Ask"}
             </Text>
           </Pressable>
         </View>
@@ -1633,7 +1802,10 @@ export default function MainScreen({ navigation }: Props) {
           <Pressable
             onPressIn={() => tapMedium()}
             onPress={() => void handleSubmit()}
-            style={({ pressed }) => [styles.submitButton, pressed && styles.submitButtonPressed]}
+            style={({ pressed }) => [
+              styles.submitButton,
+              pressed && styles.submitButtonPressed,
+            ]}
             accessibilityLabel="Submit question"
             accessibilityRole="button"
             disabled={loading}
@@ -1647,7 +1819,7 @@ export default function MainScreen({ navigation }: Props) {
             style={({ pressed }) => [
               styles.submitButton,
               pressed && styles.submitButtonPressed,
-              { backgroundColor: '#00FFCC', marginTop: 4 },
+              { backgroundColor: "#00FFCC", marginTop: 4 },
             ]}
             accessibilityLabel="Calculate precise last meters navigation"
             accessibilityRole="button"
@@ -1668,7 +1840,7 @@ export default function MainScreen({ navigation }: Props) {
             </View>
           )}
 
-          {!loading && aiResponse !== '' && (
+          {!loading && aiResponse !== "" && (
             <View style={styles.responseContainer}>
               {displayQuestion ? (
                 <Text style={styles.questionEcho} accessibilityRole="text">
@@ -1694,7 +1866,10 @@ export default function MainScreen({ navigation }: Props) {
                 {aiResponse}
               </Text>
 
-              <AnswerFeedback answer={aiResponse} question={submittedInputRef.current} />
+              <AnswerFeedback
+                answer={aiResponse}
+                question={submittedInputRef.current}
+              />
             </View>
           )}
         </View>
@@ -1704,7 +1879,10 @@ export default function MainScreen({ navigation }: Props) {
           <Pressable
             onPressIn={() => tap()}
             onPress={() => void startNewTest()}
-            style={({ pressed }) => [styles.toolButton, pressed && styles.toolButtonPressed]}
+            style={({ pressed }) => [
+              styles.toolButton,
+              pressed && styles.toolButtonPressed,
+            ]}
             accessibilityRole="button"
             accessibilityLabel="Start a new test. Clears the question, answer, photo or video, and AI chat memory."
           >
@@ -1721,16 +1899,21 @@ export default function MainScreen({ navigation }: Props) {
             onPressIn={() => tap()}
             onPress={() => {
               void stopSpeaking();
-              navigation.navigate('Companion');
+              navigation.navigate("Companion");
             }}
-            style={({ pressed }) => [styles.toolButton, pressed && styles.toolButtonPressed]}
+            style={({ pressed }) => [
+              styles.toolButton,
+              pressed && styles.toolButtonPressed,
+            ]}
             accessibilityRole="button"
             accessibilityLabel="Open Companion Mode to share live location with a trusted contact"
           >
             <Text style={styles.toolButtonIcon}>📍</Text>
             <View style={styles.toolButtonText}>
               <Text style={styles.toolButtonTitle}>Companion Mode</Text>
-              <Text style={styles.toolButtonSubtitle}>Share live location via web link</Text>
+              <Text style={styles.toolButtonSubtitle}>
+                Share live location via web link
+              </Text>
             </View>
           </Pressable>
 
@@ -1738,9 +1921,12 @@ export default function MainScreen({ navigation }: Props) {
             onPressIn={() => tap()}
             onPress={() => {
               void stopSpeaking();
-              navigation.navigate('SavedPlaces');
+              navigation.navigate("SavedPlaces");
             }}
-            style={({ pressed }) => [styles.toolButton, pressed && styles.toolButtonPressed]}
+            style={({ pressed }) => [
+              styles.toolButton,
+              pressed && styles.toolButtonPressed,
+            ]}
             accessibilityRole="button"
             accessibilityLabel="Open Saved Places to bookmark home, work, and other addresses"
           >
@@ -1759,7 +1945,10 @@ export default function MainScreen({ navigation }: Props) {
               void stopSpeaking();
               setFeedbackVisible(true);
             }}
-            style={({ pressed }) => [styles.toolButton, pressed && styles.toolButtonPressed]}
+            style={({ pressed }) => [
+              styles.toolButton,
+              pressed && styles.toolButtonPressed,
+            ]}
             accessibilityRole="button"
             accessibilityLabel="Send feedback about Buddy Walk"
           >
@@ -1775,14 +1964,16 @@ export default function MainScreen({ navigation }: Props) {
           <Pressable
             onPressIn={() => tap()}
             onPress={handleSignOutPress}
-            style={({ pressed }) => [styles.signOutButton, pressed && styles.signOutButtonPressed]}
+            style={({ pressed }) => [
+              styles.signOutButton,
+              pressed && styles.signOutButtonPressed,
+            ]}
             accessibilityRole="button"
             accessibilityLabel="Sign out of Buddy Walk"
           >
             <Text style={styles.signOutLabel}>Sign Out</Text>
           </Pressable>
         </View>
-
       </ScrollView>
       <CallAccessARideButton />
       <FeedbackModal
@@ -1797,7 +1988,7 @@ export default function MainScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: "#000",
   },
   scroll: {
     flexGrow: 1,
@@ -1805,341 +1996,397 @@ const styles = StyleSheet.create({
 
   // ─── Blue Section ───
   blueSection: {
-    backgroundColor: '#000',
+    backgroundColor: "#000",
     padding: 20,
-    alignItems: 'center',
+    alignItems: "center",
     gap: 16,
     minHeight: 320,
   },
   sectionLabel: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 20,
-    fontWeight: 'bold',
-    textAlign: 'center',
+    fontWeight: "bold",
+    textAlign: "center",
     letterSpacing: 0.5,
   },
   cameraButton: {
-    width: '100%',
+    width: "100%",
     borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: '#111',
-    alignItems: 'stretch',
+    overflow: "hidden",
+    backgroundColor: "#111",
+    alignItems: "stretch",
     borderWidth: 3,
-    borderColor: 'transparent',
-    position: 'relative',
+    borderColor: "transparent",
+    position: "relative",
   },
   cameraTouchOverlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 2,
   },
   cameraLabelBar: {
-    width: '100%',
-    backgroundColor: '#fff',
+    width: "100%",
+    backgroundColor: "#fff",
     zIndex: 3,
   },
   cameraCaptureBlock: {
-    width: '100%',
+    width: "100%",
     gap: 12,
   },
   captureActionRow: {
-    flexDirection: 'row',
-    gap: 10,
+    // flexDirection: "row",
+    // gap: 10,
+    flexDirection: "column",
+    gap: 16,
+    width: "100%",
   },
   captureActionButton: {
-    flex: 1,
-    borderRadius: 14,
+    // flex: 1,
+    // borderRadius: 14,
+    width: "100%",
+    borderRadius: 20,
+  },
+  captureActionContent: {
+    minHeight: 70,
+    justifyContent: "center",
+    paddingTop: 4,
   },
   capturePhotoButton: {
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   captureVideoButton: {
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   captureStopButton: {
-    backgroundColor: '#000',
+    backgroundColor: "#000",
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: "#fff",
   },
   stopVideoButton: {
     marginTop: 12,
     borderRadius: 14,
-    backgroundColor: '#000',
+    backgroundColor: "#000",
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: "#fff",
   },
   captureActionLabel: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    letterSpacing: 0.5,
-    color: '#000',
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: "bold",
+    letterSpacing: 2,
+    color: "#000",
   },
   captureActionLabelOnDark: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    letterSpacing: 0.5,
-    color: '#fff',
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: "bold",
+    letterSpacing: 2,
+    color: "#fff",
   },
   cameraButtonHolding: {
-    borderColor: '#fff',
-    backgroundColor: '#e8e8e8',
+    borderColor: "#fff",
+    backgroundColor: "#e8e8e8",
   },
   cameraButtonRecording: {
-    borderColor: '#fff',
-    backgroundColor: '#000',
+    borderColor: "#fff",
+    backgroundColor: "#000",
   },
   cameraButtonPressed: {
     opacity: 0.85,
     transform: [{ scale: 0.98 }],
   },
   cameraPreviewWrapper: {
-    width: '100%',
+    width: "100%",
     height: 260,
     minHeight: 260,
-    backgroundColor: '#1a1a1a',
-    position: 'relative',
-    overflow: 'hidden',
+    backgroundColor: "#1a1a1a",
+    position: "relative",
+    overflow: "hidden",
     borderRadius: 16,
   },
   cameraPreviewHolding: {
     borderBottomWidth: 4,
-    borderBottomColor: '#fff',
+    borderBottomColor: "#fff",
   },
   cameraPreviewRecording: {
     borderBottomWidth: 4,
-    borderBottomColor: '#888',
+    borderBottomColor: "#888",
   },
   cameraPreview: {
-    width: '100%',
-    height: '100%',
+    width: "100%",
+    height: "100%",
   },
   captureOverlayHolding: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "rgba(0, 0, 0, 0.45)",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 6,
   },
   captureOverlayRecording: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 10,
   },
   captureOverlayTitle: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 26,
-    fontWeight: '900',
+    fontWeight: "900",
     letterSpacing: 1.5,
-    textAlign: 'center',
-    textShadowColor: 'rgba(0,0,0,0.8)',
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.8)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
   },
   captureOverlaySub: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
-    fontWeight: '700',
-    textAlign: 'center',
-    textShadowColor: 'rgba(0,0,0,0.8)',
+    fontWeight: "700",
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.8)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
+  captureStatusLabel: {
+    fontSize: 24,
+    lineHeight: 32,
+    fontWeight: "bold",
+    textAlign: "center",
+    marginBottom: 14,
+  },
   recBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
-    backgroundColor: 'rgba(0,0,0,0.85)',
+    backgroundColor: "rgba(0,0,0,0.85)",
     borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: "#fff",
   },
   recDot: {
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   recBadgeText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 22,
-    fontWeight: '900',
+    fontWeight: "900",
     letterSpacing: 1,
-    fontVariant: ['tabular-nums'],
+    fontVariant: ["tabular-nums"],
   },
   recHint: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 15,
-    fontWeight: '700',
-    textShadowColor: 'rgba(0,0,0,0.85)',
+    fontWeight: "700",
+    textShadowColor: "rgba(0,0,0,0.85)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
   cameraButtonLabel: {
-    color: '#000',
+    color: "#000",
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: "bold",
     letterSpacing: 0.8,
     paddingVertical: 14,
-    textAlign: 'center',
+    textAlign: "center",
   },
   cameraButtonLabelHolding: {
-    color: '#000',
+    color: "#000",
   },
   cameraButtonLabelRecording: {
-    color: '#000',
+    color: "#000",
   },
   retakeButton: {
-    width: '100%',
+    width: "100%",
     borderRadius: 20,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     borderWidth: 3,
-    borderColor: '#000',
+    borderColor: "#000",
+  },
+  retakeButtonContent: {
+    minHeight: 70,
+    justifyContent: "center",
+    paddingVertical: 6,
   },
   retakeButtonPhoto: {
-    borderColor: '#000',
+    borderColor: "#000",
   },
   retakeButtonVideo: {
-    borderColor: '#000',
+    borderColor: "#000",
   },
   retakeLabel: {
-    color: '#000',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: "#000",
+    fontSize: 24,
+    lineHeight: 32,
+    fontWeight: "bold",
+    letterSpacing: 2,
+    textAlign: "center",
   },
 
   // ─── Gray Section ───
   graySection: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: "#1a1a1a",
     padding: 20,
     gap: 12,
   },
   textInput: {
-    backgroundColor: '#0e1116',
+    backgroundColor: "#0e1116",
     borderRadius: 12,
     padding: 14,
-    fontSize: 16,
-    color: '#fff',
-    minHeight: 56,
+    fontSize: 22, // increased font size
+    color: "#fff",
+    // minHeight: 56,
+    // minHeight: 120, // increase text box size
+    height: 120, // increase text box size
     borderWidth: 1,
-    borderColor: '#2a313c',
+    borderColor: "#2a313c",
   },
   voiceButton: {
-    backgroundColor: '#fff',
-    borderRadius: 40,
-    paddingVertical: 14,
-    paddingHorizontal: 28,
-    alignItems: 'center',
+    width: "100%",
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    paddingVertical: 20,
+    // paddingHorizontal: 28,
+    alignItems: "center",
+    justifyContent: "center",
   },
   voiceButtonActive: {
-    backgroundColor: '#000',
+    backgroundColor: "#000",
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: "#fff",
   },
   voiceButtonTranscribing: {
-    backgroundColor: '#333',
+    backgroundColor: "#333",
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: "#fff",
   },
   voiceButtonLabel: {
-    color: '#000',
-    fontSize: 18,
-    fontWeight: 'bold',
-    letterSpacing: 0.5,
+    color: "#000",
+    fontSize: 24,
+    fontWeight: "bold",
+    letterSpacing: 2,
+    textAlign: "center",
   },
   voiceButtonLabelOnDark: {
-    color: '#fff',
+    color: "#fff",
   },
 
   // ─── Green Section ───
   greenSection: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: "#1a1a1a",
     padding: 20,
     gap: 16,
     flexGrow: 1,
   },
   submitButton: {
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     borderRadius: 20,
     paddingVertical: 20,
-    alignItems: 'center',
+    alignItems: "center",
   },
   submitButtonPressed: {
-    backgroundColor: '#e0e0e0',
+    backgroundColor: "#e0e0e0",
   },
   submitLabel: {
-    color: '#000',
+    color: "#000",
     fontSize: 24,
-    fontWeight: 'bold',
+    fontWeight: "bold",
     letterSpacing: 2,
   },
   loadingContainer: {
-    alignItems: 'center',
+    alignItems: "center",
     gap: 12,
     paddingVertical: 20,
   },
   loadingText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
   },
   pendingQuestion: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 15,
-    textAlign: 'center',
+    textAlign: "center",
     paddingHorizontal: 8,
   },
   responseContainer: {
     gap: 12,
   },
   questionEcho: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: "600",
     lineHeight: 22,
   },
   responseActions: {
-    flexDirection: 'row',
-    gap: 12,
+    // flexDirection: "row",
+    // gap: 12,
+    width: "100%",
   },
+  // actionButton: {
+  //   backgroundColor: "#fff",
+  //   borderRadius: 40,
+  //   paddingVertical: 10,
+  //   paddingHorizontal: 20,
+  // },
+  // actionButtonLabel: {
+  //   color: "#000",
+  //   fontSize: 16,
+  //   fontWeight: "700",
+  // },
+  // enlarged action or play/pause button for testing
   actionButton: {
-    backgroundColor: '#fff',
-    borderRadius: 40,
-    paddingVertical: 10,
+    width: "100%",
+    minHeight: 70,
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    paddingVertical: 18,
     paddingHorizontal: 20,
+    alignItems: "center",
+    justifyContent: "center",
   },
+
   actionButtonLabel: {
-    color: '#000',
-    fontSize: 16,
-    fontWeight: '700',
+    color: "#000",
+    fontSize: 24,
+    lineHeight: 32,
+    fontWeight: "bold",
+    letterSpacing: 1,
+    textAlign: "center",
   },
   responseText: {
-    color: '#fff',
-    fontSize: 16,
-    lineHeight: 26,
+    color: "#fff",
+    // fontSize: 16,
+    // lineHeight: 26,
+    fontSize: 24,
+    lineHeight: 34,
+    fontWeight: "500",
   },
 
   // ─── Tools Section (Companion + Saved Places) ───
   toolsSection: {
-    backgroundColor: '#0e1116',
+    backgroundColor: "#0e1116",
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 90, // leave room above the floating call button
     gap: 12,
   },
   toolButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#161b22',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#161b22",
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#2a313c',
+    borderColor: "#2a313c",
     gap: 14,
   },
   toolButtonPressed: {
-    backgroundColor: '#1f2630',
+    backgroundColor: "#1f2630",
   },
   toolButtonIcon: {
     fontSize: 28,
@@ -2148,33 +2395,33 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   toolButtonTitle: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 17,
-    fontWeight: 'bold',
+    fontWeight: "bold",
     letterSpacing: 0.5,
   },
   toolButtonSubtitle: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 13,
     marginTop: 2,
     lineHeight: 18,
   },
   signOutButton: {
-    alignSelf: 'center',
+    alignSelf: "center",
     paddingVertical: 12,
     paddingHorizontal: 28,
     borderRadius: 40,
     borderWidth: 1,
-    borderColor: '#3a4150',
+    borderColor: "#3a4150",
     marginTop: 4,
   },
   signOutButtonPressed: {
-    backgroundColor: '#1f2630',
+    backgroundColor: "#1f2630",
   },
   signOutLabel: {
-    color: '#d6605d',
+    color: "#d6605d",
     fontSize: 15,
-    fontWeight: 'bold',
+    fontWeight: "bold",
     letterSpacing: 0.5,
   },
 });
