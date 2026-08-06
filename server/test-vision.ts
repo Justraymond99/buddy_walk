@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs"; 
-import sharp from "sharp"; 
+import sharp, { OverlayOptions } from "sharp";
 
 dotenv.config({ path: path.resolve(__dirname, "../mobile/.env") });
 
@@ -44,7 +44,7 @@ async function processEightDirectionTiles(lat: number, lng: number): Promise<{ h
     tilesData.push({ heading: hd, base64: `data:image/jpeg;base64,${buffer.toString("base64")}` });
   }
 
-  const compositeLayers: sharp.OverlayOptions[] = [];
+  const compositeLayers: OverlayOptions[] = [];
   rawBuffers.forEach((buffer, index) => {
     const leftOffset = index * 640;
     compositeLayers.push({ input: buffer, left: leftOffset, top: 0 });

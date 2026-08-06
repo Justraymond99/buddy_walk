@@ -21,7 +21,10 @@ export function parseDateQuery(value: unknown): Date | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
-export function buildDateFilter(req: Request, field = "serverTs"): Record<string, Date> | undefined {
+export function buildDateFilter(
+  req: Request, 
+  field = "serverTs"
+): Record<string, Record<string, Date>> | undefined {
   const since = parseDateQuery(req.query.since);
   const until = parseDateQuery(req.query.until);
   if (!since && !until) return undefined;

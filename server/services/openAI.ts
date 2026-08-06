@@ -11,7 +11,7 @@ import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
 import fs from "fs";
 import path from "path";
-import sharp from "sharp";
+import sharp, { OverlayOptions } from "sharp";
 import { json } from "stream/consumers";
 
 dotenv.config();
@@ -820,7 +820,7 @@ async function processEightDirectionTiles(lat: number, lng: number): Promise<{ h
     tilesData.push({ heading: hd, base64: `data:image/jpeg;base64,${buffer.toString("base64")}` });
   }
 
-  const compositeLayers: sharp.OverlayOptions[] = [];
+  const compositeLayers: OverlayOptions[] = [];
   rawBuffers.forEach((buffer, index) => {
     const leftOffset = index * 640;
     compositeLayers.push({ input: buffer, left: leftOffset, top: 0 });
