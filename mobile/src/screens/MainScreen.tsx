@@ -183,6 +183,8 @@ export default function MainScreen({ navigation }: Props) {
 
   const locationRef = useRef<Location.LocationObject | null>(null);
   const headingRef = useRef<number | null>(null);
+  const capturedPhotoHeadingRef = useRef<number | null>(null); // compass timing issue
+  const capturedPhotoLocationRef = useRef<Location.LocationObject | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
@@ -616,6 +618,16 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
     try {
+      // remove the compass & location belonging to the previous photo
+      capturedPhotoHeadingRef.current = null;
+      capturedPhotoLocationRef.current = null;
+
+      // capture the correct compass heading for the photo
+      const headingAtCapture = headingRef.current;
+
+      // capture the current location / GPS
+      const locationAtCapture = locationRef.current;
+
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.4,
@@ -627,6 +639,8 @@ export default function MainScreen({ navigation }: Props) {
         setCapturedVideoUri(null);
         setWebVideoFrames(null);
         setCapturedImage(dataUrl);
+        capturedPhotoHeadingRef.current = headingAtCapture;
+        capturedPhotoLocationRef.current = locationAtCapture;
         // disabled for testing
         // setUserInput("Describe the image");
         speak(
@@ -813,6 +827,7 @@ export default function MainScreen({ navigation }: Props) {
       submittedInputRef.current = "";
       setAiResponse("");
       setCapturedImage(null);
+      capturedPhotoHeadingRef.current = null;
       setCapturedVideoUri(null);
       setWebVideoFrames(null);
       setCurrentChatId("");
@@ -1213,7 +1228,7 @@ export default function MainScreen({ navigation }: Props) {
     );
 
     try {
-      let loc = locationRef.current;
+      let loc = capturedPhotoLocationRef.current; // captured photo location, not current location
       if (!loc) {
         loc = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
@@ -1224,7 +1239,9 @@ export default function MainScreen({ navigation }: Props) {
       const data = await sendLastMileRequest({
         lat: loc.coords.latitude,
         lng: loc.coords.longitude,
-        heading: headingRef.current ?? undefined,
+        // heading: headingRef.current ?? undefined,
+        gpsAccuracyMeters: loc.coords.accuracy ?? undefined,
+        heading: capturedPhotoHeadingRef.current ?? undefined, // fixes compass timing issue
         image: capturedImage,
         destination: rawDestination,
       });
