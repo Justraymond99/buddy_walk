@@ -54,7 +54,8 @@ import {
   resetAudioForPlayback,
 } from "../utils/audioSession";
 import { stopSpeaking, isSpeaking } from "../utils/speakText";
-import { announce, isScreenReaderActive } from "../utils/announce";
+import { announce, speakContent } from "../utils/announce";
+import { cueListening, cueCaptured, cueError } from "../utils/voiceFeedback";
 import { rotateConversationId } from "../utils/conversationSession";
 import {
   unlockWebAudioForPlayback,
@@ -83,9 +84,7 @@ const LOCATION_WAIT_MS = 1000;
 const SLOW_RESPONSE_HINT_MS = 4500;
 const VIDEO_RECORDING_START_VIBRATION = [0, 120, 80, 120] as const;
 const PHOTO_CAPTURED_VIBRATION = [0, 50] as const;
-const NO_SPEECH_VIBRATION_PATTERN = [0, 180, 120, 180];
 const NO_INTERNET_VIBRATION_PATTERN = [0, 250, 150, 250];
-const SPEECH_CAPTURED_VIBRATION_PATTERN = [0, 80];
 
 // Walking routes longer than this are almost always a bad geocode (e.g. a
 // Brooklyn park that resolved out-of-state) and are never practical for our
@@ -189,6 +188,10 @@ export default function MainScreen({ navigation }: Props) {
   const recDotOpacity = useRef(new Animated.Value(1)).current;
   const audioRecordingRef = useRef<Audio.Recording | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
+  /** Auto-endpointing state: set once real speech is heard, then used to time trailing silence. */
+  const speechHeardAtRef = useRef<number | null>(null);
+  const lastSpeechAtRef = useRef<number | null>(null);
+  const autoStopFiredRef = useRef(false);
   const voiceTranscriptRef = useRef("");
   const webAudioSessionRef = useRef<WebAudioSession | null>(null);
   const webSpeechSessionRef = useRef<WebSpeechSession | null>(null);
@@ -460,49 +463,35 @@ export default function MainScreen({ navigation }: Props) {
     [],
   );
 
+  /** Answers go through app TTS so pause/replay actually control them. */
+  const speakAnswer = useCallback((text: string) => {
+    speakContent(text, { preferDevice: true });
+  }, []);
+
   const toggleResponseSpeech = useCallback(async () => {
     if (!aiResponse.trim()) return;
     try {
       if (await isSpeaking()) {
         await stopSpeaking();
       } else {
-        speak(aiResponse);
+        speakAnswer(aiResponse);
       }
     } catch {
-      speak(aiResponse);
+      speakAnswer(aiResponse);
     }
-  }, [aiResponse, speak]);
+  }, [aiResponse, speakAnswer]);
 
   const notifyNoSpeechHeard = useCallback(() => {
-    Vibration.vibrate(NO_SPEECH_VIBRATION_PATTERN);
-    speak("I didn't catch that. Tap the voice button and speak again.");
+    void cueError();
+    speak("I didn't catch that. Ask again.");
   }, [speak]);
 
   const speakListeningPrompt = useCallback(async () => {
-    speak(
-      "Listening. Speak after this message, then tap again when finished.",
-      {
-        preferDevice: true,
-      },
-    );
-
-    // Do not let the microphone record Buddy Walk's own prompt. Screen readers
-    // do not expose completion state, so give their short announcement time to
-    // finish; app TTS can be observed directly.
-    if (Platform.OS !== "web" && isScreenReaderActive()) {
-      await new Promise((resolve) => setTimeout(resolve, 3500));
-      return;
-    }
-
-    const startDeadline = Date.now() + 1500;
-    while (Date.now() < startDeadline && !(await isSpeaking())) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    const finishDeadline = Date.now() + 6000;
-    while (Date.now() < finishDeadline && (await isSpeaking())) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }, [speak]);
+    // A haptic marks "mic is open" instantly and, unlike a spoken prompt, is
+    // inaudible to the microphone — so recording can begin right away instead
+    // of stalling several seconds waiting for speech to finish.
+    await cueListening();
+  }, []);
 
   const notifyNoInternetConnection = useCallback(() => {
     // The response text is set to "No internet connection." and the auto-speak
@@ -511,6 +500,12 @@ export default function MainScreen({ navigation }: Props) {
   }, []);
 
   const lastAutoSpokenRef = useRef("");
+  /**
+   * The transcript of a voice question awaiting its answer. Spoken as a short
+   * preamble on the answer so the user hears what was understood without a
+   * separate confirm-and-submit step.
+   */
+  const voicePreambleRef = useRef("");
 
   // ─── Auto-speak AI response once, then log ───────────────────────────────
 
@@ -521,7 +516,9 @@ export default function MainScreen({ navigation }: Props) {
     }
     if (lastAutoSpokenRef.current !== aiResponse) {
       lastAutoSpokenRef.current = aiResponse;
-      speak(aiResponse, { preferDevice: true });
+      const preamble = voicePreambleRef.current;
+      voicePreambleRef.current = "";
+      speakAnswer(preamble ? `For ${preamble}. ${aiResponse}` : aiResponse);
     }
 
     const loc = locationRef.current;
@@ -796,6 +793,7 @@ export default function MainScreen({ navigation }: Props) {
       linearPCMIsFloat: false,
     },
     web: {},
+    isMeteringEnabled: true,
   };
 
   const AZURE_CONTENT_TYPE =
@@ -804,6 +802,17 @@ export default function MainScreen({ navigation }: Props) {
       : "audio/aac";
 
   const MIN_VOICE_RECORDING_MS = 1200;
+
+  // Auto-endpointing. Metering is reported in dBFS (roughly -160 silent to 0
+  // loud); anything above the floor counts as speech. We only arm the silence
+  // timer once the user has actually said something, so someone who takes a
+  // moment to gather their thought is never cut off before they begin. The
+  // trailing window is deliberately generous — being cut off mid-sentence is
+  // far more costly than waiting an extra beat.
+  const VOICE_METERING_INTERVAL_MS = 100;
+  const VOICE_SILENCE_FLOOR_DB = -42;
+  const VOICE_TRAILING_SILENCE_MS = 1600;
+  const VOICE_MAX_RECORDING_MS = 30000;
   const LISTENING_PLACEHOLDER = "🎙 Listening… speak your question";
   const TRANSCRIBING_PLACEHOLDER = "⏳ Transcribing your question…";
 
@@ -900,21 +909,13 @@ export default function MainScreen({ navigation }: Props) {
       speak("Still loading the last answer. Please wait.");
       return;
     }
-    // speech to text goes into the textbox.
-    // do not send it automatically
     setUserInput(trimmed);
-    // setDisplayQuestion(trimmed);
-    Vibration.vibrate(SPEECH_CAPTURED_VIBRATION_PATTERN);
-    // AccessibilityInfo.announceForAccessibility(
-    //   `Question: ${trimmed}. Sending now.`,
-    // );
-    AccessibilityInfo.announceForAccessibility(
-      `Question transcribed: ${trimmed}. Review it, then tap submit.`,
-    );
-    speak(`Question transcribed: ${trimmed}. Review it, then tap submit.`, {
-      preferDevice: true,
-    });
-    // await handleSubmit(trimmed);
+    // Send immediately rather than asking the user to review a transcript and
+    // find the submit button. What was understood is spoken as a preamble on
+    // the answer, so they still get confirmation — just without paying an
+    // extra round of screen-reader navigation for it.
+    voicePreambleRef.current = trimmed;
+    await handleSubmit(trimmed);
   }
 
   async function toggleListening() {
@@ -923,6 +924,34 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
     await startListening();
+  }
+
+  /**
+   * VoiceOver's two-finger double-tap. Works anywhere on screen without moving
+   * focus, so a user who missed part of an answer can replay it without hunting
+   * for a control. Falls back to starting a new question when there is nothing
+   * to replay.
+   */
+  function handleMagicTap(): void {
+    void (async () => {
+      if (isListeningRef.current) {
+        await stopListening();
+        return;
+      }
+      try {
+        if (await isSpeaking()) {
+          await stopSpeaking();
+          return;
+        }
+      } catch {
+        /* fall through to replay */
+      }
+      if (aiResponse.trim()) {
+        speakAnswer(aiResponse);
+        return;
+      }
+      await startListening();
+    })();
   }
 
   async function transcribeWithAzure(
@@ -941,6 +970,45 @@ export default function MainScreen({ navigation }: Props) {
     }
     console.error("Azure STT unhandled status:", result.status);
     return null;
+  }
+
+  /**
+   * Ends the recording once the user stops talking, so asking a question costs
+   * one action instead of two. Re-locating the mic button to stop was the most
+   * awkward step in the flow for a screen-reader user.
+   */
+  function handleVoiceMetering(status: Audio.RecordingStatus): void {
+    if (autoStopFiredRef.current || !isListeningRef.current) return;
+    if (!status.isRecording) return;
+
+    const now = Date.now();
+    const startedAt = voiceRecordingStartedAtRef.current;
+
+    // Hard cap so a mic that never hears silence cannot record indefinitely.
+    if (startedAt != null && now - startedAt >= VOICE_MAX_RECORDING_MS) {
+      autoStopFiredRef.current = true;
+      void stopListening();
+      return;
+    }
+
+    const level = status.metering;
+    if (typeof level !== "number") return;
+
+    if (level > VOICE_SILENCE_FLOOR_DB) {
+      if (speechHeardAtRef.current == null) speechHeardAtRef.current = now;
+      lastSpeechAtRef.current = now;
+      return;
+    }
+
+    // Silence only counts once they have actually started speaking; otherwise a
+    // pause to collect a thought would end the recording before it began.
+    const lastSpeech = lastSpeechAtRef.current;
+    if (speechHeardAtRef.current == null || lastSpeech == null) return;
+    if (now - lastSpeech < VOICE_TRAILING_SILENCE_MS) return;
+    if (startedAt != null && now - startedAt < MIN_VOICE_RECORDING_MS) return;
+
+    autoStopFiredRef.current = true;
+    void stopListening();
   }
 
   async function startListening() {
@@ -1027,15 +1095,19 @@ export default function MainScreen({ navigation }: Props) {
 
     try {
       await prepareAudioForRecording();
+      speechHeardAtRef.current = null;
+      lastSpeechAtRef.current = null;
+      autoStopFiredRef.current = false;
       const { recording } = await Audio.Recording.createAsync(
         AZURE_RECORDING_OPTIONS,
+        handleVoiceMetering,
+        VOICE_METERING_INTERVAL_MS,
       );
       audioRecordingRef.current = recording;
       voiceRecordingStartedAtRef.current = Date.now();
       isListeningRef.current = true;
       setIsListening(true);
       setUserInput(LISTENING_PLACEHOLDER);
-      Vibration.vibrate(60);
       void track(Events.VoiceStarted);
     } catch (e) {
       console.error("startListening error:", e);
@@ -1067,9 +1139,8 @@ export default function MainScreen({ navigation }: Props) {
         setUserInput("");
         setIsTranscribing(false);
         isTranscribingRef.current = false;
-        speak(
-          "I did not hear enough speech. Tap the voice button, speak, then tap it again.",
-        );
+        void cueError();
+        speak("I didn't hear anything. Ask again.");
         return;
       }
 
@@ -1089,7 +1160,7 @@ export default function MainScreen({ navigation }: Props) {
           await new Promise((resolve) => setTimeout(resolve, 50));
           unlockWebAudioForPlayback();
         }
-        speak("Transcribing your question.", { preferDevice: true });
+        void cueCaptured();
 
         let text =
           liveText.trim() ||
@@ -1150,9 +1221,8 @@ export default function MainScreen({ navigation }: Props) {
         setIsTranscribing(false);
         isTranscribingRef.current = false;
         setUserInput("");
-        speak(
-          "I did not hear enough speech. Tap the voice button, speak, then tap it again.",
-        );
+        void cueError();
+        speak("I didn't hear anything. Ask again.");
         return;
       }
       setIsTranscribing(true);
@@ -1165,7 +1235,7 @@ export default function MainScreen({ navigation }: Props) {
       audioRecordingRef.current = null;
       await new Promise((resolve) => setTimeout(resolve, 150));
       await resetAudioForPlayback();
-      speak("Transcribing your question.", { preferDevice: true });
+      void cueCaptured();
 
       if (!uri || !azureTokenRef.current) {
         setIsTranscribing(false);
@@ -1652,7 +1722,11 @@ export default function MainScreen({ navigation }: Props) {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+    <SafeAreaView
+      style={styles.container}
+      edges={["top", "bottom"]}
+      onMagicTap={handleMagicTap}
+    >
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
@@ -1876,10 +1950,11 @@ export default function MainScreen({ navigation }: Props) {
                 </Pressable>
               </View>
 
-              <Text
-                style={styles.responseText}
-                accessibilityLabel={`AI Response: ${aiResponse}`}
-              >
+              {/* No accessibilityLabel: an explicit label overrides the text
+                  content and VoiceOver then reads the whole answer as one
+                  indivisible string. Leaving it as plain text lets the rotor
+                  move through it by line or word. */}
+              <Text style={styles.responseText} accessibilityRole="text">
                 {aiResponse}
               </Text>
 
