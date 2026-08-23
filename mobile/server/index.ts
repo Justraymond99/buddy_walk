@@ -19,6 +19,7 @@ import {
   mountAiProxy,
   mountSpeechProxy,
   mountMtaProxy,
+  mountLastMileProxy,
 } from "./middleware/upstreamProxy";
 import { isMongoConnected } from "./database/usageStore";
 import { TranscribeController } from "./controllers/transcribe";
@@ -58,7 +59,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 
   const routing = getServiceRouting();
   console.log(
-    `[server] Capability routing — ai=${routing.ai}, speech=${routing.speech}, mta=${routing.mta}`
+    `[server] Capability routing — ai=${routing.ai}, speech=${routing.speech}, mta=${routing.mta}, lastMile=${routing.lastMile}`
   );
 
 
@@ -112,6 +113,12 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     app.use("/api", openAIRoute);
   } else {
     mountAiProxy(app);
+  }
+
+  // Last Meters is on openAIRoute when AI is local. When it is proxied, the
+  // handler still stores the user photo on this host for the dashboard.
+  if (routing.lastMile === 'proxy') {
+    mountLastMileProxy(app);
   }
 
   app.use("/api/db", chatLogRoute)

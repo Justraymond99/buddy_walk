@@ -13,6 +13,8 @@ const CREDENTIAL_VARS = [
   'AZURE_SUBSCRIPTION_KEY',
   'AZURE_REGION',
   'MTA_API_KEY',
+  'GOOGLE_MAPS_API_KEY',
+  'GOOGLE_API_KEY',
   'ZERO_CONFIG',
 ];
 
@@ -33,6 +35,7 @@ describe('serverMode', () => {
       ai: 'proxy',
       speech: 'proxy',
       mta: 'proxy',
+      lastMile: 'proxy',
     });
     assert.equal(describeServerMode().mode, 'zero-config');
     assert.equal(isZeroConfigMode(), true);
@@ -44,10 +47,12 @@ describe('serverMode', () => {
     process.env.AZURE_SUBSCRIPTION_KEY = 'azure-test';
     process.env.AZURE_REGION = 'eastus';
     process.env.MTA_API_KEY = 'mta-test';
+    process.env.GOOGLE_MAPS_API_KEY = 'maps-test';
     assert.deepEqual(getServiceRouting(), {
       ai: 'local',
       speech: 'local',
       mta: 'local',
+      lastMile: 'local',
     });
     assert.equal(describeServerMode().mode, 'self-hosted');
     assert.equal(isZeroConfigMode(), false);
@@ -63,6 +68,7 @@ describe('serverMode', () => {
     assert.equal(routing.ai, 'local');
     assert.equal(routing.speech, 'proxy');
     assert.equal(routing.mta, 'proxy');
+    assert.equal(routing.lastMile, 'proxy');
     assert.equal(describeServerMode().mode, 'mixed');
   });
 
@@ -97,6 +103,7 @@ describe('serverMode', () => {
       ai: 'proxy',
       speech: 'proxy',
       mta: 'proxy',
+      lastMile: 'proxy',
     });
   });
 
@@ -107,7 +114,17 @@ describe('serverMode', () => {
       ai: 'local',
       speech: 'local',
       mta: 'local',
+      lastMile: 'local',
     });
+  });
+
+  it('keeps Last Meters on the proxy unless both AI and Maps keys exist', () => {
+    clearCredentials();
+    process.env.OPENAI_API_KEY = 'sk-test';
+    assert.equal(getServiceRouting().lastMile, 'proxy');
+
+    process.env.GOOGLE_MAPS_API_KEY = 'maps-test';
+    assert.equal(getServiceRouting().lastMile, 'local');
   });
 
   it('reports the upstream whenever anything is still proxied', () => {

@@ -32,6 +32,11 @@ export function hasOwnMtaKey(): boolean {
   return allPresent('MTA_API_KEY');
 }
 
+/** Google Maps / Street View, used by Last Meters for panoramas and geocoding. */
+export function hasOwnMapsKey(): boolean {
+  return anyPresent('GOOGLE_MAPS_API_KEY', 'GOOGLE_API_KEY');
+}
+
 export function getUpstreamApiRoot(): string {
   const raw = (process.env.UPSTREAM_API_ROOT || DEFAULT_UPSTREAM).trim();
   return raw.replace(/\/+$/, '').replace(/\/api$/i, '');
@@ -43,6 +48,11 @@ export type ServiceRouting = {
   ai: ServiceRoute;
   speech: ServiceRoute;
   mta: ServiceRoute;
+  /**
+   * Last Meters AI/Maps work can run upstream. Photos are still stored here
+   * when the request is proxied, so the Render dashboard does not go blank.
+   */
+  lastMile: ServiceRoute;
 };
 
 function route(hasKeys: boolean): ServiceRoute {
@@ -57,26 +67,22 @@ function route(hasKeys: boolean): ServiceRoute {
 export function getServiceRouting(): ServiceRouting {
   const flag = process.env.ZERO_CONFIG?.trim().toLowerCase();
   if (flag === '1' || flag === 'true') {
-    return { ai: 'proxy', speech: 'proxy', mta: 'proxy' };
+    return { ai: 'proxy', speech: 'proxy', mta: 'proxy', lastMile: 'proxy' };
   }
   if (flag === '0' || flag === 'false') {
-    return { ai: 'local', speech: 'local', mta: 'local' };
+    return { ai: 'local', speech: 'local', mta: 'local', lastMile: 'local' };
   }
   return {
     ai: route(hasOwnAiKeys()),
     speech: route(hasOwnSpeechKeys()),
     mta: route(hasOwnMtaKey()),
+    lastMile: route(hasOwnAiKeys() && hasOwnMapsKey()),
   };
 }
 
 /** True when at least one capability still depends on the upstream proxy. */
 export function isZeroConfigMode(): boolean {
-  const routing = getServiceRouting();
-  return (
-    routing.ai === 'proxy' ||
-    routing.speech === 'proxy' ||
-    routing.mta === 'proxy'
-  );
+  return Object.values(getServiceRouting()).some((value) => value === 'proxy');
 }
 
 export function describeServerMode(): {
@@ -86,7 +92,7 @@ export function describeServerMode(): {
   storage: 'mongo' | 'memory';
 } {
   const routing = getServiceRouting();
-  const values = [routing.ai, routing.speech, routing.mta];
+  const values = Object.values(routing);
   const allProxy = values.every((value) => value === 'proxy');
   const allLocal = values.every((value) => value === 'local');
 

@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import lastMileTestLogModel, {
   lastMileTestLogInterface,
 } from "../database/models/lastMileTestLog";
@@ -6,6 +7,21 @@ import {
   memoryLastMileTests,
   pushMemoryLastMileTest,
 } from "../database/usageStore";
+
+export async function compressUserPhoto(dataUrl: string): Promise<string> {
+  try {
+    const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+    const outputBuffer = await sharp(Buffer.from(base64Data, "base64"))
+      .rotate()
+      .resize({ width: 1024, withoutEnlargement: true })
+      .jpeg({ quality: 76 })
+      .toBuffer();
+    return `data:image/jpeg;base64,${outputBuffer.toString("base64")}`;
+  } catch (error) {
+    console.error("[LastMileTestLog] failed to compress user photo for storage:", error);
+    return dataUrl;
+  }
+}
 
 export class LastMileTestLogService {
   async record(input: Omit<lastMileTestLogInterface, "serverTs">): Promise<string | undefined> {
