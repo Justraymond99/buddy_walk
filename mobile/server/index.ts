@@ -14,15 +14,19 @@ import lastMileTestLogRoute from "./routes/lastMileTestLog"
 import mongoose from "mongoose";
 import { config } from "./database";
 import { setCompanionMemoryStore } from "./database/companionStoreMode";
-import { describeServerMode, isZeroConfigMode } from "./config/serverMode";
-import { mountUpstreamProxy } from "./middleware/upstreamProxy";
+import { describeServerMode, getServiceRouting } from "./config/serverMode";
+import {
+  mountAiProxy,
+  mountSpeechProxy,
+  mountMtaProxy,
+} from "./middleware/upstreamProxy";
 import { isMongoConnected } from "./database/usageStore";
-import { OpenAIController } from "./controllers/openAI";
+import { TranscribeController } from "./controllers/transcribe";
 import lastMileTestLogModel from "./database/models/lastMileTestLog";
 
 dotenv.config();
 
-const openAIController = new OpenAIController();
+const transcribeController = new TranscribeController();
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
@@ -52,12 +56,10 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     setCompanionMemoryStore(true);
   }
 
-  const zeroConfig = isZeroConfigMode();
-  if (zeroConfig) {
-    console.log("[server] Running in zero-config mode (no API keys / DB required).");
-  } else {
-    console.log("[server] Running in self-hosted mode (local OpenAI/Gemini keys).");
-  }
+  const routing = getServiceRouting();
+  console.log(
+    `[server] Capability routing — ai=${routing.ai}, speech=${routing.speech}, mta=${routing.mta}`
+  );
 
 
   app.use(cors({
@@ -84,17 +86,32 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     next();
   });
 
-  if (zeroConfig) {
-    mountUpstreamProxy(app);
-    // Last meters is new and requires local OpenAI + Google Maps keys —
-    // keep the route on this host even when other AI routes are proxied.
-    app.post('/api/last-mile', (req, res) => {
-      void openAIController.lastMileRequest(req, res);
-    });
+  // Speech is registered before openAIRoute because that router also declares
+  // /api/transcribe; Express keeps the first matching route, so this decides
+  // whether transcription runs locally or upstream regardless of AI routing.
+  if (routing.speech === 'local') {
+    app.use("/api/token", tokenRoute);
+    app.post(
+      '/api/transcribe',
+      express.raw({ type: '*/*', limit: '10mb' }),
+      (req, res) => {
+        void transcribeController.transcribe(req, res);
+      }
+    );
   } else {
-    app.use("/api", openAIRoute)
-    app.use("/api/token", tokenRoute)
-    app.use("/api", mtaRoute)
+    mountSpeechProxy(app);
+  }
+
+  if (routing.mta === 'local') {
+    app.use("/api", mtaRoute);
+  } else {
+    mountMtaProxy(app);
+  }
+
+  if (routing.ai === 'local') {
+    app.use("/api", openAIRoute);
+  } else {
+    mountAiProxy(app);
   }
 
   app.use("/api/db", chatLogRoute)
@@ -110,6 +127,9 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       service: 'buddy-walk-api',
       mode: mode.mode,
       upstream: mode.upstream,
+      // Per-capability routing makes a misconfigured service visible here
+      // instead of only surfacing as a 500 from the endpoint itself.
+      routing: mode.routing,
       storage: isMongoConnected() ? 'mongo' : 'memory',
     });
   });

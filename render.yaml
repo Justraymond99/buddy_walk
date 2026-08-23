@@ -8,9 +8,13 @@
 # After deploy, open:
 #   https://buddy-walk-api.onrender.com/usage?token=YOUR_ADMIN_TOKEN
 #
-# If API keys are missing, AI / speech / MTA requests are proxied to
-# buddywalk.app in the background. Telemetry, feedback, chat logs, thumbs, and
-# companion data stay on YOUR server.
+# Each capability is decided independently on its own credentials: AI needs
+# OPENAI_API_KEY or GEMINI_API_KEY, speech needs AZURE_SUBSCRIPTION_KEY plus
+# AZURE_REGION, and MTA needs MTA_API_KEY. Anything without its keys is proxied
+# to buddywalk.app, so adding one key never disables an unrelated service.
+# /api/health reports the live routing for each.
+#
+# Telemetry, feedback, chat logs, thumbs, and companion data stay on YOUR server.
 services:
   - type: web
     name: buddy-walk-api
@@ -30,3 +34,10 @@ services:
         generateValue: true
       - key: UPSTREAM_API_ROOT
         value: https://buddywalk.app
+      # Secrets are declared here but never stored in the repo. sync: false
+      # means Render keeps the value in the dashboard only. Set both Azure
+      # values or neither — speech falls back to the proxy unless both exist.
+      - key: AZURE_SUBSCRIPTION_KEY
+        sync: false
+      - key: AZURE_REGION
+        sync: false

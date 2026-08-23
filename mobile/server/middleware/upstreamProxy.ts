@@ -162,21 +162,30 @@ async function forwardRaw(req: Request, res: Response, upstreamPath: string): Pr
   }
 }
 
-/** Mount proxy routes for AI, speech token, and MTA when running without local keys. */
-export function mountUpstreamProxy(app: Application): void {
-  const upstreamRoot = getUpstreamApiRoot();
-  console.log(
-    `[server] Zero-config mode — proxying AI/speech/MTA to ${upstreamRoot}; metrics stored locally`
-  );
-
+/** Text generation and TTS — needs OPENAI_API_KEY / GEMINI_API_KEY locally. */
+export function mountAiProxy(app: Application): void {
+  console.log(`[server] Proxying AI to ${getUpstreamApiRoot()}; metrics stored locally`);
   app.post('/api/text', (req, res) => forwardJson(req, res, '/api/text'));
   app.post('/api/parseRequest', (req, res) => forwardJson(req, res, '/api/parseRequest'));
   app.post('/api/audio', (req, res) => forwardBinary(req, res, '/api/audio'));
+  // Last Meters needs an OpenAI key too, so without one it has to go upstream
+  // rather than be mounted locally where it could only ever fail.
+  app.post('/api/last-mile', (req, res) => forwardJson(req, res, '/api/last-mile'));
+}
+
+/** Azure Speech — needs AZURE_SUBSCRIPTION_KEY and AZURE_REGION locally. */
+export function mountSpeechProxy(app: Application): void {
+  console.log(`[server] Proxying speech to ${getUpstreamApiRoot()}`);
+  app.get('/api/token/getToken', (req, res) => forwardJson(req, res, '/api/token/getToken'));
   app.post(
     '/api/transcribe',
     express.raw({ type: '*/*', limit: '10mb' }),
     (req, res) => forwardRaw(req, res, '/api/transcribe')
   );
-  app.get('/api/token/getToken', (req, res) => forwardJson(req, res, '/api/token/getToken'));
+}
+
+/** MTA arrivals — needs MTA_API_KEY locally. */
+export function mountMtaProxy(app: Application): void {
+  console.log(`[server] Proxying MTA to ${getUpstreamApiRoot()}`);
   app.post('/api/mta', (req, res) => forwardJson(req, res, '/api/mta'));
 }
