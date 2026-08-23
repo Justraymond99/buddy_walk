@@ -92,26 +92,13 @@ async function forwardJson(req: Request, res: Response, upstreamPath: string): P
       await recordProxyMetrics(req, upstreamRes, startedAt, upstreamPath.includes('parse') ? 'parse' : 'text');
     }
 
-    let payload: unknown = upstreamRes.data;
-    if (upstreamPath === '/api/last-mile') {
-      payload = await recordProxiedLastMile(req, upstreamRes, startedAt);
-    }
-
     res.status(upstreamRes.status);
     if (upstreamRes.headers['content-type']) {
       res.set('Content-Type', upstreamRes.headers['content-type']);
     }
-    res.send(payload);
+    res.send(upstreamRes.data);
   } catch (error) {
     console.error(`[upstreamProxy] ${upstreamPath} failed:`, error);
-    if (upstreamPath === '/api/last-mile') {
-      const localId = await recordProxiedLastMileFailure(req, startedAt, error);
-      res.status(502).json({
-        error: 'Upstream API unavailable',
-        testLogId: localId,
-      });
-      return;
-    }
     res.status(502).json({ error: 'Upstream API unavailable' });
   }
 }
@@ -191,67 +178,6 @@ function pickNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-/**
- * Last Meters photos live on THIS host even when the AI/Maps work happens
- * on buddywalk.app. The upstream response never includes the user photo,
- * so we persist it from the request body before returning.
- */
-async function recordProxiedLastMile(
-  req: Request,
-  upstreamRes: AxiosResponse,
-  startedAt: number
-): Promise<unknown> {
-  const body = asRecord(req.body);
-  const upstream = asRecord(upstreamRes.data);
-  const image = pickString(body.image) ?? '';
-  const destination = pickString(body.destination) ?? 'unknown destination';
-  const success = upstreamRes.status >= 200 && upstreamRes.status < 300;
-  const output = pickString(upstream.output);
-  const warning = pickString(upstream.warning);
-  const error =
-    pickString(upstream.error) ||
-    (success ? warning : `Upstream Last Meters returned ${upstreamRes.status}`);
-
-  const userPhoto = image ? await compressUserPhoto(image) : 'data:,';
-  const testLogId = await lastMileTestLogService.record({
-    destination,
-    lat: pickNumber(body.lat) ?? 0,
-    lng: pickNumber(body.lng) ?? 0,
-    userPhoto,
-    panoramaHeadings: [],
-    gpsAccuracyMeters: pickNumber(body.gpsAccuracyMeters),
-    deviceHeading: pickNumber(body.heading),
-    navigationMode:
-      upstream.mode === 'approach' || upstream.mode === 'exact' || upstream.mode === 'aligned'
-        ? upstream.mode
-        : undefined,
-    finalOutput: output,
-    steps: [
-      {
-        name: 'proxied_last_mile',
-        prompt: 'Forwarded to buddywalk.app. User photo stored locally for the Render dashboard.',
-        response: output ?? error ?? '',
-        model: 'upstream-proxy',
-        success,
-        error: success ? undefined : error,
-      },
-    ],
-    success,
-    error: success ? undefined : error,
-    latencyMs: Date.now() - startedAt,
-  });
-
-  await recordProxyMetrics(req, upstreamRes, startedAt, 'last_mile');
-
-  if (Array.isArray(upstreamRes.data) || typeof upstreamRes.data !== 'object' || upstreamRes.data == null) {
-    return upstreamRes.data;
-  }
-  return {
-    ...upstream,
-    testLogId: testLogId ?? upstream.testLogId,
-  };
-}
-
 async function recordProxiedLastMileFailure(
   req: Request,
   startedAt: number,
@@ -292,15 +218,131 @@ export function mountAiProxy(app: Application): void {
   app.post('/api/audio', (req, res) => forwardBinary(req, res, '/api/audio'));
 }
 
+function lastMetersTextPrompt(destination: string): string {
+  return (
+    `Help me reach the entrance of ${destination}.\n\n` +
+    `[Last meters: I attached an image of my surroundings. ` +
+    `CRITICAL: do not just read GPS directions. Analyze the image and use it to ` +
+    `guide me exactly to the physical door or entrance relative to my current view.]`
+  );
+}
+
 /**
- * Last Meters AI/Maps work is done on buddywalk.app. The user photo is still
- * stored on this host so the Render dashboard keeps showing test imagery.
+ * buddywalk.app does not expose /api/last-mile (it 404s). Last Meters still
+ * works there as a text+image request, so we rewrite instead of forwarding
+ * the dedicated route. The user photo is stored on this host.
+ */
+async function forwardLastMileViaText(req: Request, res: Response): Promise<void> {
+  const startedAt = Date.now();
+  const body = asRecord(req.body);
+  const destination = pickString(body.destination);
+  const image = pickString(body.image);
+  const lat = pickNumber(body.lat);
+  const lng = pickNumber(body.lng);
+
+  if (!destination || !image || lat === undefined || lng === undefined) {
+    res.status(400).json({ error: 'Missing required fields' });
+    return;
+  }
+
+  const upstreamRoot = getUpstreamApiRoot();
+  const textBody = {
+    text: lastMetersTextPrompt(destination),
+    image: [image],
+    coords: {
+      latitude: lat,
+      longitude: lng,
+      accuracy: pickNumber(body.gpsAccuracyMeters) ?? null,
+      heading: pickNumber(body.heading) ?? null,
+    },
+    analytics: {
+      feature: 'last_mile',
+    },
+  };
+
+  try {
+    const upstreamRes = await axios({
+      method: 'POST',
+      url: `${upstreamRoot}/api/text`,
+      data: textBody,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...pickForwardHeaders(req),
+      },
+      validateStatus: () => true,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+      timeout: 180_000,
+    });
+
+    const output = extractOutputText(upstreamRes.data);
+    const success = upstreamRes.status >= 200 && upstreamRes.status < 300;
+    const error = success
+      ? undefined
+      : pickString(asRecord(upstreamRes.data).error) ??
+        `Upstream text returned ${upstreamRes.status}`;
+
+    const testLogId = await lastMileTestLogService.record({
+      destination,
+      lat,
+      lng,
+      userPhoto: await compressUserPhoto(image),
+      panoramaHeadings: [],
+      gpsAccuracyMeters: pickNumber(body.gpsAccuracyMeters),
+      deviceHeading: pickNumber(body.heading),
+      navigationMode: 'exact',
+      finalOutput: output,
+      steps: [
+        {
+          name: 'proxied_last_mile_text',
+          prompt: 'Rewrote Last Meters as /api/text because buddywalk.app has no /api/last-mile.',
+          response: output ?? error ?? '',
+          model: 'upstream-text',
+          success,
+          error,
+        },
+      ],
+      success,
+      error,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    await recordProxyMetrics(
+      { ...req, body: { ...textBody, text: destination } } as Request,
+      upstreamRes,
+      startedAt,
+      'last_mile'
+    );
+
+    res.status(success ? 200 : upstreamRes.status);
+    res.json({
+      output,
+      testLogId,
+      mode: 'exact',
+      warning: error,
+    });
+  } catch (error) {
+    console.error('[upstreamProxy] last-mile via /api/text failed:', error);
+    const localId = await recordProxiedLastMileFailure(req, startedAt, error);
+    res.status(502).json({
+      error: 'Upstream API unavailable',
+      testLogId: localId,
+    });
+  }
+}
+
+/**
+ * Last Meters is rewritten to buddywalk.app /api/text because that host has
+ * the AI keys but no /api/last-mile route. User photos stay on this host.
  */
 export function mountLastMileProxy(app: Application): void {
   console.log(
-    `[server] Proxying Last Meters to ${getUpstreamApiRoot()}; user photos stored locally`
+    `[server] Last Meters → ${getUpstreamApiRoot()}/api/text; user photos stored locally`
   );
-  app.post('/api/last-mile', (req, res) => forwardJson(req, res, '/api/last-mile'));
+  app.post('/api/last-mile', (req, res) => {
+    void forwardLastMileViaText(req, res);
+  });
 }
 
 /** Azure Speech — needs AZURE_SUBSCRIPTION_KEY and AZURE_REGION locally. */
