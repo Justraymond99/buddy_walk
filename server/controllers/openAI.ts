@@ -1,10 +1,12 @@
 import {OpenAIService} from "../services/openAI";
 import { GeminiService } from "../services/gemini";
+import { LastMileService } from "../services/lastMile";
 import {textRequestBody} from "../types";
 import { Request, Response } from "express";
 import { getPanoramaData } from "../services/doorfront"
 
 const openAIService = new OpenAIService();
+const lastMileService = new LastMileService();
 // const openAIService = new GeminiService();
 
 export class OpenAIController {
@@ -38,15 +40,22 @@ export class OpenAIController {
   async lastMileRequest(req: Request, res: Response) {
     try {
       const { lat, lng, image, destination } = req.body;
-      if (!lat || !lng || !image || !destination) {
-        return res.status(400).json({ error: "Missing required fields" });
+      const validCoordinates = Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+      if (!validCoordinates || !image || !destination?.trim()) {
+        return res.status(400).json({ error: "Missing or invalid required fields" });
       }
       if (!process.env.OPENAI_API_KEY?.trim() || !process.env.GOOGLE_API_KEY?.trim()) {
         return res.status(503).json({
           error: "Last Meters requires OPENAI_API_KEY and GOOGLE_API_KEY on this backend.",
         });
       }
-      await openAIService.lastMileRequest({ req, res }, lat, lng, image, destination);
+      await lastMileService.handle(
+        { req, res },
+        Number(lat),
+        Number(lng),
+        image,
+        destination.trim(),
+      );
     } catch (error) {
       res.status(500).json({ error: "Internal server error" });
     }
