@@ -1,10 +1,12 @@
 import {OpenAIService} from "../services/openAI";
 import { GeminiService } from "../services/gemini";
+import { LastMileService } from "../services/lastMile";
 import {textRequestBody} from "../types";
 import { Request, Response } from "express";
 import { getPanoramaData } from "../services/doorfront"
 
 const openAIService = new OpenAIService();
+const lastMileService = new LastMileService();
 // const openAIService = new GeminiService();
 
 export class OpenAIController {
@@ -51,33 +53,10 @@ export class OpenAIController {
   
   async lastMileRequest(req: Request, res: Response) {
     try {
-      const { lat, lng, gpsAccuracyMeters, heading, image, destination } = req.body;
-      if (
-        typeof lat !== "number" ||
-        typeof lng !== "number" ||
-        (
-          heading !== undefined &&
-          (
-            typeof heading !== "number" ||
-            !Number.isFinite(heading) ||
-            heading < 0 ||
-            heading >= 360
-          )
-        ) ||
-        (
-          gpsAccuracyMeters !== undefined &&
-          (
-            typeof gpsAccuracyMeters !== "number" ||
-            !Number.isFinite(gpsAccuracyMeters) ||
-            gpsAccuracyMeters < 0
-          )
-        ) ||
-        typeof image !== "string" ||
-        !image ||
-        typeof destination !== "string" ||
-        !destination.trim()
-      ) {
-        return res.status(400).json({ error: "Missing required fields" });
+      const { lat, lng, image, destination } = req.body;
+      const validCoordinates = Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+      if (!validCoordinates || !image || !destination?.trim()) {
+        return res.status(400).json({ error: "Missing or invalid required fields" });
       }
       const googleMapsApiKey =
         process.env.GOOGLE_MAPS_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
@@ -86,14 +65,12 @@ export class OpenAIController {
           error: "Last Meters requires OPENAI_API_KEY and GOOGLE_MAPS_API_KEY on this backend.",
         });
       }
-      await openAIService.lastMileRequest(
+      await lastMileService.handle(
         { req, res },
-        lat,
-        lng,
+        Number(lat),
+        Number(lng),
         image,
-        destination,
-        heading,
-        gpsAccuracyMeters
+        destination.trim(),
       );
     } catch (error) {
       res.status(500).json({ error: "Internal server error" });

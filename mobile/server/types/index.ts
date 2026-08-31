@@ -54,10 +54,14 @@ Rules:
 - Spell out street types for TTS: avenue, street, boulevard (not ave, st, blvd).
 - For directions, use contextual left/right/straight from the user's heading, not compass north/south.
 - Heading: 0=north, 90=east, 180=south, 270=west.
+
+Source and confidence:
+- Name the source for each claim (Google Maps, Street View, phone GPS/compass, AI image comparison, AI storefront recognition).
+- Include a 0-100% confidence for AI judgments. Below 70% is uncertain — say so and ask for another photo or confirmation.
 `;
 
-export const imagePrompt = `Image questions: answer in 1-3 sentences from the attached image only. If no image attached, say "There is no image attached, please try again."`
-export const videoPrompt = `Video questions: describe what happens in 2-4 short sentences using the frames in order. Never say "frame". If no frames, say "There is no video attached, please try again."`
+export const imagePrompt = `Image questions: answer in 1-3 sentences from the attached image only. If no image attached, say "There is no image attached, please try again." Label visual judgments as AI image recognition with a 0-100% confidence score; below 70% is uncertain.`
+export const videoPrompt = `Video questions: describe what happens in 2-4 short sentences using the frames in order. Never say "frame". If no frames, say "There is no video attached, please try again." Label visual judgments as AI recognition with a 0-100% confidence score; below 70% is uncertain.`
 
 export const nearbyPlacesPrompt = `For nearby places or transit: closest option first. At most 2 results unless the user asked for more.`
 
@@ -67,16 +71,18 @@ Max 2 upcoming trains per direction. No other lines. No invented times.`
 
 export const entrancePrompt = `Entrances: only use provided doorfront data and images. 2-4 short sentences max.
 Describe knob location, door type, stairs/ramps. No raw bounding-box data.
-If no data: say entrance info is unavailable at doorfront.org.`
+If no data: say entrance info is unavailable at doorfront.org.
+Label storefront/entrance recognition as AI storefront recognition with 0-100% confidence; below 70% is uncertain.`
 
 export const directionsPrompt = 
 `Directions: 3-5 short steps max. Total walk time first if known.
 Use map landmarks briefly. Do not read every Google step verbatim.
 If no photo or video is attached: use the map route and location data only.
 If a photo or video frames are attached: CRITICAL — analyze the visual input and merge it with the map route for last-meters navigation. Do not ignore the image/video. Tell the user which visible entrance, door, storefront, sign, or landmark to move toward relative to their current view.
-If no data, say directions are unavailable.`
+If no data, say directions are unavailable.
+Identify Google Maps directions as Google Maps data, phone heading as GPS/compass data, and visual interpretation as AI recognition with 0-100% confidence.`
 
-export const crossStreetsPrompt = `Cross streets: name the 2 nearest intersecting streets only.`
+export const crossStreetsPrompt = `Cross streets: name the 2 nearest intersecting streets only. Identify the map as the source; visual street-name guesses need an AI recognition label and confidence score.`
 
 export const openAITools= [
   {

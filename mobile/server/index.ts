@@ -109,16 +109,15 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     mountMtaProxy(app);
   }
 
+  // Register before openAIRoute so proxy mode wins when Maps keys are absent.
+  if (routing.lastMile === 'proxy') {
+    mountLastMileProxy(app);
+  }
+
   if (routing.ai === 'local') {
     app.use("/api", openAIRoute);
   } else {
     mountAiProxy(app);
-  }
-
-  // Last Meters is on openAIRoute when AI is local. When it is proxied, the
-  // handler still stores the user photo on this host for the dashboard.
-  if (routing.lastMile === 'proxy') {
-    mountLastMileProxy(app);
   }
 
   app.use("/api/db", chatLogRoute)

@@ -54,7 +54,8 @@ export async function sendLastMileRequest(data: {
   mode?: 'approach' | 'exact' | 'aligned';
   warning?: string;
 }> {
-  // Last Meters is hosted on Render; buddywalk.app does not expose this route.
+  // Last Meters hits Render; when Maps+OpenAI keys are absent it is rewritten to
+  // buddywalk.app /api/text upstream.
   try {
     const res = await withNetworkRetry(() =>
       apiClient.post('/last-mile', data, { timeout: 180_000 })
