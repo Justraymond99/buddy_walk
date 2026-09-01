@@ -5,9 +5,17 @@ import {textRequestBody} from "../types";
 import { Request, Response } from "express";
 import { getPanoramaData } from "../services/doorfront"
 
-const openAIService = new OpenAIService();
+function createTextAiService(): OpenAIService | GeminiService {
+  const hasOpenAi = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const hasGemini = Boolean(process.env.GEMINI_API_KEY?.trim());
+  if (hasGemini && !hasOpenAi) {
+    return new GeminiService();
+  }
+  return new OpenAIService();
+}
+
+const openAIService = createTextAiService();
 const lastMileService = new LastMileService();
-// const openAIService = new GeminiService();
 
 export class OpenAIController {
 

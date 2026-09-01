@@ -41,3 +41,10 @@ services:
         sync: false
       - key: AZURE_REGION
         sync: false
+      # Set at least one AI key so Q&A works when buddywalk.app upstream is down.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false

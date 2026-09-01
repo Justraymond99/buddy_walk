@@ -22,6 +22,7 @@ import {
   mountLastMileProxy,
 } from "./middleware/upstreamProxy";
 import { isMongoConnected } from "./database/usageStore";
+import { probeUpstreamText } from "./middleware/upstreamProxy";
 import { TranscribeController } from "./controllers/transcribe";
 import lastMileTestLogModel from "./database/models/lastMileTestLog";
 import { startRenderKeepAlive } from "./utils/keepAlive";
@@ -127,8 +128,10 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   app.use("/api/feedback", feedbackRoute)
   app.use("/api/last-mile-tests", lastMileTestLogRoute)
 
-  app.get('/api/health', (_req, res) => {
+  app.get('/api/health', async (_req, res) => {
     const mode = describeServerMode();
+    const upstreamText =
+      mode.routing.ai === 'proxy' ? await probeUpstreamText() : { ok: true, status: 200 };
     res.status(200).json({
       ok: true,
       service: 'buddy-walk-api',
@@ -138,6 +141,8 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       // instead of only surfacing as a 500 from the endpoint itself.
       routing: mode.routing,
       storage: isMongoConnected() ? 'mongo' : 'memory',
+      upstreamTextOk: upstreamText.ok,
+      upstreamTextStatus: upstreamText.status || undefined,
     });
   });
 

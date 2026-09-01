@@ -1,6 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 import express, { Application, Request, Response } from 'express';
-import { getUpstreamApiRoot } from '../config/serverMode';
+import { getUpstreamApiRoot, hasOwnAiKeys } from '../config/serverMode';
 import { aiRequestLogService } from '../services/aiRequestLog';
 import {
   compressUserPhoto,
@@ -62,43 +62,123 @@ async function recordProxyMetrics(
   });
 }
 
-async function forwardJson(req: Request, res: Response, upstreamPath: string): Promise<void> {
-  const startedAt = Date.now();
+type UpstreamResult = {
+  status: number;
+  data: unknown;
+  contentType?: string;
+};
+
+async function fetchUpstreamJson(req: Request, upstreamPath: string): Promise<UpstreamResult> {
   const upstreamRoot = getUpstreamApiRoot();
   const url = `${upstreamRoot}${upstreamPath}`;
   const method = (req.method || 'GET').toUpperCase();
-  // Google frontends (buddywalk.app) reject GET requests that include a body /
-  // Content-Type: application/json with HTTP 400. Only forward a body on
-  // methods that actually carry one.
   const hasBody = method !== 'GET' && method !== 'HEAD' && req.body !== undefined;
 
+  const upstreamRes = await axios({
+    method,
+    url,
+    ...(hasBody ? { data: req.body } : {}),
+    headers: {
+      Accept: 'application/json',
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+      ...pickForwardHeaders(req),
+    },
+    validateStatus: () => true,
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    timeout: 120_000,
+  });
+
+  return {
+    status: upstreamRes.status,
+    data: upstreamRes.data,
+    contentType:
+      typeof upstreamRes.headers['content-type'] === 'string'
+        ? upstreamRes.headers['content-type']
+        : undefined,
+  };
+}
+
+function sendUpstreamResult(res: Response, result: UpstreamResult): void {
+  res.status(result.status);
+  if (result.contentType) {
+    res.set('Content-Type', result.contentType);
+  }
+  res.send(result.data);
+}
+
+function upstreamUnavailableMessage(): Record<string, string> {
+  return {
+    error:
+      'AI is unavailable on the upstream host (buddywalk.app). ' +
+      'Add OPENAI_API_KEY or GEMINI_API_KEY in the Render dashboard for this service to run Q&A locally.',
+  };
+}
+
+async function tryLocalAiHandler(
+  req: Request,
+  res: Response,
+  handler: 'text' | 'parse' | 'audio'
+): Promise<boolean> {
+  if (!hasOwnAiKeys()) return false;
+  const { OpenAIController } = await import('../controllers/openAI');
+  const controller = new OpenAIController();
+  if (handler === 'text') {
+    await controller.textRequest(req, res);
+  } else if (handler === 'parse') {
+    await controller.parseUserRequest(req, res);
+  } else {
+    await controller.audioRequest(req, res);
+  }
+  return true;
+}
+
+async function forwardJson(req: Request, res: Response, upstreamPath: string): Promise<void> {
+  const startedAt = Date.now();
+  const feature = upstreamPath.includes('parse') ? 'parse' : 'text';
+  const localHandler =
+    upstreamPath === '/api/text'
+      ? 'text'
+      : upstreamPath === '/api/parseRequest'
+        ? 'parse'
+        : null;
+
   try {
-    const upstreamRes = await axios({
-      method,
-      url,
-      ...(hasBody ? { data: req.body } : {}),
-      headers: {
-        Accept: 'application/json',
-        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
-        ...pickForwardHeaders(req),
-      },
-      validateStatus: () => true,
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 120_000,
-    });
+    const result = await fetchUpstreamJson(req, upstreamPath);
 
     if (upstreamPath === '/api/text' || upstreamPath === '/api/parseRequest') {
-      await recordProxyMetrics(req, upstreamRes, startedAt, upstreamPath.includes('parse') ? 'parse' : 'text');
+      await recordProxyMetrics(
+        req,
+        { status: result.status, data: result.data } as AxiosResponse,
+        startedAt,
+        feature
+      );
     }
 
-    res.status(upstreamRes.status);
-    if (upstreamRes.headers['content-type']) {
-      res.set('Content-Type', upstreamRes.headers['content-type']);
+    if (result.status < 500) {
+      sendUpstreamResult(res, result);
+      return;
     }
-    res.send(upstreamRes.data);
+
+    if (localHandler && (await tryLocalAiHandler(req, res, localHandler))) {
+      return;
+    }
+
+    if (localHandler) {
+      res.status(503).json(upstreamUnavailableMessage());
+      return;
+    }
+
+    sendUpstreamResult(res, result);
   } catch (error) {
     console.error(`[upstreamProxy] ${upstreamPath} failed:`, error);
+    if (localHandler && (await tryLocalAiHandler(req, res, localHandler))) {
+      return;
+    }
+    if (localHandler) {
+      res.status(503).json(upstreamUnavailableMessage());
+      return;
+    }
     res.status(502).json({ error: 'Upstream API unavailable' });
   }
 }
@@ -123,13 +203,25 @@ async function forwardBinary(req: Request, res: Response, upstreamPath: string):
       timeout: 120_000,
     });
 
-    res.status(upstreamRes.status);
-    if (upstreamRes.headers['content-type']) {
-      res.set('Content-Type', upstreamRes.headers['content-type']);
+    if (upstreamRes.status < 500) {
+      res.status(upstreamRes.status);
+      if (upstreamRes.headers['content-type']) {
+        res.set('Content-Type', upstreamRes.headers['content-type']);
+      }
+      res.send(Buffer.from(upstreamRes.data));
+      return;
     }
-    res.send(Buffer.from(upstreamRes.data));
+
+    if (await tryLocalAiHandler(req, res, 'audio')) {
+      return;
+    }
+
+    res.status(503).json(upstreamUnavailableMessage());
   } catch (error) {
     console.error(`[upstreamProxy] ${upstreamPath} failed:`, error);
+    if (await tryLocalAiHandler(req, res, 'audio')) {
+      return;
+    }
     res.status(502).json({ error: 'Upstream API unavailable' });
   }
 }
@@ -276,6 +368,13 @@ async function forwardLastMileViaText(req: Request, res: Response): Promise<void
       timeout: 180_000,
     });
 
+    if (upstreamRes.status >= 500 && hasOwnAiKeys()) {
+      const { OpenAIController } = await import('../controllers/openAI');
+      const controller = new OpenAIController();
+      await controller.lastMileRequest(req, res);
+      return;
+    }
+
     const output = extractOutputText(upstreamRes.data);
     const success = upstreamRes.status >= 200 && upstreamRes.status < 300;
     const error = success
@@ -315,8 +414,15 @@ async function forwardLastMileViaText(req: Request, res: Response): Promise<void
       'last_mile'
     );
 
-    res.status(success ? 200 : upstreamRes.status);
-    res.json({
+    if (!success) {
+      res.status(503).json({
+        error: error ?? upstreamUnavailableMessage().error,
+        testLogId,
+      });
+      return;
+    }
+
+    res.status(200).json({
       output,
       testLogId,
       mode: 'exact',
@@ -324,10 +430,17 @@ async function forwardLastMileViaText(req: Request, res: Response): Promise<void
     });
   } catch (error) {
     console.error('[upstreamProxy] last-mile via /api/text failed:', error);
+    if (hasOwnAiKeys()) {
+      const { OpenAIController } = await import('../controllers/openAI');
+      const controller = new OpenAIController();
+      await controller.lastMileRequest(req, res);
+      return;
+    }
     const localId = await recordProxiedLastMileFailure(req, startedAt, error);
     res.status(502).json({
       error: 'Upstream API unavailable',
       testLogId: localId,
+      detail: upstreamUnavailableMessage().error,
     });
   }
 }
@@ -360,4 +473,23 @@ export function mountSpeechProxy(app: Application): void {
 export function mountMtaProxy(app: Application): void {
   console.log(`[server] Proxying MTA to ${getUpstreamApiRoot()}`);
   app.post('/api/mta', (req, res) => forwardJson(req, res, '/api/mta'));
+}
+
+/** Lightweight probe for /api/health — does not log metrics. */
+export async function probeUpstreamText(): Promise<{ ok: boolean; status: number }> {
+  try {
+    const upstreamRoot = getUpstreamApiRoot();
+    const upstreamRes = await axios.post(
+      `${upstreamRoot}/api/text`,
+      { text: 'ping', image: [], coords: null },
+      {
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        validateStatus: () => true,
+        timeout: 25_000,
+      }
+    );
+    return { ok: upstreamRes.status >= 200 && upstreamRes.status < 300, status: upstreamRes.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
 }

@@ -543,18 +543,15 @@ export class OpenAIService {
     return this._client;
   }
 
-  async parseUserRequest(
-    ctx: AppContext,
+  /** Tool-routing call used by /api/text. Returns undefined on failure instead of ending the response. */
+  async parseUserRequestInternal(
     text: string,
     lat: number,
     lng: number,
   ) {
-    //console.log(openAIHistory[openAIHistory.length - 1].data)
-    const { res } = ctx;
-    //try function?
     try {
       const openAiResponse = await this.client.chat.completions.create({
-        model: "gpt-4.1-mini",
+        model: "gpt-4o-mini",
         messages: [
           { role: "user", content: text },
           {
@@ -567,14 +564,27 @@ export class OpenAIService {
         tools: tools,
         tool_choice: "auto",
       });
-      // console.log(openAIHistory)
       console.log("token usage " + openAiResponse.usage?.total_tokens);
       return openAiResponse;
-      // res.status(200).json(openAiResponse);
     } catch (e) {
-      console.log(e);
-      res.status(500).json({ error: "Error processing your request" });
+      console.warn("parseUserRequest failed; continuing without tools:", e);
+      return undefined;
     }
+  }
+
+  async parseUserRequest(
+    ctx: AppContext,
+    text: string,
+    lat: number,
+    lng: number,
+  ) {
+    const { res } = ctx;
+    const openAiResponse = await this.parseUserRequestInternal(text, lat, lng);
+    if (!openAiResponse) {
+      res.status(500).json({ error: "Error processing your request" });
+      return;
+    }
+    res.status(200).json(openAiResponse);
   }
 
   // --- LAST METERS NAVIGATION PIPELINE ---
@@ -1734,8 +1744,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         completeAIPrompt +=
           analytics?.feature === "video_qa" ? videoPrompt : imagePrompt;
       } else {
-        const parsedRequest = await this.parseUserRequest(
-          ctx,
+        const parsedRequest = await this.parseUserRequestInternal(
           content.text,
           content.coords.latitude,
           content.coords.longitude,
@@ -2380,7 +2389,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           { role: "system", content: combinedSystemMessage },
           { role: "user", content: userContent },
         ],
-        model: isDirectVisualRequest ? "gpt-4o-mini" : "gpt-4.1-mini",
+        model: "gpt-4o-mini",
         temperature: 0.2,
         max_tokens: maxTokensForFeature(analytics?.feature),
       });
