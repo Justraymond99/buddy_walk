@@ -1,9 +1,8 @@
 name: Build and Submit iOS to TestFlight
 
+# Manual only — run from GitHub Actions when you actually want a new TestFlight build.
+# Requires EXPO_TOKEN in repo secrets.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:
