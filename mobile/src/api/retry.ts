@@ -12,10 +12,19 @@ function isRetryableAxiosError(error: unknown): boolean {
 
 /** Wake the Render free-tier service before the first real API call. */
 export async function warmApiBackend(): Promise<void> {
-  try {
-    await axios.get(`${API_ROOT}/api/health`, { timeout: 45_000 });
-  } catch {
-    // Best effort — real requests still retry if this fails.
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await axios.get<{ ok?: boolean }>(`${API_ROOT}/api/health`, {
+        timeout: 90_000,
+      });
+      if (res.data?.ok) return;
+    } catch {
+      // Cold starts on Render free tier can take ~60s.
+    }
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 15_000 * (attempt + 1)));
+    }
   }
 }
 

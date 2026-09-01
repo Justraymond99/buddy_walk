@@ -24,6 +24,7 @@ import {
 import { isMongoConnected } from "./database/usageStore";
 import { TranscribeController } from "./controllers/transcribe";
 import lastMileTestLogModel from "./database/models/lastMileTestLog";
+import { startRenderKeepAlive } from "./utils/keepAlive";
 
 dotenv.config();
 
@@ -251,6 +252,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   
   app.listen(Number(port), '0.0.0.0', () => {
       console.log(`Server is live at http://localhost:${port}`);
+      startRenderKeepAlive();
     });
 
 })()

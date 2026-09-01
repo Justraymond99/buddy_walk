@@ -1,16 +1,34 @@
-# Render's free tier spins the service down after ~15 min of no traffic. A cold
-# start makes companion, Q&A, and feedback silently fail until the host wakes.
+# Render's free tier spins the service down after ~15 min of no traffic. GitHub
+# scheduled workflows are often delayed by hours, so the server also self-pings
+# via RENDER_EXTERNAL_URL while awake (see mobile/server/utils/keepAlive.ts).
 name: Keep Buddy Walk API warm
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # GitHub may delay cron runs; server-side keepalive covers gaps once awake.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/server/**"
+      - ".github/workflows/keep-companion-warm.yml"
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping API health endpoint
+      - name: Wake Render API (retry through cold start)
         run: |
-          curl -fsS --max-time 30 "https://buddy-walk-api.onrender.com/api/health" || echo "Ping failed (service may still be deploying)"
+          URL="https://buddy-walk-api.onrender.com/api/health"
+          for attempt in 1 2 3 4 5; do
+            echo "Attempt $attempt..."
+            if curl -fsS --max-time 90 "$URL"; then
+              echo "API is warm."
+              exit 0
+            fi
+            echo "Ping failed — waiting 20s (cold start can take ~60s)"
+            sleep 20
+          done
+          echo "Failed to wake API after 5 attempts"
+          exit 1
