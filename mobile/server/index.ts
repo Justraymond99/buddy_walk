@@ -14,7 +14,8 @@ import lastMileTestLogRoute from "./routes/lastMileTestLog"
 import mongoose from "mongoose";
 import { config } from "./database";
 import { setCompanionMemoryStore } from "./database/companionStoreMode";
-import { describeServerMode, getServiceRouting } from "./config/serverMode";
+import { canRunLocalLastMile, describeServerMode, getServiceRouting } from "./config/serverMode";
+import { OpenAIController } from "./controllers/openAI";
 import {
   mountAiProxy,
   mountSpeechProxy,
@@ -111,8 +112,13 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     mountMtaProxy(app);
   }
 
-  // Register before openAIRoute so proxy mode wins when Maps keys are absent.
-  if (routing.lastMile === 'proxy') {
+  const lastMileController = new OpenAIController();
+  // Street View must run here when keys exist — do not rely on the text proxy.
+  if (canRunLocalLastMile()) {
+    app.post('/api/last-mile', (req, res) => {
+      void lastMileController.lastMileRequest(req, res);
+    });
+  } else if (routing.lastMile === 'proxy') {
     mountLastMileProxy(app);
   }
 
@@ -143,6 +149,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       storage: isMongoConnected() ? 'mongo' : 'memory',
       upstreamTextOk: upstreamText.ok,
       upstreamTextStatus: upstreamText.status || undefined,
+      lastMileCapable: canRunLocalLastMile(),
     });
   });
 

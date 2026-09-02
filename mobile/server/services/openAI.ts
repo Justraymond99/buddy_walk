@@ -2580,18 +2580,43 @@ async function processEightDirectionTiles(
   console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
   const headings = [...LAST_MILE_HEADINGS];
   const apiKey = getGoogleMapsApiKey();
-  const metadataUrl =
-    `https://maps.googleapis.com/maps/api/streetview/metadata` +
-    `?location=${lat},${lng}&source=outdoor&key=${apiKey}`;
-  const metadataResponse = await axios.get<StreetViewMetadata>(metadataUrl, {
-    timeout: 20_000,
-  });
-  const metadata = metadataResponse.data;
-  if (metadata.status !== "OK") {
-    const metadataError = new Error(
-      `Street View metadata returned ${metadata.status}.`,
+  const metadataAttempts: Array<{ source?: string; radius?: number }> = [
+    { source: "outdoor", radius: 50 },
+    { source: "outdoor", radius: 100 },
+    { radius: 50 },
+    { radius: 100 },
+  ];
+
+  let metadata: StreetViewMetadata | null = null;
+  for (const attempt of metadataAttempts) {
+    const params: Record<string, string> = {
+      location: `${lat},${lng}`,
+      key: apiKey,
+    };
+    if (attempt.source) params.source = attempt.source;
+    if (attempt.radius) params.radius = String(attempt.radius);
+
+    const metadataResponse = await axios.get<StreetViewMetadata>(
+      "https://maps.googleapis.com/maps/api/streetview/metadata",
+      { params, timeout: 20_000 },
     );
-    Object.assign(metadataError, { code: `STREET_VIEW_${metadata.status}` });
+    const candidate = metadataResponse.data;
+    if (candidate.status === "OK") {
+      metadata = candidate;
+      break;
+    }
+    console.warn(
+      `Street View metadata ${candidate.status} (source=${attempt.source ?? "default"}, radius=${attempt.radius ?? "default"})`,
+    );
+  }
+
+  if (!metadata || metadata.status !== "OK") {
+    const metadataError = new Error(
+      `Street View metadata returned ${metadata?.status ?? "NO_PANORAMA"}.`,
+    );
+    Object.assign(metadataError, {
+      code: `STREET_VIEW_${metadata?.status ?? "NO_PANORAMA"}`,
+    });
     throw metadataError;
   }
 
@@ -2608,8 +2633,16 @@ async function processEightDirectionTiles(
       const response = await axios.get(url, {
         responseType: "arraybuffer",
         timeout: 20_000,
+        validateStatus: () => true,
       });
       const buffer = Buffer.from(response.data);
+      if (response.status !== 200 || buffer.byteLength < 10_000) {
+        const tileError = new Error(
+          `Street View tile at ${heading}° was unusable (HTTP ${response.status}, ${buffer.byteLength} bytes).`,
+        );
+        Object.assign(tileError, { code: "STREET_VIEW_TILE_UNUSABLE" });
+        throw tileError;
+      }
       return {
         heading,
         base64: `data:image/jpeg;base64,${buffer.toString("base64")}`,

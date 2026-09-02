@@ -1,6 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 import express, { Application, Request, Response } from 'express';
-import { getUpstreamApiRoot, hasOwnAiKeys } from '../config/serverMode';
+import { getUpstreamApiRoot, hasOwnAiKeys, canRunLocalLastMile } from '../config/serverMode';
 import { aiRequestLogService } from '../services/aiRequestLog';
 import {
   compressUserPhoto,
@@ -368,7 +368,7 @@ async function forwardLastMileViaText(req: Request, res: Response): Promise<void
       timeout: 180_000,
     });
 
-    if (upstreamRes.status >= 500 && hasOwnAiKeys()) {
+    if (upstreamRes.status >= 500 && canRunLocalLastMile()) {
       const { OpenAIController } = await import('../controllers/openAI');
       const controller = new OpenAIController();
       await controller.lastMileRequest(req, res);
@@ -430,7 +430,7 @@ async function forwardLastMileViaText(req: Request, res: Response): Promise<void
     });
   } catch (error) {
     console.error('[upstreamProxy] last-mile via /api/text failed:', error);
-    if (hasOwnAiKeys()) {
+    if (canRunLocalLastMile()) {
       const { OpenAIController } = await import('../controllers/openAI');
       const controller = new OpenAIController();
       await controller.lastMileRequest(req, res);

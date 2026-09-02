@@ -105,6 +105,10 @@ describe('serverMode', () => {
       mta: 'proxy',
       lastMile: 'proxy',
     });
+
+    process.env.GOOGLE_MAPS_API_KEY = 'maps-test';
+    assert.equal(getServiceRouting().lastMile, 'local');
+    assert.equal(getServiceRouting().ai, 'proxy');
   });
 
   it('lets ZERO_CONFIG=false force local handlers', () => {
