@@ -23,10 +23,34 @@ export async function compressUserPhoto(dataUrl: string): Promise<string> {
   }
 }
 
+/** Panorama grids are large — shrink before Mongo so the dashboard can load them. */
+export async function compressPanoramaPhoto(dataUrl: string): Promise<string> {
+  try {
+    const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+    const outputBuffer = await sharp(Buffer.from(base64Data, "base64"))
+      .resize({ width: 1280, withoutEnlargement: true })
+      .jpeg({ quality: 68 })
+      .toBuffer();
+    return `data:image/jpeg;base64,${outputBuffer.toString("base64")}`;
+  } catch (error) {
+    console.error("[LastMileTestLog] failed to compress panorama for storage:", error);
+    return dataUrl;
+  }
+}
+
 export class LastMileTestLogService {
   async record(input: Omit<lastMileTestLogInterface, "serverTs">): Promise<string | undefined> {
     const doc: lastMileTestLogInterface = {
       ...input,
+      userPhoto: input.userPhoto?.startsWith("data:")
+        ? await compressUserPhoto(input.userPhoto)
+        : input.userPhoto,
+      panoramaPhoto: input.panoramaPhoto?.startsWith("data:")
+        ? await compressPanoramaPhoto(input.panoramaPhoto)
+        : input.panoramaPhoto,
+      destinationPhoto: input.destinationPhoto?.startsWith("data:")
+        ? await compressUserPhoto(input.destinationPhoto)
+        : input.destinationPhoto,
       serverTs: new Date(),
     };
     try {
@@ -71,6 +95,18 @@ export class LastMileTestLogService {
       });
     }
     return { source: "memory", data: rows.slice(0, limit) };
+  }
+
+  async getById(id: string): Promise<lastMileTestLogInterface | null> {
+    if (isMongoConnected()) {
+      const data = await lastMileTestLogModel.findById(id).lean();
+      return data ?? null;
+    }
+    const row = memoryLastMileTests.find((entry) => {
+      const maybeId = (entry as lastMileTestLogInterface & { _id?: unknown })._id;
+      return String(maybeId ?? "") === id;
+    });
+    return row ?? null;
   }
 
   async updateReview(

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { lastMileTestLogService } from "../services/lastMileTestLog";
 import { toCsv } from "../utils/csv";
 import { buildDateFilter, isAdminAuthorized, parseLimit } from "../utils/adminAuth";
+import { isMongoConnected } from "../database/usageStore";
 
 const LAST_MILE_TEST_CSV_COLUMNS = [
   "serverTs",
@@ -70,6 +71,39 @@ export class LastMileTestLogController {
         }));
 
     res.status(200).json({ source, data: rows });
+  }
+
+  async getOne(req: Request, res: Response): Promise<void> {
+    if (!isAdminAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const data = await lastMileTestLogService.getById(req.params.id);
+    if (!data) {
+      res.status(404).json({ error: "Last Meters test log not found" });
+      return;
+    }
+
+    const includeImages = req.query.includeImages === "true";
+    if (!includeImages) {
+      res.status(200).json({
+        source: isMongoConnected() ? "mongo" : "memory",
+        data: {
+          ...data,
+          userPhoto: data.userPhoto ? `[base64 image ${data.userPhoto.length} chars]` : "",
+          panoramaPhoto: data.panoramaPhoto
+            ? `[base64 image ${data.panoramaPhoto.length} chars]`
+            : "",
+          destinationPhoto: data.destinationPhoto
+            ? `[base64 image ${data.destinationPhoto.length} chars]`
+            : "",
+        },
+      });
+      return;
+    }
+
+    res.status(200).json({ source: isMongoConnected() ? "mongo" : "memory", data });
   }
 
   async exportCsv(req: Request, res: Response): Promise<void> {

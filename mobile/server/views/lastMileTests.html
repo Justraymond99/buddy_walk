@@ -218,12 +218,17 @@
     var TOKEN = '__ADMIN_TOKEN__';
     var activeTests = [];
 
-    function qs() {
+    function qs(includeImages) {
       var params = new URLSearchParams();
       if (TOKEN && TOKEN !== '__ADMIN_TOKEN__') params.set('token', TOKEN);
-      params.set('includeImages', 'true');
+      if (includeImages) params.set('includeImages', 'true');
       params.set('limit', document.getElementById('limit').value || '50');
       return '?' + params.toString();
+    }
+
+    function imgSrc(value) {
+      if (!value || !String(value).startsWith('data:')) return '';
+      return String(value).replace(/"/g, '&quot;');
     }
 
     function authHeaders(extra) {
@@ -389,9 +394,36 @@
 
     // --- Detail Modal Render ---
     function openDetail(index) {
-      var test = activeTests[index];
-      if (!test) return;
-      
+      var summary = activeTests[index];
+      if (!summary) return;
+
+      var testId = idOf(summary);
+      if (!testId) {
+        showError('This test row has no id — cannot load images.');
+        return;
+      }
+
+      document.getElementById('lmDetailTitle').textContent = summary.destinationPlaceName || summary.destination || 'Loading…';
+      document.getElementById('lmDetailSubtitle').textContent = 'Loading images…';
+      document.getElementById('lmDetailBody').innerHTML = '<div class="empty">Loading panorama and photos…</div>';
+      document.getElementById('lmDetailOverlay').style.display = 'block';
+
+      var baseUrl = window.location.origin;
+      fetch(baseUrl + '/api/last-mile-tests/' + encodeURIComponent(testId) + qs(true), { headers: authHeaders() })
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (payload) {
+          renderDetail(payload.data || summary);
+        })
+        .catch(function (error) {
+          document.getElementById('lmDetailBody').innerHTML = '<div class="empty">Could not load images for this test.</div>';
+          showError('Could not load test detail. ' + error.message);
+        });
+    }
+
+    function renderDetail(test) {
       var modules = buildModules(test);
       var coords = [test.lat, test.lng].filter(function(v) { return v !== undefined; }).join(', ');
       
@@ -401,14 +433,14 @@
       // Injecting the rotate button directly into the User Photo label
       var imagesHtml = '<div class="images-grid">' +
         '<div class="image-wrap"><div class="image-label">I1. User Photo</div>' +
-        (test.userPhoto ? '<img src="' + esc(test.userPhoto) + '" alt="User photo" />' : '<div class="empty">No photo</div>') +
+        (test.userPhoto && test.userPhoto.startsWith('data:') ? '<img src="' + imgSrc(test.userPhoto) + '" alt="User photo" />' : '<div class="empty">No photo</div>') +
         '</div>' +
         '<div class="image-wrap"><div class="image-label">I3. Panorama (' + esc(test.panoramaDate || 'N/A') + ')</div>' +
-        (test.panoramaPhoto ? '<img src="' + esc(test.panoramaPhoto) + '" alt="Panorama" />' : '<div class="empty">No panorama</div>') +
+        (test.panoramaPhoto && test.panoramaPhoto.startsWith('data:') ? '<img src="' + imgSrc(test.panoramaPhoto) + '" alt="Panorama" />' : '<div class="empty">No panorama</div>') +
         '</div>' +
-        (test.destinationPhoto ? 
+        (test.destinationPhoto && test.destinationPhoto.startsWith('data:') ? 
           '<div class="image-wrap"><div class="image-label">Google Street View Ref (' + esc(test.destinationPhotoDate || 'N/A') + ')</div>' +
-          '<img src="' + esc(test.destinationPhoto) + '" alt="Reference" /></div>' : '') +
+          '<img src="' + imgSrc(test.destinationPhoto) + '" alt="Reference" /></div>' : '') +
         '</div>';
 
       var reviewStatus = test.reviewerStatus || 'untested';
@@ -456,8 +488,6 @@
         renderModuleBlock(modules.moduleE) +
         finalGuidanceHtml +
         reviewHtml;
-
-      document.getElementById('lmDetailOverlay').style.display = 'block';
     }
 
     // --- Table Render ---
@@ -508,9 +538,9 @@
     // --- API Interactions ---
     function load() {
       var baseUrl = window.location.origin;
-      document.getElementById('download').href = baseUrl + '/api/last-mile-tests/export.csv' + qs();
+      document.getElementById('download').href = baseUrl + '/api/last-mile-tests/export.csv' + qs(false);
       
-      fetch(baseUrl + '/api/last-mile-tests' + qs(), { headers: authHeaders() })
+      fetch(baseUrl + '/api/last-mile-tests' + qs(false), { headers: authHeaders() })
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
