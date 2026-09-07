@@ -75,7 +75,16 @@ export async function sendLastMileRequest(data: {
     return res.data as LastMileResponse;
   } catch (error: any) {
     console.error('sendLastMileRequest error:', error);
-    const backendMessage = error?.response?.data?.error;
+
+    // Retryable/uncertain navigation outcomes can intentionally use a non-2xx
+    // status. Preserve their structured guidance instead of converting them to
+    // a generic network error in the app.
+    const responseData = error?.response?.data as LastMileResponse | undefined;
+    if (responseData && typeof responseData.output === 'string' && responseData.output.trim()) {
+      return responseData;
+    }
+
+    const backendMessage = responseData?.error;
     if (typeof backendMessage === 'string' && backendMessage.trim()) {
       throw new Error(backendMessage);
     }
