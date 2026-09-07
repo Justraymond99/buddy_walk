@@ -815,9 +815,29 @@ export default function MainScreen({ navigation }: Props) {
       speak('Still loading the last answer. Please wait.');
       return;
     }
+
     setUserInput(trimmed);
     setDisplayQuestion(trimmed);
     Vibration.vibrate(SPEECH_CAPTURED_VIBRATION_PATTERN);
+
+    // A captured photo/video means the user still has a choice between normal
+    // image Q&A and Last Meters. Do not auto-submit and destroy that capture.
+    const hasStagedCapture =
+      Boolean(capturedImage) ||
+      Boolean(capturedVideoUri) ||
+      Boolean(webVideoFrames?.length);
+
+    if (hasStagedCapture) {
+      AccessibilityInfo.announceForAccessibility(
+        `Question captured: ${trimmed}. Choose Last Meters or Submit.`
+      );
+      speak(
+        'Question captured. Tap Last Meters for entrance guidance or Submit for a normal answer.',
+        { preferDevice: true }
+      );
+      return;
+    }
+
     AccessibilityInfo.announceForAccessibility(`Question: ${trimmed}. Sending now.`);
     await handleSubmit(trimmed);
   }
@@ -1082,7 +1102,7 @@ export default function MainScreen({ navigation }: Props) {
     if (loading) return;
 
     const rawDestination = userInput.trim();
-    if (!rawDestination) {
+    if (!rawDestination || isVoiceStatusText(rawDestination)) {
       speak('Please enter the name of the store or destination first.', { preferDevice: true });
       return;
     }
@@ -1090,6 +1110,18 @@ export default function MainScreen({ navigation }: Props) {
       speak('Please take a photo of your surroundings first.', { preferDevice: true });
       return;
     }
+
+    const requestId = createRequestId();
+    setDisplayQuestion(rawDestination);
+    submittedInputRef.current = rawDestination;
+    chatLogEligibleRef.current = false;
+    void track(Events.QuestionAsked, {
+      requestId,
+      feature: 'last_mile',
+      text: rawDestination.slice(0, 500),
+      length: rawDestination.length,
+      hasImage: true,
+    });
 
     setLoading(true);
     void stopSpeaking();
@@ -1111,15 +1143,30 @@ export default function MainScreen({ navigation }: Props) {
       });
 
       if (data.output) {
+        chatLogEligibleRef.current = true;
         setAiResponse(data.output);
-        speak(data.output, { preferDevice: true });
-        
-        setUserInput('');
-        setCapturedImage(null);
-        cameraReadyRef.current = false;
+
+        // Preserve the photo and destination when the backend asks for a retry
+        // or confirmation. A successful directional match consumes the capture.
+        const shouldKeepCapture =
+          Boolean(data.uncertain) || Boolean(data.requiresConfirmation) || !data.turn;
+        if (!shouldKeepCapture) {
+          setUserInput('');
+          setCapturedImage(null);
+          cameraReadyRef.current = false;
+        } else {
+          setUserInput(rawDestination);
+        }
+
         void track(Events.AnswerReceived, {
+          requestId,
           feature: 'last_mile',
-          navigationMode: data.mode || 'unknown',
+          navigationMode:
+            data.mode || (data.turn?.direction === 'STRAIGHT' ? 'aligned' : 'exact'),
+          code: data.code || 'success',
+          uncertain: Boolean(data.uncertain),
+          degrees: data.turn?.degrees,
+          clockPosition: data.turn?.clockPosition,
         });
       }
     } catch (e) {
@@ -1129,7 +1176,11 @@ export default function MainScreen({ navigation }: Props) {
         ? `Last Meters error: ${detail}`
         : 'Error calculating last meters navigation. Please try again.';
       setAiResponse(errMsg);
-      speak(errMsg, { preferDevice: true });
+      void track(Events.AnswerFailed, {
+        requestId,
+        feature: 'last_mile',
+        reason: detail || 'error',
+      });
     } finally {
       setLoading(false);
     }
@@ -1605,7 +1656,7 @@ export default function MainScreen({ navigation }: Props) {
               isTranscribing
                 ? 'Transcribing your question'
                 : isListening
-                  ? 'Stop listening and send your question'
+                  ? 'Stop listening and finish your question'
                   : 'Tap to speak your question'
             }
             accessibilityHint={VOICE_INPUT_HINT}
@@ -1620,7 +1671,7 @@ export default function MainScreen({ navigation }: Props) {
               {isTranscribing
                 ? '⏳ Transcribing…'
                 : isListening
-                  ? '🎙 Listening — tap to send'
+                  ? '🎙 Listening — tap to finish'
                   : '🎙 Tap to Ask'}
             </Text>
           </Pressable>

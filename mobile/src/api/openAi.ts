@@ -11,6 +11,25 @@ export interface TextResponse {
   route?: NavRoute | null;
 }
 
+export interface LastMileResponse {
+  output?: string;
+  error?: string;
+  code?: string;
+  retryable?: boolean;
+  uncertain?: boolean;
+  requiresConfirmation?: boolean;
+  confidence?: number;
+  confidenceThreshold?: number;
+  testLogId?: string;
+  mode?: 'approach' | 'exact' | 'aligned';
+  warning?: string;
+  turn?: {
+    direction: 'LEFT' | 'RIGHT' | 'STRAIGHT';
+    degrees: number;
+    clockPosition: string;
+  };
+}
+
 export async function sendTextRequest(data: RequestData): Promise<TextResponse | undefined> {
   if (!data.text.trim()) return undefined;
   try {
@@ -40,40 +59,39 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
     throw e;
   }
 }
+
 export async function sendLastMileRequest(data: {
   lat: number;
   lng: number;
   heading?: number;
   image: string;
   destination: string;
-}): Promise<{
-  output?: string;
-  error?: string;
-  testLogId?: string;
-  mode?: 'approach' | 'exact' | 'aligned';
-  warning?: string;
-}> {
+}): Promise<LastMileResponse> {
   // Last Meters is hosted on Render; buddywalk.app does not expose this route.
   try {
     const res = await withNetworkRetry(() =>
       apiClient.post('/last-mile', data, { timeout: 180_000 })
     );
-    return res.data as {
-      output?: string;
-      error?: string;
-      testLogId?: string;
-      mode?: 'approach' | 'exact' | 'aligned';
-      warning?: string;
-    };
+    return res.data as LastMileResponse;
   } catch (error: any) {
     console.error('sendLastMileRequest error:', error);
-    const backendMessage = error?.response?.data?.error;
+
+    // Retryable/uncertain navigation outcomes can intentionally use a non-2xx
+    // status. Preserve their structured guidance instead of converting them to
+    // a generic network error in the app.
+    const responseData = error?.response?.data as LastMileResponse | undefined;
+    if (responseData && typeof responseData.output === 'string' && responseData.output.trim()) {
+      return responseData;
+    }
+
+    const backendMessage = responseData?.error;
     if (typeof backendMessage === 'string' && backendMessage.trim()) {
       throw new Error(backendMessage);
     }
     throw error;
   }
 }
+
 export async function sendAudioRequest(text: string): Promise<ArrayBuffer | undefined> {
   if (!text.trim()) return undefined;
   try {
