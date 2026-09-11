@@ -29,7 +29,11 @@ import { sendTextRequest, sendLastMileRequest } from "../api/openAi";
 import { fetchMtaArrivals } from "../api/mta";
 import { createChatLog, addChatToChatLog } from "../api/chatLog";
 import { track, Events } from "../api/telemetry";
-import { classifyFeature, createRequestId } from "../utils/telemetryFeature";
+import {
+  classifyFeature,
+  createRequestId,
+  looksLikeBareDestination,
+} from "../utils/telemetryFeature";
 import {
   buildTrainQuestionWithLiveData,
   extractTrainLineFromText,
@@ -641,7 +645,7 @@ export default function MainScreen({ navigation }: Props) {
         // disabled for testing
         // setUserInput("Describe the image");
         speak(
-          "Photo captured. Ready to describe the image or give last mile feedback.",
+          "Photo captured. Speak or type the destination, then tap Last Meters for entrance guidance. Or Submit to ask about the photo.",
         );
         notifySuccess();
         try {
@@ -910,10 +914,32 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
     setUserInput(trimmed);
-    // Send immediately rather than asking the user to review a transcript and
-    // find the submit button. What was understood is spoken as a preamble on
-    // the answer, so they still get confirmation — just without paying an
-    // extra round of screen-reader navigation for it.
+
+    // With a photo attached, auto-Submit races Last Meters: it clears the photo
+    // and blocks the button while loading. Destination-like speech goes straight
+    // to Last Meters; other speech stays in the field so the user can choose.
+    if (capturedImage) {
+      voicePreambleRef.current = null;
+      const wantsLastMeters =
+        looksLikeBareDestination(trimmed) ||
+        classifyFeature({ text: trimmed, hasImage: true }) === "directions";
+      if (wantsLastMeters) {
+        speak(`Destination set to ${trimmed}. Starting Last Meters.`, {
+          preferDevice: true,
+        });
+        await handleLastMileNavigation(trimmed);
+        return;
+      }
+      speak(
+        `Got ${trimmed}. Double-tap Last Meters for entrance guidance, or Submit to ask about the photo.`,
+        { preferDevice: true },
+      );
+      notifySuccess();
+      return;
+    }
+
+    // No photo: send immediately. What was understood is spoken as a preamble
+    // on the answer so they still get confirmation without hunting Submit.
     voicePreambleRef.current = trimmed;
     await handleSubmit(trimmed);
   }
@@ -1274,10 +1300,10 @@ export default function MainScreen({ navigation }: Props) {
 
   // ─── Last Meters Navigation Feature ──────────────────────────────────────────
 
-  async function handleLastMileNavigation() {
+  async function handleLastMileNavigation(destinationOverride?: string) {
     if (loading) return;
 
-    const rawDestination = userInput.trim();
+    const rawDestination = (destinationOverride ?? userInput).trim();
     if (!rawDestination) {
       speak("Please enter the name of the store or destination first.", {
         preferDevice: true,
@@ -1290,6 +1316,7 @@ export default function MainScreen({ navigation }: Props) {
       });
       return;
     }
+    setUserInput(rawDestination);
 
     setLoading(true);
     void stopSpeaking();

@@ -1258,12 +1258,33 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
             ? `${Math.round(destinationDistanceMeters)} meters`
             : "very close";
 
+        // Still give compass→map-bearing turn degrees when possible so testers
+        // near the door get orientation feedback even without a visual match.
+        let turnFallback = "";
+        let bearingTarget: number | undefined;
+        if (
+          typeof currentHeading === "number" &&
+          typeof destinationBearing === "number"
+        ) {
+          try {
+            bearingTarget = snapLastMileHeading(destinationBearing);
+            turnFallback =
+              ` ${buildLastMileTurnInstruction(currentHeading, bearingTarget)}` +
+              " That turn is based on your phone compass and the map location," +
+              " not a visually confirmed entrance — use caution.";
+          } catch {
+            turnFallback = "";
+            bearingTarget = undefined;
+          }
+        }
+
         const finalOutput =
           `You are approximately ${distanceText} from ${verifiedDestination.placeName}. ` +
-          `Google Maps confirms that the destination is near your current location, ` +
-          `but I could not verify the exact entrance using the available Street View imagery.` +
+          `Google Maps confirms the destination is near you, but I could not verify` +
+          ` the exact entrance in Street View.` +
           ageWarning +
-          ` I cannot provide an exact turn direction from this result.`;
+          (turnFallback ||
+            " I cannot provide a turn direction without a compass heading.");
 
         // Record explicitly why this run stopped before precise turn guidance.
         testSteps.push({
@@ -1273,7 +1294,8 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           response:
             `DESTINATION_CONFIRMED: ${verifiedDestination.placeName}, ` +
             `${Math.round(verifiedDestination.distanceMeters)} meters away. ` +
-            "ENTRANCE_NOT_VISUALLY_CONFIRMED.",
+            "ENTRANCE_NOT_VISUALLY_CONFIRMED." +
+            (turnFallback ? " COMPASS_BEARING_TURN_PROVIDED." : ""),
           model: "google-places",
           success: true,
         });
@@ -1307,12 +1329,15 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           navigationMode,
           testScenario,
           currentHeading,
+          targetHeading: bearingTarget,
+          turnInstruction: turnFallback.trim() || undefined,
           finalOutput,
           steps: testSteps,
 
           // Destination verification succeeded.
           // Only precise entrance localization failed.
           success: true,
+          error: "entrance_not_visually_confirmed",
 
           latencyMs: Date.now() - startedAt,
         });
@@ -1323,11 +1348,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           mode: navigationMode,
           testScenario,
           currentHeading,
-
-          // Deliberately null:
-          // no visually verified entrance heading exists.
-          targetHeading,
-
+          targetHeading: bearingTarget ?? null,
           warning: "entrance_not_visually_confirmed",
         });
 
