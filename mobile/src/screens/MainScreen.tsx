@@ -919,7 +919,7 @@ export default function MainScreen({ navigation }: Props) {
     // and blocks the button while loading. Destination-like speech goes straight
     // to Last Meters; other speech stays in the field so the user can choose.
     if (capturedImage) {
-      voicePreambleRef.current = null;
+      voicePreambleRef.current = "";
       const wantsLastMeters =
         looksLikeBareDestination(trimmed) ||
         classifyFeature({ text: trimmed, hasImage: true }) === "directions";
