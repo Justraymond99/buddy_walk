@@ -379,14 +379,18 @@
         compass_heading_unavailable: 'The phone did not provide a usable compass reading. Buddy Walk did not calculate a turn because compass heading is required for guidance.',
         destination_not_visible: 'The destination could not be visually confirmed in the Street View panorama or the nearby reference image. Buddy Walk intentionally withheld turn guidance.',
         current_view_not_visible: 'The user photo could not be matched confidently to the Street View panorama.',
+        entrance_not_visually_confirmed: 'Google Maps verified the destination nearby, but the storefront could not be visually confirmed in the Street View panorama or the reference image (imagery may be outdated or the sign obscured). The user still received the distance and a compass-based turn; visual entrance verification was deliberately withheld.',
       };
       var summary = explanations[test.error] || 'This trial stopped before Buddy Walk could provide a fully verified localization result.';
       var details = (test.steps || [])
         .filter(function (step) { return step && !step.success && (step.error || step.response); })
         .map(function (step) { return (step.name || 'Unknown stage') + ': ' + (step.error || step.response); });
       if (test.error && !explanations[test.error]) details.unshift('Backend error: ' + test.error);
+      var heading = test.success
+        ? 'Why precise entrance guidance was withheld'
+        : 'Why this run did not complete';
       return '<section class="failure-summary">' +
-        '<h3>Why this run did not complete</h3>' +
+        '<h3>' + heading + '</h3>' +
         '<p>' + esc(summary) + '</p>' +
         (details.length ? '<ul>' + details.map(function (detail) { return '<li>' + esc(detail) + '</li>'; }).join('') + '</ul>' : '') +
       '</section>';
