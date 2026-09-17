@@ -427,6 +427,20 @@
         });
     }
 
+    function noPanoramaReason(test) {
+      var dist = typeof test.destinationDistanceMeters === 'number' ? Math.round(test.destinationDistanceMeters) : null;
+      if (test.navigationMode === 'approach' || test.testScenario === 'test_b_approach') {
+        return 'Panorama skipped: destination resolved ' + (dist !== null ? dist + ' m' : '>250 m') + ' away (approach mode). Check the resolved place address — Google may have picked a different branch, or GPS drifted.';
+      }
+      if (test.navigationMode === 'aligned' || test.testScenario === 'heading_aligned') {
+        return 'Panorama skipped: user already facing the destination bearing ' + (dist !== null ? dist + ' m away' : '') + ' (aligned mode).';
+      }
+      if (test.error === 'destination_not_verified' || test.testScenario === 'destination_not_verified') {
+        return 'Panorama skipped: Google Places could not verify the destination nearby.';
+      }
+      return 'No panorama: the run stopped before or during Street View download — check the failed stage below.';
+    }
+
     function renderDetail(test) {
       var modules = buildModules(test);
       var coords = [test.lat, test.lng].filter(function(v) { return v !== undefined; }).join(', ');
@@ -440,7 +454,7 @@
         (test.userPhoto && test.userPhoto.startsWith('data:') ? '<img src="' + imgSrc(test.userPhoto) + '" alt="User photo" />' : '<div class="empty">No photo</div>') +
         '</div>' +
         '<div class="image-wrap"><div class="image-label">I3. Panorama (' + esc(test.panoramaDate || 'N/A') + ')</div>' +
-        (test.panoramaPhoto && test.panoramaPhoto.startsWith('data:') ? '<img src="' + imgSrc(test.panoramaPhoto) + '" alt="Panorama" />' : '<div class="empty">No panorama</div>') +
+        (test.panoramaPhoto && test.panoramaPhoto.startsWith('data:') ? '<img src="' + imgSrc(test.panoramaPhoto) + '" alt="Panorama" />' : '<div class="empty">' + esc(noPanoramaReason(test)) + '</div>') +
         '</div>' +
         (test.destinationPhoto && test.destinationPhoto.startsWith('data:') ? 
           '<div class="image-wrap"><div class="image-label">Google Street View Ref (' + esc(test.destinationPhotoDate || 'N/A') + ')</div>' +
