@@ -1,10 +1,11 @@
 import axios from 'axios';
 import { API_ROOT } from './client';
 
-function isRetryableAxiosError(error: unknown): boolean {
+function isRetryableAxiosError(error: unknown, retryOnTimeout: boolean): boolean {
+  if (axios.isCancel(error)) return false;
   if (!axios.isAxiosError(error)) return false;
+  if (error.code === 'ECONNABORTED') return retryOnTimeout;
   if (!error.response) return true;
-  if (error.code === 'ECONNABORTED') return true;
   if (error.message === 'Network Error') return true;
   const status = error.response.status;
   return status === 408 || status === 429 || (status >= 502 && status <= 504);
@@ -30,10 +31,19 @@ export async function warmApiBackend(): Promise<void> {
 
 export async function withNetworkRetry<T>(
   fn: () => Promise<T>,
-  options?: { retries?: number; baseDelayMs?: number }
+  options?: {
+    retries?: number;
+    baseDelayMs?: number;
+    /** Retry after a client timeout. Off for slow requests, where a retry just doubles the wait. */
+    retryOnTimeout?: boolean;
+    /** Wait for the backend health check before retrying a connection failure. */
+    warmOnFailure?: boolean;
+  }
 ): Promise<T> {
   const retries = options?.retries ?? 2;
   const baseDelayMs = options?.baseDelayMs ?? 2000;
+  const retryOnTimeout = options?.retryOnTimeout ?? true;
+  const warmOnFailure = options?.warmOnFailure ?? true;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -41,11 +51,11 @@ export async function withNetworkRetry<T>(
       return await fn();
     } catch (error) {
       lastError = error;
-      if (!isRetryableAxiosError(error) || attempt === retries) {
+      if (!isRetryableAxiosError(error, retryOnTimeout) || attempt === retries) {
         throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
-      if (!axios.isAxiosError(error) || !error.response) {
+      if (warmOnFailure && (!axios.isAxiosError(error) || !error.response)) {
         await warmApiBackend();
       }
     }

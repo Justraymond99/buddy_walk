@@ -18,6 +18,7 @@ const LAST_MILE_TEST_CSV_COLUMNS = [
   "destinationTypes",
   "destinationDistanceMeters",
   "gpsAccuracyMeters",
+  "compassAccuracyLevel",
   "destinationBearing",
   "deviceHeading",
   "headingDifferenceDegrees",

@@ -2,6 +2,8 @@ export interface NearbyPlaceCandidate {
   place_id?: string;
   name?: string;
   vicinity?: string;
+  formatted_address?: string;
+  business_status?: string;
   types?: string[];
   geometry?: {
     location?: {
@@ -196,6 +198,40 @@ export function selectNearbyPlaceCandidates(
       };
     })
     .filter((candidate): candidate is NearbyPlaceSelection => candidate !== null)
+    .filter((candidate) => candidate.business_status !== "CLOSED_PERMANENTLY")
     .filter((candidate) => candidate.distanceMeters <= maxDistanceMeters)
     .sort((a, b) => a.distanceMeters - b.distanceMeters);
+}
+
+/** Combines Nearby Search and Text Search results, keeping the first copy of each place. */
+export function mergeNearbyPlaceCandidates(
+  ...groups: NearbyPlaceCandidate[][]
+): NearbyPlaceCandidate[] {
+  const seen = new Set<string>();
+  const merged: NearbyPlaceCandidate[] = [];
+  for (const candidate of groups.flat()) {
+    const key = candidate.place_id;
+    if (key) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    merged.push(candidate);
+  }
+  return merged;
+}
+
+export function describeNearbyPlaceCandidates(
+  candidates: NearbyPlaceSelection[],
+  limit = 5
+): string {
+  if (candidates.length === 0) return "NO_RELEVANT_CANDIDATES";
+  return candidates
+    .slice(0, limit)
+    .map(
+      (candidate, index) =>
+        `${index + 1}. ${candidate.name ?? "Unnamed"} - ` +
+        `${candidate.vicinity ?? candidate.formatted_address ?? "no address"} - ` +
+        `${Math.round(candidate.distanceMeters)} m`
+    )
+    .join("\n");
 }

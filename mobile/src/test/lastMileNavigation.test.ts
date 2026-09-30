@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAlignedHeadingInstruction,
+  buildCloseRangeNoTurnInstruction,
+  buildHeadingConflictInstruction,
   buildLastMileApproachInstruction,
+  buildLastMileDistanceSentence,
   buildLastMileRetakeInstruction,
   buildLastMileTurnInstruction,
   calculateLastMileConfidence,
   compareCompassAndPanoramaHeadings,
+  isDestinationBearingReliable,
   isLastMileHeadingAligned,
+  LAST_MILE_HEADING_CONFLICT_MAX_SCORE,
   lastMileHeadingDifference,
   LAST_MILE_HEADINGS,
   LAST_MILE_PANORAMA_FOV_DEGREES,
@@ -56,9 +61,105 @@ test("buildLastMileTurnInstruction always chooses the shortest safe turn", () =>
   );
 });
 
-test("buildLastMileTurnInstruction rejects non-panorama headings", () => {
+test("buildLastMileTurnInstruction rejects non-finite headings", () => {
   assert.throws(() => buildLastMileTurnInstruction(Number.NaN, 45));
-  assert.throws(() => buildLastMileTurnInstruction(0, 22));
+  assert.throws(() => buildLastMileTurnInstruction(0, Number.POSITIVE_INFINITY));
+});
+
+test("raw headings near a sector boundary do not flip between left and right", () => {
+  // Starbucks 9/11 and 9/14: snapping 67 -> 45 and 68 -> 90 used to say "45 right".
+  assert.equal(buildLastMileTurnInstruction(67, 68), "No turn needed. Keep facing forward.");
+  assert.equal(buildLastMileTurnInstruction(68, 67), "No turn needed. Keep facing forward.");
+  assert.equal(buildLastMileTurnInstruction(355, 5), "No turn needed. Keep facing forward.");
+});
+
+test("small corrections use slight-turn wording", () => {
+  assert.equal(
+    buildLastMileTurnInstruction(100, 75),
+    "Turn slightly to your left, about 25 degrees."
+  );
+  assert.equal(
+    buildLastMileTurnInstruction(350, 22),
+    "Turn slightly to your right, about 30 degrees."
+  );
+  assert.equal(buildLastMileTurnInstruction(0, 62), "Turn 60 degrees to your right.");
+});
+
+test("confidence can never be high when compass and panorama disagree", () => {
+  // McDonald's 9/22: 14 m GPS, panorama and destination matched, compass disagreed -> was 0.77 HIGH.
+  const conflict = calculateLastMileConfidence({
+    gpsAccuracyMeters: 14,
+    panoramaCurrentViewMatched: true,
+    compassPanoramaAgrees: false,
+    destinationVisuallyMatched: true,
+    destinationReferenceVerified: false,
+  });
+  assert.equal(conflict.level, "low");
+  assert.ok(conflict.score <= LAST_MILE_HEADING_CONFLICT_MAX_SCORE);
+  assert.ok(conflict.reasons.includes("Compass and panorama headings disagree."));
+});
+
+test("a medium compass calibration lowers confidence", () => {
+  const input = {
+    gpsAccuracyMeters: 8,
+    panoramaCurrentViewMatched: true,
+    compassPanoramaAgrees: true,
+    destinationVisuallyMatched: true,
+    destinationReferenceVerified: false,
+  };
+  const calibrated = calculateLastMileConfidence({ ...input, compassAccuracyLevel: 3 });
+  const medium = calculateLastMileConfidence({ ...input, compassAccuracyLevel: 2 });
+  assert.ok(medium.score < calibrated.score);
+  assert.ok(medium.reasons.includes("Phone compass calibration is not high."));
+});
+
+test("map bearing is not trusted when the user is closer than the GPS error", () => {
+  // Luckin Coffee 9/22 at 4 m and 16 Handles 9/23 at 5-10 m gave contradictory turns.
+  assert.equal(isDestinationBearingReliable(4), false);
+  assert.equal(isDestinationBearingReliable(9, 5), false);
+  assert.equal(isDestinationBearingReliable(12, 20), false);
+  assert.equal(isDestinationBearingReliable(52, 14), true);
+  assert.equal(isDestinationBearingReliable(16), true);
+});
+
+test("withheld-turn messages never contain a turn instruction", () => {
+  const conflict = buildHeadingConflictInstruction("McDonald's", 52);
+  const closeRange = buildCloseRangeNoTurnInstruction("16 Handles", 5);
+  for (const message of [conflict, closeRange]) {
+    assert.doesNotMatch(message, /\bturn (?:\d+|around|slightly)/i);
+    assert.match(message, /will not guess a turn/);
+  }
+  assert.match(conflict, /^McDonald's is about 150 feet away/);
+  assert.match(closeRange, /^You are within about 15 feet of 16 Handles\./);
+});
+
+test("close-range guidance states how far the destination is after the turn", () => {
+  assert.equal(
+    buildLastMileDistanceSentence("Auntie Anne's", 4),
+    "After turning, Auntie Anne's is about 15 feet ahead."
+  );
+  assert.equal(
+    buildLastMileDistanceSentence("Frank's Pizza", 3, false),
+    "Frank's Pizza is about 10 feet ahead."
+  );
+  assert.equal(
+    buildLastMileDistanceSentence("Target", 66),
+    "After turning, Target is about 200 feet away in that direction. Continue with your primary navigation."
+  );
+  assert.throws(() => buildLastMileDistanceSentence("Target", -1));
+});
+
+test("far-away guidance names the branch it resolved", () => {
+  assert.equal(
+    buildLastMileApproachInstruction("McDonald's", 335, 45, "160 Broadway, New York"),
+    "The nearest McDonald's I found, at 160 Broadway, New York, is roughly 1,100 feet to the northeast. " +
+      "Continue with your primary navigation and use Last Meters again when you are within about 800 feet. " +
+      "If you are at a different McDonald's, add the street name and try again."
+  );
+  assert.match(
+    buildAlignedHeadingInstruction("Shake Shack", 1_100, "691 8th Ave"),
+    /^The nearest Shake Shack I found, at 691 8th Ave, is roughly .* add the street name and try again\.$/
+  );
 });
 
 test("parseDestinationVisibility only accepts an exact visible result", () => {

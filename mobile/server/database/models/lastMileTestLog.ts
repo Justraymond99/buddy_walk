@@ -29,6 +29,7 @@ export interface lastMileTestLogInterface {
   destinationTypes?: string[];
   destinationDistanceMeters?: number;
   gpsAccuracyMeters?: number;
+  compassAccuracyLevel?: number;
   destinationBearing?: number;
   deviceHeading?: number;
   headingDifferenceDegrees?: number;
@@ -88,6 +89,7 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   destinationTypes: [{ type: String }],
   destinationDistanceMeters: { type: Number },
   gpsAccuracyMeters: { type: Number },
+  compassAccuracyLevel: { type: Number },
   destinationBearing: { type: Number },
   deviceHeading: { type: Number },
   headingDifferenceDegrees: { type: Number },
@@ -108,6 +110,7 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
       "test_a_reference",
       "test_b_approach",
       "heading_aligned",
+      "heading_conflict",
       "destination_unverified",
     ],
     index: true,

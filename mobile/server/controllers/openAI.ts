@@ -61,7 +61,15 @@ export class OpenAIController {
   
   async lastMileRequest(req: Request, res: Response) {
     try {
-      const { lat, lng, image, destination, heading, gpsAccuracyMeters } = req.body;
+      const {
+        lat,
+        lng,
+        image,
+        destination,
+        heading,
+        gpsAccuracyMeters,
+        compassAccuracyLevel,
+      } = req.body;
       const validCoordinates = Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
       if (!validCoordinates || !image || !destination?.trim()) {
         return res.status(400).json({ error: "Missing or invalid required fields" });
@@ -78,6 +86,11 @@ export class OpenAIController {
         typeof gpsAccuracyMeters === "number" && Number.isFinite(gpsAccuracyMeters)
           ? gpsAccuracyMeters
           : undefined;
+      const compassLevel =
+        typeof compassAccuracyLevel === "number" &&
+        Number.isFinite(compassAccuracyLevel)
+          ? compassAccuracyLevel
+          : undefined;
       await lastMileOpenAIService.lastMileRequest(
         { req, res },
         Number(lat),
@@ -86,6 +99,7 @@ export class OpenAIController {
         destination.trim(),
         deviceHeading,
         accuracy,
+        compassLevel,
       );
     } catch (error) {
       res.status(500).json({ error: "Internal server error" });

@@ -38,11 +38,16 @@ import {
 } from "../utils/conversationHistory";
 import {
   buildAlignedHeadingInstruction,
+  buildCloseRangeNoTurnInstruction,
+  buildHeadingConflictInstruction,
   buildLastMileApproachInstruction,
+  buildLastMileDistanceSentence,
   buildLastMileRetakeInstruction,
   buildLastMileTurnInstruction,
   calculateLastMileConfidence,
   compareCompassAndPanoramaHeadings,
+  formatLastMileDistance,
+  isDestinationBearingReliable,
   isLastMileHeadingAligned,
   lastMileHeadingDifference,
   LAST_MILE_HEADINGS,
@@ -56,14 +61,17 @@ import {
 } from "../utils/lastMileNavigation";
 import type { LastMileTestScenario } from "../utils/lastMileNavigation";
 import {
+  describeNearbyPlaceCandidates,
   extractNearbyPlaceQuery,
   isNearbyPlaceCandidateRelevant,
   looksLikeBareDestinationQuery,
   MAX_LOCAL_PLACE_DISTANCE_METERS,
+  mergeNearbyPlaceCandidates,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
   selectNearbyPlaceCandidates,
 } from "../utils/nearbyPlaces";
+import type { NearbyPlaceSelection } from "../utils/nearbyPlaces";
 dotenv.config();
 
 function getGoogleMapsApiKey(): string {
@@ -148,6 +156,8 @@ interface VerifiedNearbyDestination {
   types: string[];
   location: LatLng;
   distanceMeters: number;
+  /** Ranked relevant candidates and which searches ran, for the trial log. */
+  candidateSummary: string;
 }
 
 async function getVerifiedNearbyDestination(
@@ -178,13 +188,17 @@ async function getVerifiedNearbyDestination(
   }
 
   let candidates = locationResponse.data.results ?? [];
-  let nearbyPlace = selectNearbyPlaceCandidate(
-    candidates.filter((candidate: any) =>
-      isNearbyPlaceCandidateRelevant(candidate, nearbyQuery),
-    ),
-    { lat, lng },
-    maxDistanceMeters,
-  );
+  const rankRelevant = (): NearbyPlaceSelection[] =>
+    selectNearbyPlaceCandidates(
+      candidates.filter((candidate: any) =>
+        isNearbyPlaceCandidateRelevant(candidate, nearbyQuery),
+      ),
+      { lat, lng },
+      maxDistanceMeters,
+    );
+  let ranked = rankRelevant();
+  let nearbyPlace: NearbyPlaceSelection | undefined = ranked[0];
+  const searchesUsed = ["nearby"];
 
   // if the name or type matcher rejects the result because the user entered
   // an acronym, abbreviation, etc e.g. USPS, use google's best result
@@ -207,9 +221,15 @@ async function getVerifiedNearbyDestination(
   // }
 
   // Nearby Search can miss valid businesses when the user provides a full
-  // store name or address. Text Search supplies a second local candidate set;
-  // distance filtering below still prevents an out-of-state result.
-  if (!nearbyPlace) {
+  // store name or address, and its keyword match can skip a closer branch of
+  // a chain. Text Search supplies a second local candidate set whenever the
+  // best Nearby result would push the user out of exact mode; distance
+  // filtering still prevents an out-of-state result.
+  if (
+    !nearbyPlace ||
+    nearbyPlace.distanceMeters > LAST_METERS_EXACT_RADIUS_METERS
+  ) {
+    searchesUsed.push("text");
     try {
       const textResponse = await axios.get(
         "https://maps.googleapis.com/maps/api/place/textsearch/json",
@@ -224,7 +244,10 @@ async function getVerifiedNearbyDestination(
         },
       );
       if (textResponse.data.status === "OK") {
-        candidates = candidates.concat(textResponse.data.results ?? []);
+        candidates = mergeNearbyPlaceCandidates(
+          candidates,
+          textResponse.data.results ?? [],
+        );
       } else if (textResponse.data.status !== "ZERO_RESULTS") {
         console.warn(
           `[Last Meters] Text Search fallback unavailable: ${textResponse.data.status}`,
@@ -233,13 +256,8 @@ async function getVerifiedNearbyDestination(
     } catch (error) {
       console.warn("[Last Meters] Text Search fallback request failed:", error);
     }
-    nearbyPlace = selectNearbyPlaceCandidate(
-      candidates.filter((candidate: any) =>
-        isNearbyPlaceCandidateRelevant(candidate, nearbyQuery),
-      ),
-      { lat, lng },
-      maxDistanceMeters,
-    );
+    ranked = rankRelevant();
+    nearbyPlace = ranked[0];
   }
   const placeLocation = nearbyPlace?.geometry?.location;
   if (
@@ -255,10 +273,17 @@ async function getVerifiedNearbyDestination(
   return {
     placeId: nearbyPlace.place_id,
     placeName: nearbyPlace.name || nearbyQuery,
-    placeAddress: nearbyPlace.vicinity || nearbyPlace.name || nearbyQuery,
+    placeAddress:
+      nearbyPlace.vicinity ||
+      nearbyPlace.formatted_address ||
+      nearbyPlace.name ||
+      nearbyQuery,
     types: nearbyPlace.types ?? [],
     location: { lat: placeLocation.lat, lng: placeLocation.lng },
     distanceMeters: nearbyPlace.distanceMeters,
+    candidateSummary:
+      `Searches: ${searchesUsed.join(" + ")}; ${candidates.length} raw results\n` +
+      describeNearbyPlaceCandidates(ranked),
   };
 }
 
@@ -467,7 +492,7 @@ async function getStreetViewWithHeading(
     const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
       address,
     )}&key=${getGoogleMapsApiKey()}`;
-
+    
     const geoRes = await fetch(geoUrl);
     const geoData = (await geoRes.json()) as GeocodeResponse;
 
@@ -481,7 +506,7 @@ async function getStreetViewWithHeading(
     // Step B: Find Nearest Panorama (Find the Car)
     // The Metadata API returns the specific lat/lng where the car was standing
     const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${houseLoc.lat},${houseLoc.lng}&key=${getGoogleMapsApiKey()}`;
-
+    
     const metaRes = await fetch(metaUrl);
     const metaData = (await metaRes.json()) as StreetViewMetadataResponse;
 
@@ -498,7 +523,7 @@ async function getStreetViewWithHeading(
 
     // Step D: Construct Final URL
     const finalUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${houseLoc.lat},${houseLoc.lng}&heading=${heading.toFixed(2)}&fov=80&pitch=0&key=${getGoogleMapsApiKey()}`;
-
+    
     console.log(`\n✅ Final Image URL:\n${finalUrl}`);
     return finalUrl;
   } catch (error) {
@@ -596,6 +621,7 @@ export class OpenAIService {
     destination: string,
     deviceHeading?: number,
     gpsAccuracyMeters?: number,
+    compassAccuracyLevel?: number,
   ) {
     const { res } = ctx;
     const startedAt = Date.now();
@@ -660,6 +686,14 @@ export class OpenAIService {
         destinationPlaceName = verifiedDestination.placeName;
         destinationPlaceAddress = verifiedDestination.placeAddress;
         destinationTypes = verifiedDestination.types;
+        testSteps.push({
+          name: "destination_candidates",
+          prompt:
+            "Rank relevant Google Places candidates by distance from the user.",
+          response: verifiedDestination.candidateSummary,
+          model: "google-places",
+          success: true,
+        });
       } catch (proximityError) {
         testScenario = "destination_unverified";
         const message =
@@ -750,6 +784,7 @@ export class OpenAIService {
         const finalOutput = buildAlignedHeadingInstruction(
           verifiedDestination.placeName,
           destinationDistanceMeters,
+          verifiedDestination.placeAddress,
         );
         const testLogId = await lastMileTestLogService.record({
           destination,
@@ -790,6 +825,7 @@ export class OpenAIService {
           verifiedDestination.placeName,
           destinationDistanceMeters,
           destinationBearing,
+          verifiedDestination.placeAddress,
         );
         testSteps.push({
           name: "proximity_gate",
@@ -847,9 +883,11 @@ export class OpenAIService {
       panoramaStatus = panorama.metadata.status;
       panoramaHeadings = tiles.map((tile) => tile.heading);
       const panoramaOrigin = panorama.metadata.location ?? { lat, lng };
-      const expectedTargetHeading = snapLastMileHeading(
-        calculateHeading(panoramaOrigin, verifiedDestination.location),
+      const panoramaTargetBearing = calculateHeading(
+        panoramaOrigin,
+        verifiedDestination.location,
       );
+      const expectedTargetHeading = snapLastMileHeading(panoramaTargetBearing);
       activeStage = "panorama assembly";
       panoramaPhoto = await buildPanoramaDebugImage(tiles);
       const panoramaOverviewMsg: any[] = [];
@@ -950,8 +988,8 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
       });
       if (currentHeading === undefined) {
         const finalOutput =
-          "Your phone compass heading was unavailable, so I will not calculate a turn. " +
-          "The panorama match was recorded for comparison only. Stop safely, check compass access, and try again.";
+          "Your phone compass was unavailable or not calibrated, so I will not calculate a turn. " +
+          "Stay where you are, move the phone in a slow figure eight to recalibrate the compass, then take a new photo.";
         const testLogId = await lastMileTestLogService.record({
           destination,
           lat,
@@ -969,6 +1007,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           destinationTypes,
           destinationDistanceMeters,
           gpsAccuracyMeters,
+          compassAccuracyLevel,
           destinationBearing,
           deviceHeading,
           headingDifferenceDegrees,
@@ -992,6 +1031,58 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           mode: navigationMode,
           testScenario,
           warning: "compass_heading_unavailable",
+        });
+        return;
+      }
+
+      if (headingComparisonAgrees === false) {
+        testScenario = "heading_conflict";
+        const finalOutput = buildHeadingConflictInstruction(
+          verifiedDestination.placeName,
+          destinationDistanceMeters,
+        );
+        const testLogId = await lastMileTestLogService.record({
+          destination,
+          lat,
+          lng,
+          userPhoto: await resizeDataUrlImage(image, 1024, 76),
+          panoramaPhoto,
+          panoramaDate,
+          panoramaStatus,
+          panoramaHeadings,
+          destinationPlaceName,
+          destinationPlaceAddress,
+          destinationTypes,
+          destinationDistanceMeters,
+          gpsAccuracyMeters,
+          compassAccuracyLevel,
+          destinationBearing,
+          deviceHeading,
+          headingDifferenceDegrees,
+          headingAligned,
+          compassHeading,
+          panoramaMatchedHeading,
+          headingComparisonDifference,
+          headingComparisonAgrees,
+          confidenceLevel: "low",
+          destinationReferenceUsed,
+          navigationMode,
+          testScenario,
+          currentHeading,
+          finalOutput,
+          steps: testSteps,
+          success: true,
+          error: "heading_sources_disagree",
+          latencyMs: Date.now() - startedAt,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          mode: navigationMode,
+          testScenario,
+          currentHeading,
+          confidenceLevel: "low",
+          warning: "heading_sources_disagree",
         });
         return;
       }
@@ -1034,8 +1125,10 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         expectedTargetHeading,
       );
       const visualMatchAgreesWithMap = targetHeading !== null;
+      let targetBearing: number | undefined;
       if (visualMatchAgreesWithMap) {
         testScenario = "test_a_visible";
+        targetBearing = panoramaTargetBearing;
       }
       testSteps.push({
         name: "target_store_match",
@@ -1158,6 +1251,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           destinationReferenceUsed = parseDestinationVisibility(step2bText);
           if (destinationReferenceUsed) {
             targetHeading = reference.targetHeading;
+            targetBearing = destinationBearing;
           }
           testSteps.push({
             name: "destination_reference_match",
@@ -1253,23 +1347,23 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           ? ` The available Street View panorama is dated ${panoramaDate} and may be outdated.`
           : " The available Street View imagery may be outdated.";
 
-        const distanceText =
-          typeof destinationDistanceMeters === "number"
-            ? `${Math.round(destinationDistanceMeters)} meters`
-            : "very close";
-
         // Still give compass→map-bearing turn degrees when possible so testers
         // near the door get orientation feedback even without a visual match.
+        const bearingReliable = isDestinationBearingReliable(
+          destinationDistanceMeters,
+          gpsAccuracyMeters,
+        );
         let turnFallback = "";
         let bearingTarget: number | undefined;
         if (
-          typeof currentHeading === "number" &&
+          bearingReliable &&
+          typeof deviceHeading === "number" &&
           typeof destinationBearing === "number"
         ) {
           try {
             bearingTarget = snapLastMileHeading(destinationBearing);
             turnFallback =
-              ` ${buildLastMileTurnInstruction(currentHeading, bearingTarget)}` +
+              ` ${buildLastMileTurnInstruction(deviceHeading, destinationBearing)}` +
               " That turn is based on your phone compass and the map location," +
               " not a visually confirmed entrance — use caution.";
           } catch {
@@ -1278,13 +1372,17 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           }
         }
 
-        const finalOutput =
-          `You are approximately ${distanceText} from ${verifiedDestination.placeName}. ` +
-          `Google Maps confirms the destination is near you, but I could not verify` +
-          ` the exact entrance in Street View.` +
-          ageWarning +
-          (turnFallback ||
-            " I cannot provide a turn direction without a compass heading.");
+        const finalOutput = bearingReliable
+          ? `You are about ${formatLastMileDistance(destinationDistanceMeters)} from ${verifiedDestination.placeName}. ` +
+            `Google Maps confirms the destination is near you, but I could not verify` +
+            ` the exact entrance in Street View.` +
+            ageWarning +
+            (turnFallback ||
+              " I cannot provide a turn direction without a compass heading.")
+          : buildCloseRangeNoTurnInstruction(
+              verifiedDestination.placeName,
+              destinationDistanceMeters,
+            );
 
         // Record explicitly why this run stopped before precise turn guidance.
         testSteps.push({
@@ -1295,7 +1393,10 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
             `DESTINATION_CONFIRMED: ${verifiedDestination.placeName}, ` +
             `${Math.round(verifiedDestination.distanceMeters)} meters away. ` +
             "ENTRANCE_NOT_VISUALLY_CONFIRMED." +
-            (turnFallback ? " COMPASS_BEARING_TURN_PROVIDED." : ""),
+            (turnFallback ? " COMPASS_BEARING_TURN_PROVIDED." : "") +
+            (bearingReliable
+              ? ""
+              : " CLOSER_THAN_GPS_ACCURACY_NO_TURN_PROVIDED."),
           model: "google-places",
           success: true,
         });
@@ -1317,6 +1418,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
           destinationTypes,
           destinationDistanceMeters,
           gpsAccuracyMeters,
+          compassAccuracyLevel,
           destinationBearing,
           deviceHeading,
           headingDifferenceDegrees,
@@ -1357,6 +1459,7 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
 
       const confidence = calculateLastMileConfidence({
         gpsAccuracyMeters,
+        compassAccuracyLevel,
         panoramaCurrentViewMatched: panoramaMatchedHeading !== undefined,
         compassPanoramaAgrees: headingComparisonAgrees,
         destinationVisuallyMatched: visualMatchAgreesWithMap,
@@ -1380,8 +1483,13 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
       // TYPESCRIPT MATH CALCULATION (Bulletproof Turn Logic)
       // ==========================================
       const turnInstruction = buildLastMileTurnInstruction(
-        currentHeading,
-        targetHeading,
+        deviceHeading ?? currentHeading,
+        targetBearing ?? targetHeading,
+      );
+      const distanceSentence = buildLastMileDistanceSentence(
+        verifiedDestination.placeName,
+        destinationDistanceMeters,
+        !turnInstruction.startsWith("No turn"),
       );
 
       // ==========================================
@@ -1462,7 +1570,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         confidence.level === "low"
           ? " Confidence is low. Stop safely after turning and take another photo to confirm before moving forward."
           : "";
-      const finalOutput = `${turnInstruction} Landmarks: ${landmarksGuidance}${confidenceNotice}`;
+      const finalOutput = `${turnInstruction} ${distanceSentence} Landmarks: ${landmarksGuidance}${confidenceNotice}`;
       const testLogId = await lastMileTestLogService.record({
         destination,
         lat,
@@ -1480,6 +1588,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         destinationTypes,
         destinationDistanceMeters,
         gpsAccuracyMeters,
+        compassAccuracyLevel,
         destinationBearing,
         deviceHeading,
         headingDifferenceDegrees,
@@ -1714,11 +1823,11 @@ Keep the response to two short sentences and do not repeat the turn instruction.
       systemContent += `Current Address: ${geocodedCoords[0].formatted_address} `;
     }
     if (content.coords?.heading !== undefined) {
-      systemContent += `, Heading (Compass Direction): ${content.coords.heading}`;
-    }
+        systemContent += `, Heading (Compass Direction): ${content.coords.heading}`;
+      }
     if (content.coords?.orientation) {
-      systemContent += `, Orientation - Alpha: ${content.coords.orientation.alpha}, Beta: ${content.coords.orientation.beta}, Gamma: ${content.coords.orientation.gamma}`;
-    }
+        systemContent += `, Orientation - Alpha: ${content.coords.orientation.alpha}, Beta: ${content.coords.orientation.beta}, Gamma: ${content.coords.orientation.gamma}`;
+      }
     if (!content.coords) content.coords = { latitude: 0, longitude: 0 };
 
     if (requiresVerifiedNearbyAnswer) {
@@ -1770,9 +1879,9 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           content.coords.latitude,
           content.coords.longitude,
         );
-        // console.log("parsedRequest: ", parsedRequest)
+      // console.log("parsedRequest: ", parsedRequest)
         console.log(parsedRequest?.choices[0].message);
-        //determine if chat gpt is returning an api link
+      //determine if chat gpt is returning an api link
         if (
           parsedRequest &&
           parsedRequest.choices.length > 0 &&
@@ -1788,8 +1897,8 @@ Keep the response to two short sentences and do not repeat the turn instruction.
           const parsedArgs = JSON.parse(
             parsedRequest.choices[0].message.tool_calls![0].function.arguments,
           );
-          //get link
-          const { link } = parsedArgs;
+        //get link
+        const { link } = parsedArgs;
           console.log(
             "Calling Google Maps tool:",
             parsedRequest.choices[0].message.tool_calls![0].function.name,
@@ -1836,35 +1945,35 @@ Keep the response to two short sentences and do not repeat the turn instruction.
               return;
             }
           }
-          // console.log("parsedArgs", parsedArgs);
+        // console.log("parsedArgs", parsedArgs);  
           if (
             link !== undefined &&
             parsedRequest.choices[0].message.tool_calls![0].function.name !==
               "generateTrainInformation"
           ) {
-            //use link
+          //use link
             if (
               parsedRequest.choices[0].message.tool_calls![0].function.name ===
               "getCrossStreets"
             ) {
-              completeAIPrompt += crossStreetsPrompt;
+            completeAIPrompt += crossStreetsPrompt;
               const completeLink = link + `&key=${getGoogleMapsApiKey()}`;
-              userContent.push({
+            userContent.push({
                 type: "image_url",
-                image_url: {
-                  url: completeLink,
+              image_url: {
+                url: completeLink,
                   detail: "low",
                 },
-              });
-              // console.log(userContent);
+            });
+            // console.log(userContent);
             } else {
               const places: any = await axios.get(
                 link + `&key=${getGoogleMapsApiKey()}`,
               );
-              //if its giving back a nearby places link
-              if (places.data.results) {
-                completeAIPrompt += nearbyPlacesPrompt;
-                // console.log(places.data.results)
+            //if its giving back a nearby places link
+            if (places.data.results) {
+              completeAIPrompt += nearbyPlacesPrompt;
+              // console.log(places.data.results)
                 relevantData = places.data.results
                   .map(
                     (place: {
@@ -1876,19 +1985,19 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                       `\n{name: ${place.name}, location(lat,lng): ${place.geometry.location.lat},${place.geometry.location.lng}, address: ${place.vicinity}, rating: ${place.rating} stars}`,
                   )
                   .join(", ");
-                //console.log(relevantData)
-                systemContent += `\nNearby Places in order of nearest distance: ${relevantData}`;
-                //console.log(systemContent)
-              }
-              //if its giving back a specific place link
-              else if (places.data.candidates) {
-                completeAIPrompt += nearbyPlacesPrompt;
-                //console.log(places.data.candidates[0])
-                //relevantData = `name: ${places.data.candidates[0].name}, address: ${places.data.candidates[0].formatted_address}`
-                //console.log(relevantData)
+              //console.log(relevantData)
+              systemContent += `\nNearby Places in order of nearest distance: ${relevantData}`;
+              //console.log(systemContent)
+            }
+            //if its giving back a specific place link
+            else if (places.data.candidates) {
+              completeAIPrompt += nearbyPlacesPrompt;
+              //console.log(places.data.candidates[0])
+              //relevantData = `name: ${places.data.candidates[0].name}, address: ${places.data.candidates[0].formatted_address}`
+              //console.log(relevantData)
                 let operatingHours = "";
-                if (places.data.candidates[0].opening_hours) {
-                  //console.log("user wants operating hours")
+              if (places.data.candidates[0].opening_hours) {
+                //console.log("user wants operating hours")
                   const placeInformation = await axios.get(
                     `https://maps.googleapis.com/maps/api/place/details/json?place_id=${places.data.candidates[0].place_id}&fields=opening_hours&key=${getGoogleMapsApiKey()}`,
                   );
@@ -1897,81 +2006,81 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                 }
                 systemContent += `Relevant Place Information: ${JSON.stringify(places.data.candidates[0], null, 2)}`;
                 systemContent += `Operating Hours: ${operatingHours.length > 0 ? operatingHours : "Not available"}`;
-              }
-              //if its giving back directions link
+            }
+            //if its giving back directions link
 
-              // else if (places.data.routes) {
-              //   console.log(places.data.routes[0].legs[0])
-              //   relevantData = "Directions:\n"
-              //   for (let i = 0; i < places.data.routes[0].legs[0].steps.length; i++) {
-              //     relevantData += `Step ${i + 1}) ${places.data.routes[0].legs[0].steps[i].html_instructions} \n`
-              //   }
-              //   systemContent += relevantData
-              //   const routePoints: { lat: number, lng: number  }[] = [{lat:places.data.routes[0].legs[0].steps[0].start_location.lat, lng:places.data.routes[0].legs[0].steps[0].start_location.lng}]
-              //   routePoints.push(...places.data.routes[0].legs[0].steps.map((step: { start_location: { lat: number, lng: number }, end_location: { lat: number, lng: number } }) => ({
-              //     lat: step.end_location.lat, lng: step.end_location.lng
-              //   })));
-              //   let staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?&size=640x640&maptype=roadmap&path=color:0x0000ff|weight:5|`;
-              //   staticMapUrl += routePoints.map(point => `${point.lat},${point.lng}`).join('|');
-              //   staticMapUrl += `&key=${process.env.GOOGLE_API_KEY}`;
-              //   console.log(staticMapUrl)
-              // }
+            // else if (places.data.routes) {
+            //   console.log(places.data.routes[0].legs[0])
+            //   relevantData = "Directions:\n"
+            //   for (let i = 0; i < places.data.routes[0].legs[0].steps.length; i++) {
+            //     relevantData += `Step ${i + 1}) ${places.data.routes[0].legs[0].steps[i].html_instructions} \n`
+            //   }
+            //   systemContent += relevantData
+            //   const routePoints: { lat: number, lng: number  }[] = [{lat:places.data.routes[0].legs[0].steps[0].start_location.lat, lng:places.data.routes[0].legs[0].steps[0].start_location.lng}]
+            //   routePoints.push(...places.data.routes[0].legs[0].steps.map((step: { start_location: { lat: number, lng: number }, end_location: { lat: number, lng: number } }) => ({
+            //     lat: step.end_location.lat, lng: step.end_location.lng
+            //   })));
+            //   let staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?&size=640x640&maptype=roadmap&path=color:0x0000ff|weight:5|`;
+            //   staticMapUrl += routePoints.map(point => `${point.lat},${point.lng}`).join('|');
+            //   staticMapUrl += `&key=${process.env.GOOGLE_API_KEY}`;
+            //   console.log(staticMapUrl)
+            // }
 
-              //if its giving back distance matrix link
-              else if (places.data.rows) {
+            //if its giving back distance matrix link
+            else if (places.data.rows) {
                 relevantData =
                   "distance: " +
                   places.data.rows[0].elements[0].distance.value +
                   ", duration: " +
                   places.data.rows[0].elements[0].duration.text;
                 systemContent += `Distance in miles: ${places.data.rows[0].elements[0].distance.value * 0.00062137}, How long it will take to walk: ${places.data.rows[0].elements[0].duration.text}`;
-                //console.log(systemContent)
-              }
+              //console.log(systemContent)
             }
           }
-          //if its using doorfront api
+        }
+        //if its using doorfront api
           else if (
             parsedRequest.choices[0].message.tool_calls![0].function.name ===
             "useDoorfrontAPI"
           ) {
-            //use doorfront api
-            completeAIPrompt += entrancePrompt;
+          //use doorfront api
+          completeAIPrompt += entrancePrompt;
             const parsedArgs = JSON.parse(
               parsedRequest.choices[0].message.tool_calls![0].function
                 .arguments,
             );
-            //get link
-            const { address } = parsedArgs;
-            // console.log(address)
+          //get link
+          const { address } = parsedArgs;
+          // console.log(address)
             const reqlink =
               `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?location=
             ${content.coords.latitude},${content.coords.longitude}&fields=formatted_address%2Cname%2Cgeometry&inputtype=textquery&input=${address.replace(/\s+/g, "%2C")}` +
               `&key=${getGoogleMapsApiKey()}`;
             console.log(reqlink);
-            const location: any = await axios.get(reqlink);
-            // console.log(location)
-            // console.log(geocodedCoords[0].formatted_address)
-            // remove st, nd, rd, th from address for better matching
+          const location: any = await axios.get(reqlink);
+          // console.log(location)
+          // console.log(geocodedCoords[0].formatted_address)
+          // remove st, nd, rd, th from address for better matching
             const cleanAddress = location.data.candidates[0].name.replace(
               /(\d+)(st|nd|rd|th)\b/gi,
               "$1",
             );
-            const panoramaData = await getPanoramaData(ctx, cleanAddress);
-            if (panoramaData) {
-              //console.log(panoramaData.human_labels[0].labels);
-              console.log(panoramaData.image_description);
+          const panoramaData = await getPanoramaData(ctx, cleanAddress);
+          if (panoramaData) {
+            //console.log(panoramaData.human_labels[0].labels);
+            console.log(panoramaData.image_description);
               if (
                 panoramaData.url &&
                 panoramaData.image_description === undefined
               ) {
-                userContent.push({
+              userContent.push({
                   type: "image_url",
-                  image_url: {
-                    url: panoramaData.url,
+                image_url: {
+                  url: panoramaData.url,
                     detail: "high",
                   },
-                });
-                panoramaId = panoramaData._id.toString();
+              });
+              panoramaId = panoramaData._id.toString();
                 relevantData = `Entrance Information and Features for ${location.data.candidates[0].formatted_address}:`;
                 relevantData += panoramaData.human_labels[0].labels
                   .map(
@@ -1988,29 +2097,29 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                       `\n${label.label} (${label.subtype ? label.subtype : "exists"}), Bounding Box: x = ${label.box.x}, y = ${label.box.y}, width: ${label.box.width}, height: ${label.box.height}`,
                   )
                   .join("; ");
-                console.log(relevantData);
-              } else {
-                relevantData += `Image Description: ${panoramaData.image_description}`;
-              }
+              console.log(relevantData);
             } else {
+              relevantData += `Image Description: ${panoramaData.image_description}`;
+            }
+          } else {
               console.error("No panorama data found for this address.");
               const streetViewURL = await getStreetViewWithHeading(
                 location.data.candidates[0].formatted_address,
               );
-              console.log("getting sv with proper heading... ", streetViewURL);
+            console.log("getting sv with proper heading... ", streetViewURL);
               if (streetViewURL)
                 userContent.push({
                   type: "image_url",
-                  image_url: {
-                    url: streetViewURL,
+                image_url: {
+                  url: streetViewURL,
                     detail: "high",
                   },
-                });
-              // relevantData = 'Data on this address has not been collected yet. Let the user know if they want detailed information on this address, they can visit doorfront.org and request it be added.';
-              relevantData = `Data on this address has not been collected yet by volunteers. Use the street view image to describe the entrance features visible from street view. Let the user know this data is not validated by real users and may not be correct.
+              });
+            // relevantData = 'Data on this address has not been collected yet. Let the user know if they want detailed information on this address, they can visit doorfront.org and request it be added.';
+            relevantData = `Data on this address has not been collected yet by volunteers. Use the street view image to describe the entrance features visible from street view. Let the user know this data is not validated by real users and may not be correct.
              When describing this image, provide a confidence level (1 to 5) for your description of the entrance based on how clear the image is.`;
-            }
-            systemContent += `\n${relevantData}`;
+          }
+          systemContent += `\n${relevantData}`;
           } else if (
             parsedRequest.choices[0].message.tool_calls![0].function.name ===
             "getNearbyFeatures"
@@ -2019,47 +2128,47 @@ Keep the response to two short sentences and do not repeat the turn instruction.
               parsedRequest.choices[0].message.tool_calls![0].function
                 .arguments,
             );
-            if (parsedArgs.address) {
-              console.log(parsedArgs.address);
+          if (parsedArgs.address) {
+            console.log(parsedArgs.address);
             }
             const features = await getNearbyFeatures(
               content.coords.latitude,
               content.coords.longitude,
               0.06,
             );
-            // console.log(features);
-            const trees: treeInterface[] = features.trees;
+          // console.log(features);
+          const trees: treeInterface[] = features.trees;
             const sidewalkMaterials: sidewalkMaterialInterface[] =
               features.sidewalkMaterials;
             const pedestrianRamps: pedestrianRampInterface[] =
               features.pedestrianRamps;
-            relevantData = `Nearby Features for location (${content.coords.latitude}, ${content.coords.longitude}):\n`;
-            relevantData += `Trees: ${trees.length}, Sidewalk Materials: ${sidewalkMaterials.length}, Pedestrian Ramps: ${pedestrianRamps.length}`;
-            systemContent += `\n${relevantData}`;
-            let staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?&zoom=18&size=640x640&maptype=roadmap`;
-            // Add user location marker
-            staticMapUrl += `&markers=color:blue%7Clabel:U%7C${content.coords.latitude},${content.coords.longitude}`;
+          relevantData = `Nearby Features for location (${content.coords.latitude}, ${content.coords.longitude}):\n`;
+          relevantData += `Trees: ${trees.length}, Sidewalk Materials: ${sidewalkMaterials.length}, Pedestrian Ramps: ${pedestrianRamps.length}`;
+          systemContent += `\n${relevantData}`;
+          let staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?&zoom=18&size=640x640&maptype=roadmap`;
+          // Add user location marker
+          staticMapUrl += `&markers=color:blue%7Clabel:U%7C${content.coords.latitude},${content.coords.longitude}`;
             staticMapUrl += `&markers=color:green%7Clabel:T%7C${trees.map((tree) => `${tree.location.coordinates[1]},${tree.location.coordinates[0]}`).join("%7C")}`;
-            // staticMapUrl += `&markers=color:yellow%7Clabel:S%7C${sidewalkMaterials.map(material => `${material.location.coordinates[1]},${material.location.coordinates[0]}`).join('%7C')}`;
-            // Define colors for each sidewalk material type
-            const materialColors: Record<string, string> = {
-              tactile: "yellow",
-              //concrete: "gray",
-              manhole: "black",
-              "cellar door": "brown",
-              "subway grate": "orange",
+          // staticMapUrl += `&markers=color:yellow%7Clabel:S%7C${sidewalkMaterials.map(material => `${material.location.coordinates[1]},${material.location.coordinates[0]}`).join('%7C')}`;
+          // Define colors for each sidewalk material type
+          const materialColors: Record<string, string> = {
+            tactile: "yellow",
+            //concrete: "gray",
+            manhole: "black",
+            "cellar door": "brown",
+            "subway grate": "orange",
               other: "white",
-            };
+          };
 
-            // Add a marker for each material type
-            Object.entries(materialColors).forEach(([material, color]) => {
-              const locations = sidewalkMaterials
+          // Add a marker for each material type
+          Object.entries(materialColors).forEach(([material, color]) => {
+            const locations = sidewalkMaterials
                 .filter((m) => m.material.toLowerCase() === material)
                 .map(
                   (m) =>
                     `${m.location.coordinates[1]},${m.location.coordinates[0]}`,
                 );
-              if (locations.length > 0) {
+            if (locations.length > 0) {
                 staticMapUrl += `&markers=color:${color}%7Clabel:S%7C${locations.join("%7C")}`;
               }
             });
@@ -2069,12 +2178,12 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                   `${ramp.location.coordinates[1]},${ramp.location.coordinates[0]}`,
               )
               .join("%7C")}`;
-            // Add the API key to the static map URL
+          // Add the API key to the static map URL
             staticMapUrl += `&key=${getGoogleMapsApiKey()}`;
 
-            console.log(staticMapUrl);
-          }
-          // Directions with static map, doorfront, and features
+          console.log(staticMapUrl);
+        }
+        // Directions with static map, doorfront, and features
           else if (
             parsedRequest.choices[0].message.tool_calls![0].function.name ===
               "generateGoogleDirectionAPILink" &&
@@ -2085,10 +2194,10 @@ Keep the response to two short sentences and do not repeat the turn instruction.
               let formattedAddress = "";
               let nearbyPlaceId: string | undefined;
               console.log("Generating Google Direction API Link");
-              console.log(parsedArgs);
-              // step 1: if destination is a store name, get the formatted address
-              let cleanAddress;
-              if (!parsedArgs.address) {
+            console.log(parsedArgs);
+            // step 1: if destination is a store name, get the formatted address
+            let cleanAddress;
+            if (!parsedArgs.address) {
                 const nearbyQuery = normalizeNearbyPlaceQuery(
                   String(parsedArgs.destination || ""),
                 );
@@ -2169,11 +2278,11 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                   "$1",
                 );
                 nearbyPlaceId = location.data.candidates[0].place_id;
-              }
-              console.log(formattedAddress);
+            }
+            console.log(formattedAddress);
 
-              // step 2: get doorfront data if it exists for the formatted address
-              const panoramaData = await getPanoramaData(ctx, cleanAddress);
+            // step 2: get doorfront data if it exists for the formatted address
+            const panoramaData = await getPanoramaData(ctx, cleanAddress);
               let doorfrontData = "";
               let doorLocation:
                 | { lat: number; lng: number }
@@ -2188,28 +2297,28 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                   "Panorama data found for address:",
                   formattedAddress,
                 );
-                // doorfrontData += panoramaData.human_labels[0].labels.map(
-                //   (label: { label: string, subtype: string, box: { x: number, y: number, width: number, height: number } }) =>
-                //     `\n${label.label} (${label.subtype ? label.subtype : 'exists'}), Bounding Box: x = ${label.box.x}, y = ${label.box.y}, width: ${label.box.width}, height: ${label.box.height}`
-                // ).join('; ');
-                for (const label of panoramaData.human_labels[0].labels) {
+              // doorfrontData += panoramaData.human_labels[0].labels.map(
+              //   (label: { label: string, subtype: string, box: { x: number, y: number, width: number, height: number } }) =>
+              //     `\n${label.label} (${label.subtype ? label.subtype : 'exists'}), Bounding Box: x = ${label.box.x}, y = ${label.box.y}, width: ${label.box.width}, height: ${label.box.height}`
+              // ).join('; ');
+              for (const label of panoramaData.human_labels[0].labels) {
                   if (label.label === "door") {
-                    doorLocation = `${label.exactCoordinates?.lat}, ${label.exactCoordinates?.lng}`;
-                    break;
-                  }
+                  doorLocation = `${label.exactCoordinates?.lat}, ${label.exactCoordinates?.lng}`;
+                  break;
                 }
-                if (doorLocation === undefined) {
-                  doorLocation = `${panoramaData.location.lat}, ${panoramaData.location.lng}`;
-                }
-              } else {
+              }
+              if (doorLocation === undefined) {
+                doorLocation = `${panoramaData.location.lat}, ${panoramaData.location.lng}`;
+              }
+            } else {
                 console.log("No panorama data found for this address.");
                 console.log(
                   "getting sv with proper heading... ",
                   getStreetViewWithHeading(formattedAddress),
                 );
-              }
-              // step 3: get route from starting location to destination (doorfront location if it exists)
-              if (!doorLocation) {
+            }
+            // step 3: get route from starting location to destination (doorfront location if it exists)
+            if (!doorLocation) {
                 doorLocation = nearbyPlaceId
                   ? `place_id:${nearbyPlaceId}`
                   : formattedAddress;
@@ -2241,75 +2350,75 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                 relevantData += `Step ${i + 1}) ${route.data.routes[0].legs[0].steps[i].html_instructions} for ${route.data.routes[0].legs[0].steps[i].distance.text} \n`;
               }
               systemContent += relevantData;
-              // // step 4: Take each lat/lng from each point in route --> can just use encoded polyline
-              // const polyline = route.data.routes[0].overview_polyline.points;
-              // const routePoints: { lat: number, lng: number  }[] = [{lat:route.data.routes[0].legs[0].steps[0].start_location.lat, lng:route.data.routes[0].legs[0].steps[0].start_location.lng}]
-              // routePoints.push(...route.data.routes[0].legs[0].steps.map((step: { start_location: { lat: number, lng: number }, end_location: { lat: number, lng: number } }) => ({
-              //   lat: step.end_location.lat, lng: step.end_location.lng
-              // })));
-              // // step 5: For each point in route, get features in a certain radius around that point
-              // const features = await Promise.all(routePoints.map(async (point) => {
-              //   const nearbyFeatures = await getNearbyFeatures(point.lat, point.lng, 0.03);
-              //   return nearbyFeatures;
-              // }));
-              // const mergedFeatures = {
-              //   trees: features.flatMap(f => f.trees),
-              //   sidewalkMaterials: features.flatMap(f => f.sidewalkMaterials),
-              //   pedestrianRamps: features.flatMap(f => f.pedestrianRamps),
-              // };
-              // // console.log(features)
-              // // step 6: Add the route line and all features to the static map along with starting and ending position
-              // // let staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?&size=640x640&maptype=roadmap&path=color:0x0000ff|weight:7|enc:${polyline}`;
-              // let staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${routePoints[routePoints.length-1].lat},${routePoints[routePoints.length-1].lng}&zoom=19&size=640x640&maptype=roadmap&path=color:0x0000ff|weight:7|enc:${polyline}`;
-              // const trees: treeInterface[] = mergedFeatures.trees;
-              // const sidewalkMaterials: sidewalkMaterialInterface[] = mergedFeatures.sidewalkMaterials;
-              // const pedestrianRamps: pedestrianRampInterface[] = mergedFeatures.pedestrianRamps;
-              // staticMapUrl += `&markers=color:blue%7Clabel:U%7C${content.coords.latitude},${content.coords.longitude}`;
-              // staticMapUrl += `&markers=color:red%7Clabel:D%7C${routePoints[routePoints.length-1].lat},${routePoints[routePoints.length-1].lng}`;
-              // staticMapUrl += `&markers=color:green%7Clabel:T%7C${trees.map(tree => `${tree.location.coordinates[1]},${tree.location.coordinates[0]}`).join('%7C')}`;
-              // systemContent += `Feature Locations: Trees: ${trees.map(tree => `(${tree.location.coordinates[1]},${tree.location.coordinates[0]})`).join(', ')} \n
-              // Sidewalk Materials: ${sidewalkMaterials.map(material => `${material.material} at (${material.location.coordinates[1]},${material.location.coordinates[0]})`).join(', ')} \n
-              // Pedestrian Ramps: ${pedestrianRamps.map(ramp => `(${ramp.location.coordinates[1]},${ramp.location.coordinates[0]})`).join(', ')}`;
-              // // staticMapUrl += `&markers=color:yellow%7Clabel:S%7C${sidewalkMaterials.map(material => `${material.location.coordinates[1]},${material.location.coordinates[0]}`).join('%7C')}`;
-              // // Define colors for each sidewalk material type
-              // const materialColors: Record<string, string> = {
-              //   // tactile: "yellow",
-              //   //concrete: "gray",
-              //   // manhole: "black",
-              //   // "cellar door": "brown",
-              //   "subway grate": "orange",
-              //   // other: "white"
-              // };
+            // // step 4: Take each lat/lng from each point in route --> can just use encoded polyline
+            // const polyline = route.data.routes[0].overview_polyline.points;
+            // const routePoints: { lat: number, lng: number  }[] = [{lat:route.data.routes[0].legs[0].steps[0].start_location.lat, lng:route.data.routes[0].legs[0].steps[0].start_location.lng}]
+            // routePoints.push(...route.data.routes[0].legs[0].steps.map((step: { start_location: { lat: number, lng: number }, end_location: { lat: number, lng: number } }) => ({
+            //   lat: step.end_location.lat, lng: step.end_location.lng
+            // })));
+            // // step 5: For each point in route, get features in a certain radius around that point
+            // const features = await Promise.all(routePoints.map(async (point) => {
+            //   const nearbyFeatures = await getNearbyFeatures(point.lat, point.lng, 0.03);
+            //   return nearbyFeatures;
+            // }));
+            // const mergedFeatures = {
+            //   trees: features.flatMap(f => f.trees),
+            //   sidewalkMaterials: features.flatMap(f => f.sidewalkMaterials),
+            //   pedestrianRamps: features.flatMap(f => f.pedestrianRamps),
+            // };
+            // // console.log(features)
+            // // step 6: Add the route line and all features to the static map along with starting and ending position
+            // // let staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?&size=640x640&maptype=roadmap&path=color:0x0000ff|weight:7|enc:${polyline}`;
+            // let staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${routePoints[routePoints.length-1].lat},${routePoints[routePoints.length-1].lng}&zoom=19&size=640x640&maptype=roadmap&path=color:0x0000ff|weight:7|enc:${polyline}`;
+            // const trees: treeInterface[] = mergedFeatures.trees;
+            // const sidewalkMaterials: sidewalkMaterialInterface[] = mergedFeatures.sidewalkMaterials;
+            // const pedestrianRamps: pedestrianRampInterface[] = mergedFeatures.pedestrianRamps;
+            // staticMapUrl += `&markers=color:blue%7Clabel:U%7C${content.coords.latitude},${content.coords.longitude}`;
+            // staticMapUrl += `&markers=color:red%7Clabel:D%7C${routePoints[routePoints.length-1].lat},${routePoints[routePoints.length-1].lng}`;
+            // staticMapUrl += `&markers=color:green%7Clabel:T%7C${trees.map(tree => `${tree.location.coordinates[1]},${tree.location.coordinates[0]}`).join('%7C')}`;
+            // systemContent += `Feature Locations: Trees: ${trees.map(tree => `(${tree.location.coordinates[1]},${tree.location.coordinates[0]})`).join(', ')} \n 
+            // Sidewalk Materials: ${sidewalkMaterials.map(material => `${material.material} at (${material.location.coordinates[1]},${material.location.coordinates[0]})`).join(', ')} \n 
+            // Pedestrian Ramps: ${pedestrianRamps.map(ramp => `(${ramp.location.coordinates[1]},${ramp.location.coordinates[0]})`).join(', ')}`;
+            // // staticMapUrl += `&markers=color:yellow%7Clabel:S%7C${sidewalkMaterials.map(material => `${material.location.coordinates[1]},${material.location.coordinates[0]}`).join('%7C')}`;
+            // // Define colors for each sidewalk material type
+            // const materialColors: Record<string, string> = {
+            //   // tactile: "yellow",
+            //   //concrete: "gray",
+            //   // manhole: "black",
+            //   // "cellar door": "brown",
+            //   "subway grate": "orange",
+            //   // other: "white"
+            // };
 
-              // // Add a marker for each material type
-              // Object.entries(materialColors).forEach(([material, color]) => {
-              //   const locations = sidewalkMaterials
-              //     .filter(m => m.material.toLowerCase() === material)
-              //     .map(m => `${m.location.coordinates[1]},${m.location.coordinates[0]}`);
-              //   if (locations.length > 0) {
-              //     staticMapUrl += `&markers=color:${color}%7Clabel:S%7C${locations.join('%7C')}`;
-              //   }
-              // });
-              // staticMapUrl += `&markers=color:red%7Clabel:R%7C${pedestrianRamps.map(
-              //   ramp => `${ramp.location.coordinates[1]},${ramp.location.coordinates[0]}`).join('%7C')}`;
-              // // Add the API key to the static map URL
-              // staticMapUrl += `&key=${process.env.GOOGLE_API_KEY}`;
-              // console.log(staticMapUrl);
-              //   // step 7: give populated static map to gpt
-              // userContent.push({
-              //   type: 'image_url',
-              //   image_url: {
-              //     url: staticMapUrl,
-              //     detail: 'high',
-              //   }
-              // });
-              // const fullRouteData = {
-              //   route: routePoints,
-              //   features: mergedFeatures,
-              //   doorfront: doorfrontData,
-              // }
-              // console.log(JSON.stringify(fullRouteData))
-            } catch (error) {
+            // // Add a marker for each material type
+            // Object.entries(materialColors).forEach(([material, color]) => {
+            //   const locations = sidewalkMaterials
+            //     .filter(m => m.material.toLowerCase() === material)
+            //     .map(m => `${m.location.coordinates[1]},${m.location.coordinates[0]}`);
+            //   if (locations.length > 0) {
+            //     staticMapUrl += `&markers=color:${color}%7Clabel:S%7C${locations.join('%7C')}`;
+            //   }
+            // });
+            // staticMapUrl += `&markers=color:red%7Clabel:R%7C${pedestrianRamps.map(
+            //   ramp => `${ramp.location.coordinates[1]},${ramp.location.coordinates[0]}`).join('%7C')}`;
+            // // Add the API key to the static map URL
+            // staticMapUrl += `&key=${process.env.GOOGLE_API_KEY}`;
+            // console.log(staticMapUrl);
+            //   // step 7: give populated static map to gpt
+            // userContent.push({
+            //   type: 'image_url',
+            //   image_url: {
+            //     url: staticMapUrl,
+            //     detail: 'high',
+            //   }
+            // });
+            // const fullRouteData = {
+            //   route: routePoints,
+            //   features: mergedFeatures,
+            //   doorfront: doorfrontData,
+            // }
+            // console.log(JSON.stringify(fullRouteData))
+          } catch (error) {
               console.error("Nearby directions lookup failed:", error);
               const failedDestination = String(
                 parsedArgs.destination || "that destination",
@@ -2340,36 +2449,36 @@ Keep the response to two short sentences and do not repeat the turn instruction.
             parsedRequest.choices[0].message.tool_calls![0].function.name ===
             "generateTrainInformation"
           ) {
-            completeAIPrompt += trainPrompt;
+          completeAIPrompt += trainPrompt;
             const parsedArgs = JSON.parse(
               parsedRequest.choices[0].message.tool_calls![0].function
                 .arguments,
             );
-            const extractedRoute = extractTrainLineFromText(content.text);
+          const extractedRoute = extractTrainLineFromText(content.text);
             const route =
               extractedRoute ?? (parsedArgs.routeId?.toUpperCase() || "A");
-            console.log(`[MTA] AI requested data for the ${route} train.`);
+          console.log(`[MTA] AI requested data for the ${route} train.`);
 
-            const trainData = await getSubwayArrivals(
-              route,
-              content.coords.latitude,
+          const trainData = await getSubwayArrivals(
+            route,
+            content.coords.latitude,
               content.coords.longitude,
-            );
+          );
 
-            relevantData = `Live MTA Transit Information for line ${route}: ${trainData}`;
-            systemContent += `\n${relevantData}`;
+          relevantData = `Live MTA Transit Information for line ${route}: ${trainData}`;
+          systemContent += `\n${relevantData}`;
           } else if (
             parsedRequest.choices[0].message.tool_calls![0].function.name ===
             "imageDescription"
           ) {
-            completeAIPrompt += imagePrompt;
+          completeAIPrompt += imagePrompt;
           } else if (
             parsedRequest.choices[0].message.tool_calls![0].function.name ===
             "videoDescription"
           ) {
-            completeAIPrompt += videoPrompt;
-          }
-        } else console.log("No tool calls found in OpenAI response");
+          completeAIPrompt += videoPrompt;
+        }
+      } else console.log("No tool calls found in OpenAI response");
       }
       // const places = await fetchNearbyPlaces(content.coords.latitude, content.coords.longitude);
       // nearbyPlaces = places.map((place: { name: string }) => place.name).join(', ');
@@ -2424,9 +2533,9 @@ Keep the response to two short sentences and do not repeat the turn instruction.
 
       // 3. Only update if both conditions are met AND we have a valid ID
       if (panoramaId) {
-        console.log("Generating new description for DF database...");
-
-        // We pass the panorama _id and the AI's generated output
+          console.log("Generating new description for DF database...");
+          
+          // We pass the panorama _id and the AI's generated output
         await addPanoramaDescription(panoramaId, outputText);
       }
       await recordAiRequest(true, {

@@ -8,12 +8,25 @@ export type LastMileTestScenario =
   | "test_a_reference"
   | "test_b_approach"
   | "heading_aligned"
+  | "heading_conflict"
   | "destination_unverified";
 
 export type LastMileConfidenceLevel = "high" | "medium" | "low";
 
+/** Highest score allowed when compass and panorama disagree; always "low". */
+export const LAST_MILE_HEADING_CONFLICT_MAX_SCORE = 0.5;
+
+/**
+ * Below this distance (or the GPS accuracy, if larger) the bearing from the
+ * phone's GPS fix to the Places pin is noise, so it must not drive a turn.
+ */
+export const LAST_MILE_MIN_RELIABLE_BEARING_METERS = 10;
+const LAST_MILE_DEFAULT_GPS_ACCURACY_METERS = 15;
+
 export interface LastMileConfidenceInput {
   gpsAccuracyMeters?: number;
+  /** expo-location compass calibration: 3 high, 2 medium, 1 low, 0 none. */
+  compassAccuracyLevel?: number;
   panoramaCurrentViewMatched: boolean;
   compassPanoramaAgrees?: boolean;
   destinationVisuallyMatched: boolean;
@@ -59,10 +72,17 @@ export function calculateLastMileConfidence(
   if (input.compassPanoramaAgrees === true) {
     score += 0.15;
   } else if (input.compassPanoramaAgrees === false) {
-    score += 0.02;
     reasons.push("Compass and panorama headings disagree.");
   } else {
     reasons.push("Compass and panorama headings could not be compared.");
+  }
+
+  if (
+    typeof input.compassAccuracyLevel === "number" &&
+    input.compassAccuracyLevel < 3
+  ) {
+    score -= 0.05;
+    reasons.push("Phone compass calibration is not high.");
   }
 
   if (input.destinationVisuallyMatched) {
@@ -72,6 +92,12 @@ export function calculateLastMileConfidence(
     reasons.push("Destination was verified with a separate Street View reference.");
   } else {
     reasons.push("Destination was not visually verified.");
+  }
+
+  // One wrong heading source means the turn itself may be wrong, so no amount
+  // of other agreement can make the result trustworthy.
+  if (input.compassPanoramaAgrees === false) {
+    score = Math.min(score, LAST_MILE_HEADING_CONFLICT_MAX_SCORE);
   }
 
   const boundedScore = Math.max(0, Math.min(1, score));
@@ -197,7 +223,7 @@ export function resolveVerifiedTargetHeading(
     : null;
 }
 
-function formatLastMileDistance(distanceMeters: number): string {
+export function formatLastMileDistance(distanceMeters: number): string {
   if (distanceMeters >= 1_000) {
     return `${(distanceMeters / 1_609.344).toFixed(1)} miles`;
   }
@@ -240,23 +266,39 @@ export function shouldUseDestinationReference(distanceMeters: number): boolean {
   return distanceMeters <= LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS;
 }
 
+function describeResolvedBranch(destination: string, address?: string): string {
+  const trimmed = address?.trim();
+  return trimmed && trimmed !== destination
+    ? `The nearest ${destination} I found, at ${trimmed},`
+    : destination;
+}
+
+function differentBranchHint(destination: string, address?: string): string {
+  return address?.trim() && address.trim() !== destination
+    ? ` If you are at a different ${destination}, add the street name and try again.`
+    : "";
+}
+
 export function buildAlignedHeadingInstruction(
   destination: string,
-  distanceMeters: number
+  distanceMeters: number,
+  address?: string
 ): string {
   if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
     throw new Error("Last Meters distance must be a non-negative finite number.");
   }
   return (
-    `${destination} is roughly ${formatLastMileDistance(distanceMeters)} ahead on your current heading. ` +
-    "Keep this heading and continue with your primary navigation."
+    `${describeResolvedBranch(destination, address)} is roughly ${formatLastMileDistance(distanceMeters)} ahead on your current heading. ` +
+    "Keep this heading and continue with your primary navigation." +
+    differentBranchHint(destination, address)
   );
 }
 
 export function buildLastMileApproachInstruction(
   destination: string,
   distanceMeters: number,
-  bearing: number
+  bearing: number,
+  address?: string
 ): string {
   if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
     throw new Error("Last Meters distance must be a non-negative finite number.");
@@ -265,9 +307,70 @@ export function buildLastMileApproachInstruction(
   const distance = formatLastMileDistance(distanceMeters);
 
   return (
-    `${destination} is roughly ${distance} to the ${direction}. ` +
-    "Continue with your primary navigation and use Last Meters again when you are within about 800 feet."
+    `${describeResolvedBranch(destination, address)} is roughly ${distance} to the ${direction}. ` +
+    "Continue with your primary navigation and use Last Meters again when you are within about 800 feet." +
+    differentBranchHint(destination, address)
   );
+}
+
+export function isDestinationBearingReliable(
+  distanceMeters: number,
+  gpsAccuracyMeters?: number
+): boolean {
+  const accuracy =
+    typeof gpsAccuracyMeters === "number" && Number.isFinite(gpsAccuracyMeters)
+      ? gpsAccuracyMeters
+      : LAST_MILE_DEFAULT_GPS_ACCURACY_METERS;
+  return distanceMeters > Math.max(LAST_MILE_MIN_RELIABLE_BEARING_METERS, accuracy);
+}
+
+export function buildHeadingConflictInstruction(
+  destination: string,
+  distanceMeters: number
+): string {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  return (
+    `${destination} is about ${formatLastMileDistance(distanceMeters)} away, but your phone compass and ` +
+    "Street View disagree about which way you are facing, so I will not guess a turn. " +
+    "Stay where you are, move the phone in a slow figure eight to recalibrate the compass, " +
+    "then hold it upright in front of you and take a new photo."
+  );
+}
+
+export function buildCloseRangeNoTurnInstruction(
+  destination: string,
+  distanceMeters: number
+): string {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  return (
+    `You are within about ${formatLastMileDistance(distanceMeters)} of ${destination}. ` +
+    "At this range GPS cannot tell which side the entrance is on, so I will not guess a turn. " +
+    "Face the storefront and take a new photo, or ask someone nearby for the door."
+  );
+}
+
+/**
+ * States how far the destination is once the user has turned. Built in code,
+ * not by the model, because the model is forbidden from telling a blind user
+ * to walk.
+ */
+export function buildLastMileDistanceSentence(
+  destination: string,
+  distanceMeters: number,
+  afterTurn = true
+): string {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  const distance = formatLastMileDistance(distanceMeters);
+  const subject = afterTurn ? `After turning, ${destination}` : destination;
+  return distanceMeters <= 30
+    ? `${subject} is about ${distance} ahead.`
+    : `${subject} is about ${distance} away in that direction. Continue with your primary navigation.`;
 }
 
 export function buildLastMileRetakeInstruction(
@@ -285,22 +388,21 @@ export function buildLastMileRetakeInstruction(
   );
 }
 
+/**
+ * Takes raw (unsnapped) headings. Snapping both sides to 45 degree sectors
+ * first can turn a true 0 degree difference into "45 left" or "45 right".
+ */
 export function buildLastMileTurnInstruction(
   currentHeading: number,
   targetHeading: number
 ): string {
-  if (
-    !LAST_MILE_HEADINGS.includes(currentHeading as (typeof LAST_MILE_HEADINGS)[number]) ||
-    !LAST_MILE_HEADINGS.includes(targetHeading as (typeof LAST_MILE_HEADINGS)[number])
-  ) {
-    throw new Error("Last Meters headings must be one of the eight panorama directions.");
+  if (!Number.isFinite(currentHeading) || !Number.isFinite(targetHeading)) {
+    throw new Error("Last Meters headings must be finite numbers.");
   }
 
-  let diff = (targetHeading - currentHeading) % 360;
-  if (diff > 180) diff -= 360;
-  if (diff < -180) diff += 360;
-
-  const degrees = Math.abs(diff);
+  // Signed difference in (-180, 180]; positive means turn right.
+  const diff = ((((targetHeading - currentHeading) % 360) + 540) % 360) - 180;
+  const degrees = Math.round(Math.abs(diff) / 5) * 5;
 
   if (degrees <= 15) {
     return "No turn needed. Keep facing forward.";
@@ -309,6 +411,9 @@ export function buildLastMileTurnInstruction(
     return "Turn around 180 degrees without moving forward.";
   }
 
-  // Positive diff = Right, Negative diff = Left
-  return `Turn ${degrees} degrees to your ${diff > 0 ? "right" : "left"}.`;
+  const side = diff > 0 ? "right" : "left";
+  if (degrees <= 35) {
+    return `Turn slightly to your ${side}, about ${degrees} degrees.`;
+  }
+  return `Turn ${degrees} degrees to your ${side}.`;
 }

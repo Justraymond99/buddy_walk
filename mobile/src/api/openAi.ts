@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { aiClient, apiClient } from './client';
 import { withNetworkRetry } from './retry';
 import { withBriefReplyInstruction } from '../utils/briefAiInstruction';
@@ -40,14 +41,21 @@ export async function sendTextRequest(data: RequestData): Promise<TextResponse |
     throw e;
   }
 }
-export async function sendLastMileRequest(data: {
-  lat: number;
-  lng: number;
-  gpsAccuracyMeters?: number;
-  heading?: number;
-  image: string;
-  destination: string;
-}): Promise<{
+/** A normal Last Meters answer takes seconds; past this the user should get the app back. */
+export const LAST_MILE_TIMEOUT_MS = 60_000;
+
+export async function sendLastMileRequest(
+  data: {
+    lat: number;
+    lng: number;
+    gpsAccuracyMeters?: number;
+    heading?: number;
+    compassAccuracyLevel?: number;
+    image: string;
+    destination: string;
+  },
+  signal?: AbortSignal
+): Promise<{
   output?: string;
   error?: string;
   testLogId?: string;
@@ -57,8 +65,13 @@ export async function sendLastMileRequest(data: {
   // Last Meters hits Render; when Maps+OpenAI keys are absent it is rewritten to
   // buddywalk.app /api/text upstream.
   try {
-    const res = await withNetworkRetry(() =>
-      apiClient.post('/last-mile', data, { timeout: 180_000 })
+    const res = await withNetworkRetry(
+      () =>
+        apiClient.post('/last-mile', data, {
+          timeout: LAST_MILE_TIMEOUT_MS,
+          signal,
+        }),
+      { retries: 1, retryOnTimeout: false, warmOnFailure: false }
     );
     return res.data as {
       output?: string;
@@ -68,6 +81,7 @@ export async function sendLastMileRequest(data: {
       warning?: string;
     };
   } catch (error: any) {
+    if (axios.isCancel(error)) throw error;
     console.error('sendLastMileRequest error:', error);
     const backendMessage = error?.response?.data?.error;
     if (typeof backendMessage === 'string' && backendMessage.trim()) {

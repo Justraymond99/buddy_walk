@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  describeNearbyPlaceCandidates,
   extractNearbyPlaceQuery,
   isNearbyPlaceCandidateRelevant,
   looksLikeBareDestinationQuery,
   MAX_LOCAL_PLACE_DISTANCE_METERS,
+  mergeNearbyPlaceCandidates,
   nearbyPlaceDistanceMeters,
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
@@ -121,6 +123,62 @@ test("default place selection rejects results beyond the local boundary", () => 
     selectNearbyPlaceCandidate([sixKilometersNorth], manhattan),
     null
   );
+});
+
+test("chain lookups pick the nearest branch after merging both searches", () => {
+  // Nearby Search returned only a far branch; Text Search found the one at the user.
+  const nearby = [
+    {
+      place_id: "far",
+      name: "McDonald's",
+      geometry: { location: { lat: 40.7175, lng: -74.0105 } },
+    },
+  ];
+  const text = [
+    {
+      place_id: "far",
+      name: "McDonald's",
+      geometry: { location: { lat: 40.7175, lng: -74.0105 } },
+    },
+    {
+      place_id: "here",
+      name: "McDonald's",
+      formatted_address: "West St, New York",
+      geometry: { location: { lat: 40.7148, lng: -74.0138 } },
+    },
+  ];
+  const merged = mergeNearbyPlaceCandidates(nearby, text);
+  assert.deepEqual(merged.map((c) => c.place_id), ["far", "here"]);
+
+  const ranked = selectNearbyPlaceCandidates(
+    merged.filter((c) => isNearbyPlaceCandidateRelevant(c, "McDonald's")),
+    { lat: 40.71473, lng: -74.01396 }
+  );
+  assert.equal(ranked[0].place_id, "here");
+  assert.ok(ranked[0].distanceMeters < 30);
+  assert.match(describeNearbyPlaceCandidates(ranked), /^1\. McDonald's - West St, New York - \d+ m\n2\. McDonald's/);
+});
+
+test("permanently closed places are never selected", () => {
+  const selected = selectNearbyPlaceCandidate(
+    [
+      {
+        place_id: "closed",
+        name: "FedEx Midtown",
+        business_status: "CLOSED_PERMANENTLY",
+        geometry: { location: { lat: 40.7581, lng: -73.9855 } },
+      },
+      {
+        place_id: "open",
+        name: "FedEx Downtown",
+        business_status: "OPERATIONAL",
+        geometry: { location: { lat: 40.759, lng: -73.984 } },
+      },
+    ],
+    manhattan
+  );
+  assert.equal(selected?.place_id, "open");
+  assert.equal(describeNearbyPlaceCandidates([]), "NO_RELEVANT_CANDIDATES");
 });
 
 test("local place ranking filters distant results before returning options", () => {

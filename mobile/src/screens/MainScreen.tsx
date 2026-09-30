@@ -186,7 +186,12 @@ export default function MainScreen({ navigation }: Props) {
 
   const locationRef = useRef<Location.LocationObject | null>(null);
   const headingRef = useRef<number | null>(null);
+  /** expo-location compass calibration: 3 high, 2 medium, 1 low, 0 none. */
+  const headingAccuracyRef = useRef<number | null>(null);
   const capturedPhotoHeadingRef = useRef<number | null>(null); // compass timing issue
+  const capturedPhotoHeadingAccuracyRef = useRef<number | null>(null);
+  const lastMileAbortRef = useRef<AbortController | null>(null);
+  const [lastMileLoading, setLastMileLoading] = useState(false);
   const capturedPhotoLocationRef = useRef<Location.LocationObject | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDotOpacity = useRef(new Animated.Value(1)).current;
@@ -336,7 +341,13 @@ export default function MainScreen({ navigation }: Props) {
         if (Platform.OS !== "web") {
           try {
             headingSub = await Location.watchHeadingAsync((heading) => {
-              if (heading.accuracy < 2) return;
+              headingAccuracyRef.current = heading.accuracy;
+              // Keeping the last good value would send a stale heading from
+              // before the user turned, so an uncalibrated compass reads as none.
+              if (heading.accuracy < 2) {
+                headingRef.current = null;
+                return;
+              }
               const degrees =
                 heading.trueHeading >= 0
                   ? heading.trueHeading
@@ -619,12 +630,15 @@ export default function MainScreen({ navigation }: Props) {
       return;
     }
     try {
+      cancelLastMileRequest();
       // remove the compass & location belonging to the previous photo
       capturedPhotoHeadingRef.current = null;
+      capturedPhotoHeadingAccuracyRef.current = null;
       capturedPhotoLocationRef.current = null;
 
       // capture the correct compass heading for the photo
       const headingAtCapture = headingRef.current;
+      const headingAccuracyAtCapture = headingAccuracyRef.current;
 
       // capture the current location / GPS
       const locationAtCapture = locationRef.current;
@@ -641,6 +655,7 @@ export default function MainScreen({ navigation }: Props) {
         setWebVideoFrames(null);
         setCapturedImage(dataUrl);
         capturedPhotoHeadingRef.current = headingAtCapture;
+        capturedPhotoHeadingAccuracyRef.current = headingAccuracyAtCapture;
         capturedPhotoLocationRef.current = locationAtCapture;
         // disabled for testing
         // setUserInput("Describe the image");
@@ -830,6 +845,7 @@ export default function MainScreen({ navigation }: Props) {
     (options?: { announceReset?: boolean }) => {
       rotateConversationId();
       void stopSpeaking();
+      cancelLastMileRequest();
       if (slowResponseTimerRef.current) {
         clearTimeout(slowResponseTimerRef.current);
         slowResponseTimerRef.current = null;
@@ -841,6 +857,7 @@ export default function MainScreen({ navigation }: Props) {
       setAiResponse("");
       setCapturedImage(null);
       capturedPhotoHeadingRef.current = null;
+      capturedPhotoHeadingAccuracyRef.current = null;
       setCapturedVideoUri(null);
       setWebVideoFrames(null);
       setCurrentChatId("");
@@ -1300,7 +1317,20 @@ export default function MainScreen({ navigation }: Props) {
 
   // ─── Last Meters Navigation Feature ──────────────────────────────────────────
 
+  /** Aborts a pending Last Meters request; returns whether one was pending. */
+  function cancelLastMileRequest(): boolean {
+    const controller = lastMileAbortRef.current;
+    if (!controller) return false;
+    lastMileAbortRef.current = null;
+    controller.abort();
+    return true;
+  }
+
   async function handleLastMileNavigation(destinationOverride?: string) {
+    if (cancelLastMileRequest()) {
+      speak("Last Meters cancelled.", { preferDevice: true });
+      return;
+    }
     if (loading) return;
 
     const rawDestination = (destinationOverride ?? userInput).trim();
@@ -1318,11 +1348,23 @@ export default function MainScreen({ navigation }: Props) {
     }
     setUserInput(rawDestination);
 
+    const controller = new AbortController();
+    lastMileAbortRef.current = controller;
     setLoading(true);
+    setLastMileLoading(true);
     void stopSpeaking();
     AccessibilityInfo.announceForAccessibility(
       "Checking your distance and surroundings. This may take a moment.",
     );
+    if (slowResponseTimerRef.current)
+      clearTimeout(slowResponseTimerRef.current);
+    slowResponseTimerRef.current = setTimeout(() => {
+      if (lastMileAbortRef.current === controller)
+        speak(
+          "Still checking your surroundings. Tap Last Meters again to cancel.",
+          { preferDevice: true },
+        );
+    }, SLOW_RESPONSE_HINT_MS * 2);
 
     try {
       let loc = capturedPhotoLocationRef.current; // captured photo location, not current location
@@ -1333,15 +1375,19 @@ export default function MainScreen({ navigation }: Props) {
         locationRef.current = loc;
       }
 
-      const data = await sendLastMileRequest({
-        lat: loc.coords.latitude,
-        lng: loc.coords.longitude,
-        // heading: headingRef.current ?? undefined,
-        gpsAccuracyMeters: loc.coords.accuracy ?? undefined,
-        heading: capturedPhotoHeadingRef.current ?? undefined, // fixes compass timing issue
-        image: capturedImage,
-        destination: rawDestination,
-      });
+      const data = await sendLastMileRequest(
+        {
+          lat: loc.coords.latitude,
+          lng: loc.coords.longitude,
+          gpsAccuracyMeters: loc.coords.accuracy ?? undefined,
+          heading: capturedPhotoHeadingRef.current ?? undefined, // fixes compass timing issue
+          compassAccuracyLevel:
+            capturedPhotoHeadingAccuracyRef.current ?? undefined,
+          image: capturedImage,
+          destination: rawDestination,
+        },
+        controller.signal,
+      );
 
       if (data.output) {
         setAiResponse(data.output);
@@ -1356,15 +1402,32 @@ export default function MainScreen({ navigation }: Props) {
         });
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       console.error("Last Meters Error:", e);
+      const isTimeout = (e as { code?: string })?.code === "ECONNABORTED";
       const detail = e instanceof Error ? e.message : "";
-      const errMsg = detail
-        ? `Last Meters error: ${detail}`
-        : "Error calculating last meters navigation. Please try again.";
+      const errMsg = isTimeout
+        ? "Last Meters took too long to answer. The server may be busy. Take a new photo and try again."
+        : detail
+          ? `Last Meters error: ${detail}`
+          : "Error calculating last meters navigation. Please try again.";
       setAiResponse(errMsg);
       speak(errMsg, { preferDevice: true });
     } finally {
-      setLoading(false);
+      // A cancelled request settles after the user may have started a new one;
+      // only the latest request may clear the loading state.
+      if (
+        lastMileAbortRef.current === controller ||
+        lastMileAbortRef.current === null
+      ) {
+        lastMileAbortRef.current = null;
+        if (slowResponseTimerRef.current) {
+          clearTimeout(slowResponseTimerRef.current);
+          slowResponseTimerRef.current = null;
+        }
+        setLoading(false);
+        setLastMileLoading(false);
+      }
     }
   }
 
@@ -1819,6 +1882,7 @@ export default function MainScreen({ navigation }: Props) {
               mode="contained"
               onPressIn={() => tap()}
               onPress={() => {
+                cancelLastMileRequest();
                 cameraReadyRef.current = false;
                 setCapturedImage(null);
                 setCapturedVideoUri(null);
@@ -1939,11 +2003,18 @@ export default function MainScreen({ navigation }: Props) {
               pressed && styles.submitButtonPressed,
               { backgroundColor: "#00FFCC", marginTop: 4 },
             ]}
-            accessibilityLabel="Calculate precise last meters navigation"
+            accessibilityLabel={
+              lastMileLoading
+                ? "Cancel last meters navigation"
+                : "Calculate precise last meters navigation"
+            }
             accessibilityRole="button"
-            disabled={loading}
+            accessibilityState={{ busy: lastMileLoading }}
+            disabled={loading && !lastMileLoading}
           >
-            <Text style={styles.submitLabel}>Last Meters</Text>
+            <Text style={styles.submitLabel}>
+              {lastMileLoading ? "Cancel Last Meters" : "Last Meters"}
+            </Text>
           </Pressable>
 
           {loading && (
