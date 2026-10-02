@@ -279,7 +279,7 @@
             <th>Mod C (Destination)</th>
             <th>Mod D (Confidence)</th>
             <th>Mod E (Guidance)</th>
-            <th></th>
+            <th>View</th>
           </tr>
         </thead>
         <tbody id="lmTestsList">
@@ -615,8 +615,8 @@
           renderDetail(payload.data || summary);
         })
         .catch(function (error) {
-          document.getElementById('lmDetailBody').innerHTML = '<div class="empty">Could not load images for this test.</div>';
-          showError('Could not load test detail. ' + error.message);
+          document.getElementById('lmDetailBody').innerHTML = '<div class="empty">Could not load this test (' + esc(error.message) + '). ' +
+            '<button class="secondary view-btn" data-idx="' + index + '">Try again</button></div>';
         });
     }
 

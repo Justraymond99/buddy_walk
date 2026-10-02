@@ -1273,8 +1273,8 @@ export class OpenAIService {
       // ==========================================
       activeStage = "current-view matching";
       console.log("   ➤ Step 1: Locating User's Current View...");
-      const step1Prompt = `You will receive 8 distinct, non-overlapping panorama images explicitly labeled with their center headings (000 DEG, 045 DEG, etc.), followed by a user's photo. Identify which single panorama segment confidently matches the user's photo.
-Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
+      const step1Prompt = `You will receive 8 distinct, non-overlapping panorama images labeled VIEW 1 through VIEW 8 with their center headings (000 DEG, 045 DEG, etc.), followed by a user's photo. Identify which single panorama segment confidently matches the user's photo.
+Reply with exactly one heading token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE. Do not reply with the VIEW number.
 Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confidently matched. Do not return business names or explanations.`;
       const step1Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
@@ -1402,10 +1402,10 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         place.placeName.toLowerCase() === destinationQuery.toLowerCase()
           ? `"${place.placeName}"`
           : `"${place.placeName}" (requested as "${destinationQuery}")`;
-      const step2Prompt = `You will receive one panorama grid containing 8 distinct, non-overlapping views explicitly labeled with their center headings. Find the storefront, sign, or entrance for ${destinationLabel}. ${panoramaDateContext}
+      const step2Prompt = `You will receive one panorama grid containing 8 distinct, non-overlapping views labeled VIEW 1 through VIEW 8 with their center headings. Find the storefront, sign, or entrance for ${destinationLabel}. ${panoramaDateContext}
       Google Maps places the verified destination near ${expectedTargetHeading} degrees from the panorama camera. Inspect that view and both neighboring views carefully, but use the map bearing only to focus the search, never as proof that the storefront is visible.
       If the primary name text is partially obscured by a canopy, tree, or awning, look carefully at side banners, architectural markers, or window logos before deciding it is NOT_VISIBLE.
-      Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
+      Reply with exactly one heading token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE. Do not reply with the VIEW number.
       Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. A different nearby business is not a match. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
       const step2Response = await this.client.chat.completions.create({
         model: "gpt-4o-mini",
@@ -2778,9 +2778,12 @@ const PANORAMA_LABEL_GLYPHS: Record<string, string[]> = {
   " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
 };
 
-export function createPanoramaOverlaySvg(heading: number): Buffer {
-  // Headings only: a "VIEW 2" index in the label led the model to answer "2".
-  const label = `${String(heading).padStart(3, "0")} DEG`;
+export function createPanoramaOverlaySvg(
+  heading: number,
+  segmentIndex: number,
+): Buffer {
+  const paddedHeading = String(heading).padStart(3, "0");
+  const label = `VIEW ${segmentIndex} | ${paddedHeading} DEG`;
   const pixelSize = 5;
   const glyphAdvance = 30;
   const startX = 24;
@@ -2826,7 +2829,7 @@ async function buildPanoramaDebugImage(
       top: topOffset,
     });
     compositeLayers.push({
-      input: createPanoramaOverlaySvg(tile.heading),
+      input: createPanoramaOverlaySvg(tile.heading, index + 1),
       left: leftOffset,
       top: topOffset,
     });

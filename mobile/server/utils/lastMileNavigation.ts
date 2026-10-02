@@ -150,13 +150,26 @@ export function parseLastMileHeading(response: string): number | null {
   }
 
   const validHeadings = new Set<number>(LAST_MILE_HEADINGS);
-  const matches = [...text.matchAll(/\b\d{1,3}\b/g)]
-    .map((match) => Number(match[0]))
-    .map((heading) => (heading === 360 ? 0 : heading))
-    .filter((heading) => validHeadings.has(heading));
-  const uniqueMatches = [...new Set(matches)];
+  const numbers = [...text.matchAll(/\b\d{1,3}\b/g)].map((match) => Number(match[0]));
+  const headingMatches = [
+    ...new Set(
+      numbers
+        .map((heading) => (heading === 360 ? 0 : heading))
+        .filter((heading) => validHeadings.has(heading)),
+    ),
+  ];
+  if (headingMatches.length === 1) return headingMatches[0];
 
-  return uniqueMatches.length === 1 ? uniqueMatches[0] : null;
+  // Tile overlays are "VIEW n | 045 DEG". The model sometimes echoes the
+  // view index instead of the heading; 1-8 never overlap real headings.
+  if (headingMatches.length === 0 && numbers.length === 1) {
+    const viewIndex = numbers[0];
+    if (viewIndex >= 1 && viewIndex <= LAST_MILE_HEADINGS.length) {
+      return LAST_MILE_HEADINGS[viewIndex - 1];
+    }
+  }
+
+  return null;
 }
 
 export function parseDestinationVisibility(response: string): boolean {

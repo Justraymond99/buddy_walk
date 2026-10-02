@@ -36,10 +36,19 @@ test("parseLastMileHeading accepts a single valid panorama heading", () => {
   assert.equal(parseLastMileHeading("360"), 0);
 });
 
+test("parseLastMileHeading maps a VIEW index to that tile's heading", () => {
+  // Sep 30 Dunkin': Step 2 answered "2" because the overlay said VIEW 2.
+  assert.equal(parseLastMileHeading("2"), 45);
+  assert.equal(parseLastMileHeading("VIEW 2"), 45);
+  assert.equal(parseLastMileHeading("1"), 0);
+  assert.equal(parseLastMileHeading("8"), 315);
+});
+
 test("parseLastMileHeading rejects uncertain, conflicting, and invalid responses", () => {
   assert.equal(parseLastMileHeading("NOT_VISIBLE"), null);
   assert.equal(parseLastMileHeading("The target is not in view, maybe 315."), null);
   assert.equal(parseLastMileHeading("45 or 90"), null);
+  assert.equal(parseLastMileHeading("2 or 3"), null);
   assert.equal(parseLastMileHeading("22"), null);
   assert.equal(parseLastMileHeading(""), null);
 });
