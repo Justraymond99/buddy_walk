@@ -82,6 +82,7 @@
     th, td { padding: 12px 16px; border-bottom: 1px solid var(--line); text-align: left; font-size: 0.9rem; }
     th { color: var(--muted); font-weight: 700; white-space: nowrap; }
     tbody tr:hover { background: #1b1f25; }
+    tbody tr.trial-row { cursor: pointer; }
     
     /* Phase Badges */
     .module-badge { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; white-space: nowrap; }
@@ -896,7 +897,7 @@
           ? badge('na', 'None')
           : t.panoramaSource === 'background' ? badge('pass', 'Review only') : badge('pass', 'Yes');
 
-        return '<tr>' +
+        return '<tr class="trial-row" data-idx="' + idx + '">' +
           '<td>' + esc(fmtDate(t.serverTs || t.createdAt)) + '</td>' +
           '<td>' + destinationHtml(t) + '</td>' +
           '<td><div class="gate-line"><span class="gate gate-' + gate.mode + '">' + esc(gate.label) + '</span>' +
@@ -910,7 +911,7 @@
           '<td>' + badge(modules.moduleC.status) + '</td>' +
           '<td>' + badge(modules.moduleD.status) + '</td>' +
           '<td>' + badge(modules.moduleE.status) + '</td>' +
-          '<td><button class="secondary view-btn" data-idx="' + idx + '">View</button></td>' +
+          '<td><button class="secondary view-btn">View</button></td>' +
         '</tr>';
       }).join('');
     }
@@ -972,8 +973,17 @@
     });
 
     document.body.addEventListener('click', function (e) {
-      if (e.target.classList.contains('view-btn')) {
-        openDetail(Number(e.target.getAttribute('data-idx')));
+      // Clicking anywhere on a trial row opens its detail, same as the View button.
+      // Any other control placed in a row keeps its own behavior, and a click that
+      // ends a drag-selection is ignored so addresses can still be copied.
+      var row = e.target.closest('tr.trial-row');
+      if (row) {
+        var control = e.target.closest('a, button, input, select, textarea, label, summary');
+        var selecting = !control && String(window.getSelection()).length > 0;
+        if ((!control || control.classList.contains('view-btn')) && !selecting) {
+          openDetail(Number(row.getAttribute('data-idx')));
+        }
+        return;
       }
       
       // Dynamic image rotation handler
