@@ -19,7 +19,14 @@ import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
 import * as Location from "expo-location";
 import { Accelerometer } from "expo-sensors";
 import * as Network from "expo-network";
-import { Audio } from "expo-av";
+import {
+  AudioQuality,
+  IOSOutputFormat,
+  useAudioRecorder,
+  type AudioRecorder,
+  type RecorderState,
+  type RecordingOptions,
+} from "expo-audio";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import CallAccessARideButton from "../components/CallAccessARideButton";
@@ -195,7 +202,10 @@ export default function MainScreen({ navigation }: Props) {
   const capturedPhotoLocationRef = useRef<Location.LocationObject | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDotOpacity = useRef(new Animated.Value(1)).current;
-  const audioRecordingRef = useRef<Audio.Recording | null>(null);
+  const audioRecordingRef = useRef<AudioRecorder | null>(null);
+  const voiceMeteringTimerRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   /** Auto-endpointing state: set once real speech is heard, then used to time trailing silence. */
   const speechHeardAtRef = useRef<number | null>(null);
@@ -790,30 +800,49 @@ export default function MainScreen({ navigation }: Props) {
   // Android: Records AAC-ADTS at 16kHz mono — Azure accepts audio/aac natively.
   // Content-Type is set per platform to match the actual encoded format.
 
-  const AZURE_RECORDING_OPTIONS: Audio.RecordingOptions = {
+  const AZURE_RECORDING_OPTIONS: RecordingOptions = {
+    extension: ".wav",
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 256000,
+    isMeteringEnabled: true,
     android: {
       extension: ".aac",
-      outputFormat: Audio.AndroidOutputFormat.AAC_ADTS,
-      audioEncoder: Audio.AndroidAudioEncoder.AAC,
+      outputFormat: "aac_adts",
+      audioEncoder: "aac",
       sampleRate: 16000,
-      numberOfChannels: 1,
-      bitRate: 128000,
     },
     ios: {
       extension: ".wav",
-      outputFormat: Audio.IOSOutputFormat.LINEARPCM,
-      audioQuality: Audio.IOSAudioQuality.HIGH,
+      outputFormat: IOSOutputFormat.LINEARPCM,
+      audioQuality: AudioQuality.HIGH,
       sampleRate: 16000,
-      numberOfChannels: 1,
-      bitRate: 256000,
       bitDepthHint: 16,
       linearPCMBitDepth: 16,
       linearPCMIsBigEndian: false,
       linearPCMIsFloat: false,
     },
     web: {},
-    isMeteringEnabled: true,
   };
+  const audioRecorder = useAudioRecorder(AZURE_RECORDING_OPTIONS);
+  useEffect(() => () => stopVoiceMeteringPoll(), []);
+
+  function stopVoiceMeteringPoll(): void {
+    if (voiceMeteringTimerRef.current) {
+      clearInterval(voiceMeteringTimerRef.current);
+      voiceMeteringTimerRef.current = null;
+    }
+  }
+
+  /** Stops the native recorder; returns the file URI of the finished recording. */
+  async function stopNativeRecording(): Promise<string | null> {
+    stopVoiceMeteringPoll();
+    const recorder = audioRecordingRef.current;
+    audioRecordingRef.current = null;
+    if (!recorder) return null;
+    await recorder.stop();
+    return recorder.uri;
+  }
 
   const AZURE_CONTENT_TYPE =
     Platform.OS === "ios"
@@ -900,13 +929,10 @@ export default function MainScreen({ navigation }: Props) {
     webSpeechSessionRef.current = null;
     voiceTranscriptRef.current = "";
 
-    if (audioRecordingRef.current) {
-      try {
-        await audioRecordingRef.current.stopAndUnloadAsync();
-      } catch {
-        /* recording may already be stopped */
-      }
-      audioRecordingRef.current = null;
+    try {
+      await stopNativeRecording();
+    } catch {
+      /* recording may already be stopped */
     }
     voiceRecordingStartedAtRef.current = null;
     await resetAudioForPlayback();
@@ -1020,7 +1046,7 @@ export default function MainScreen({ navigation }: Props) {
    * one action instead of two. Re-locating the mic button to stop was the most
    * awkward step in the flow for a screen-reader user.
    */
-  function handleVoiceMetering(status: Audio.RecordingStatus): void {
+  function handleVoiceMetering(status: RecorderState): void {
     if (autoStopFiredRef.current || !isListeningRef.current) return;
     if (!status.isRecording) return;
 
@@ -1141,12 +1167,13 @@ export default function MainScreen({ navigation }: Props) {
       speechHeardAtRef.current = null;
       lastSpeechAtRef.current = null;
       autoStopFiredRef.current = false;
-      const { recording } = await Audio.Recording.createAsync(
-        AZURE_RECORDING_OPTIONS,
-        handleVoiceMetering,
-        VOICE_METERING_INTERVAL_MS,
-      );
-      audioRecordingRef.current = recording;
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+      audioRecordingRef.current = audioRecorder;
+      stopVoiceMeteringPoll();
+      voiceMeteringTimerRef.current = setInterval(() => {
+        handleVoiceMetering(audioRecorder.getStatus());
+      }, VOICE_METERING_INTERVAL_MS);
       voiceRecordingStartedAtRef.current = Date.now();
       isListeningRef.current = true;
       setIsListening(true);
@@ -1258,8 +1285,7 @@ export default function MainScreen({ navigation }: Props) {
         startedAt != null &&
         Date.now() - startedAt < MIN_VOICE_RECORDING_MS
       ) {
-        await audioRecordingRef.current.stopAndUnloadAsync();
-        audioRecordingRef.current = null;
+        await stopNativeRecording();
         await resetAudioForPlayback();
         setIsTranscribing(false);
         isTranscribingRef.current = false;
@@ -1272,10 +1298,7 @@ export default function MainScreen({ navigation }: Props) {
       isTranscribingRef.current = true;
       setUserInput(TRANSCRIBING_PLACEHOLDER);
       void track(Events.VoiceStopped);
-      const recording = audioRecordingRef.current;
-      const uri = recording.getURI();
-      await recording.stopAndUnloadAsync();
-      audioRecordingRef.current = null;
+      const uri = await stopNativeRecording();
       await new Promise((resolve) => setTimeout(resolve, 150));
       await resetAudioForPlayback();
       void cueCaptured();
@@ -2210,7 +2233,7 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   cameraTouchOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 2,
   },
   cameraLabelBar: {
@@ -2306,14 +2329,14 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   captureOverlayHolding: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0, 0, 0, 0.45)",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
   },
   captureOverlayRecording: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0, 0, 0, 0.55)",
     alignItems: "center",
     justifyContent: "center",

@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { Audio as ExpoAudio } from 'expo-av';
+import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
 import * as Speech from 'expo-speech';
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -12,7 +12,7 @@ const NATIVE_TTS_VOLUME = 1.0;
 const isWeb = Platform.OS === 'web';
 const isNative = !isWeb;
 
-let activeSound: ExpoAudio.Sound | null = null;
+let activeSound: AudioPlayer | null = null;
 let activeWebAudio: HTMLAudioElement | null = null;
 /** Bumps when a new speak starts or stopSpeaking() runs — stale async work exits early. */
 let speakGeneration = 0;
@@ -43,9 +43,8 @@ async function stopPlayback(): Promise<void> {
   const sound = activeSound;
   activeSound = null;
   try {
-    sound.setOnPlaybackStatusUpdate(null);
-    await sound.stopAsync();
-    await sound.unloadAsync();
+    sound.pause();
+    sound.remove();
   } catch {
     /* ignore */
   }
@@ -107,35 +106,35 @@ async function playMp3Buffer(buffer: ArrayBuffer, generation: number): Promise<b
   await stopPlayback();
   await ensurePlaybackThroughSpeaker();
 
-  const { sound } = await ExpoAudio.Sound.createAsync(
-    { uri },
-    { shouldPlay: true, volume: NATIVE_TTS_VOLUME, isMuted: false }
-  );
+  const sound = createAudioPlayer({ uri });
   activeSound = sound;
-  await sound.setVolumeAsync(NATIVE_TTS_VOLUME);
+  sound.volume = NATIVE_TTS_VOLUME;
+  sound.muted = false;
 
-  await new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolve) => {
     let settled = false;
     const finish = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      sound.setOnPlaybackStatusUpdate(null);
-      if (activeSound === sound) activeSound = null;
-      void sound.unloadAsync().catch(() => undefined);
+      subscription.remove();
+      if (activeSound === sound) {
+        activeSound = null;
+        try {
+          sound.remove();
+        } catch {
+          /* ignore */
+        }
+      }
       resolve();
     };
 
     const timeout = setTimeout(finish, 120_000);
-    sound.setOnPlaybackStatusUpdate((status) => {
-      if (!status.isLoaded || settled) return;
+    const subscription = sound.addListener('playbackStatusUpdate', (status) => {
+      if (settled) return;
       if (status.didJustFinish) finish();
-      if ('error' in status && status.error) {
-        settled = true;
-        clearTimeout(timeout);
-        reject(new Error(String(status.error)));
-      }
     });
+    sound.play();
   });
 
   return generation === speakGeneration;
@@ -252,8 +251,7 @@ function speakWithExpoSpeech(text: string, generation: number): Promise<void> {
 export async function isSpeaking(): Promise<boolean> {
   if (activeSound) {
     try {
-      const status = await activeSound.getStatusAsync();
-      if (status.isLoaded && status.isPlaying) return true;
+      if (activeSound.playing) return true;
     } catch {
       /* ignore */
     }

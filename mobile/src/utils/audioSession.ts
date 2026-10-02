@@ -1,21 +1,19 @@
 import { AppState } from 'react-native';
-import { Audio, AudioMode, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import { AudioMode, setAudioModeAsync } from 'expo-audio';
 
 type Mode = 'playback' | 'recording';
 
 const PLAYBACK_MODE: Partial<AudioMode> = {
-  allowsRecordingIOS: false,
-  playsInSilentModeIOS: true,
-  staysActiveInBackground: false,
-  interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-  interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-  shouldDuckAndroid: false,
-  playThroughEarpieceAndroid: false,
+  allowsRecording: false,
+  playsInSilentMode: true,
+  shouldPlayInBackground: false,
+  interruptionMode: 'doNotMix',
+  shouldRouteThroughEarpiece: false,
 };
 
 const RECORDING_MODE: Partial<AudioMode> = {
   ...PLAYBACK_MODE,
-  allowsRecordingIOS: true,
+  allowsRecording: true,
 };
 
 // Serialize audio-mode changes. iOS throws OSStatus 561017449 when the session
@@ -38,7 +36,7 @@ async function applyMode(mode: Mode): Promise<void> {
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await Audio.setAudioModeAsync(config);
+      await setAudioModeAsync(config);
       lastApplied = mode;
       return;
     } catch (e) {

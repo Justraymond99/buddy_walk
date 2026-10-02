@@ -7,5 +7,5 @@ export function isBraveBrowser(): boolean {
 }
 
 export function unlockWebAudioForPlayback(): void {
-  // Native uses expo-av / expo-speech — no browser audio unlock needed.
+  // Native uses expo-audio / expo-speech — no browser audio unlock needed.
 }
