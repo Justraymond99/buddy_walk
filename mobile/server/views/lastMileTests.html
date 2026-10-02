@@ -61,7 +61,16 @@
     main { max-width: 1440px; margin: 0 auto; padding: 22px; }
     .toolbar { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-bottom: 20px; }
     .field label { display: block; color: var(--muted); font-size: 0.78rem; margin-bottom: 4px; }
-    .field input, .field select { height: 36px; padding: 0 10px; }
+    /* Custom chevron: the native arrow ignores right padding and hugs the border. */
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      padding: 0 34px 0 10px;
+      background: var(--panel-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23a9b1be' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 12px center / 12px 12px;
+      cursor: pointer;
+    }
+    .field input, .field select { height: 36px; }
+    .field input { padding: 0 10px; }
     
     .status { margin: 12px 0 18px; color: var(--muted); font-size: 0.9rem; }
     .error { display: none; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--red); background: #3a1618; border-radius: 6px; }
@@ -103,6 +112,9 @@
     button.preset { padding: 5px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; background: var(--panel); }
     button.preset:hover { background: #2a3039; }
     button.preset.active { background: var(--blue); border-color: var(--blue); }
+    button.clear-filters { padding: 5px 10px; font-size: 0.8rem; font-weight: 600; background: transparent; border-color: transparent; color: var(--blue); }
+    button.clear-filters:hover:not(:disabled) { text-decoration: underline; }
+    button.clear-filters:disabled { color: var(--quiet); opacity: 1; }
 
     /* Review Status Pills */
     .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px; background: #2a3039; color: var(--muted); font-size: 0.78rem; font-weight: 700; }
@@ -226,11 +238,11 @@
     </div>
     <div class="presets">
       <span class="small">Quick filters:</span>
-      <button class="preset" data-preset="approachNoPanorama">Approach · no panorama</button>
-      <button class="preset" data-preset="noPanorama">No panorama</button>
-      <button class="preset" data-preset="needsReview">Needs review</button>
-      <button class="preset" data-preset="failed">Outcome: fail</button>
-      <button class="preset" data-preset="clear">Clear filters</button>
+      <button class="preset" data-preset="approachNoPanorama" aria-pressed="false">Approach · no panorama</button>
+      <button class="preset" data-preset="noPanorama" aria-pressed="false">No panorama</button>
+      <button class="preset" data-preset="needsReview" aria-pressed="false">Needs review</button>
+      <button class="preset" data-preset="failed" aria-pressed="false">Outcome: fail</button>
+      <button class="clear-filters" id="clearFilters">Clear filters</button>
     </div>
     
     <div class="status" id="status">Loading...</div>
@@ -616,8 +628,7 @@
       approachNoPanorama: { mode: 'approach', panorama: 'no' },
       noPanorama: { panorama: 'no' },
       needsReview: { outcome: 'untested' },
-      failed: { outcome: 'fail' },
-      clear: {}
+      failed: { outcome: 'fail' }
     };
 
     function readFilters() {
@@ -668,9 +679,12 @@
     function applyFilters() {
       var filters = readFilters();
       syncHash(filters);
-      document.querySelectorAll('button.preset').forEach(function (btn) {
-        btn.classList.toggle('active', sameFilters(filters, PRESETS[btn.getAttribute('data-preset')]));
+      document.querySelectorAll('button[data-preset]').forEach(function (btn) {
+        var active = sameFilters(filters, PRESETS[btn.getAttribute('data-preset')]);
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', String(active));
       });
+      document.getElementById('clearFilters').disabled = sameFilters(filters, {});
       activeTests = allTests.filter(function (row) { return matchesFilters(row, filters); });
       renderTable();
     }
@@ -741,11 +755,18 @@
       control.addEventListener(control.tagName === 'INPUT' ? 'input' : 'change', applyFilters);
     });
 
-    document.querySelectorAll('button.preset').forEach(function (btn) {
+    // Presets toggle: clicking the active one again clears it.
+    document.querySelectorAll('button[data-preset]').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        writeFilters(PRESETS[btn.getAttribute('data-preset')]);
+        var preset = PRESETS[btn.getAttribute('data-preset')];
+        writeFilters(sameFilters(readFilters(), preset) ? {} : preset);
         applyFilters();
       });
+    });
+
+    document.getElementById('clearFilters').addEventListener('click', function () {
+      writeFilters({});
+      applyFilters();
     });
 
     window.addEventListener('hashchange', function () {
