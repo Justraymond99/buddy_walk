@@ -4,21 +4,42 @@ import { toCsv } from "../utils/csv";
 import { buildDateFilter, isAdminAuthorized, parseLimit } from "../utils/adminAuth";
 import { isMongoConnected } from "../database/usageStore";
 import { imagePlaceholder, toLastMileTestResponse } from "../utils/lastMileTestRow";
+import {
+  ENTRANCE_CORRECTNESS,
+  REVIEW_OUTCOMES,
+  TURN_CORRECTNESS,
+} from "../database/models/lastMileTestLog";
+import type { PlaceCandidateLog } from "../utils/nearbyPlaces";
 
 const LAST_MILE_TEST_CSV_COLUMNS = [
   "serverTs",
   "destination",
+  "destinationQuery",
   "lat",
   "lng",
   "panoramaDate",
   "panoramaStatus",
+  "panoramaSource",
+  "panoId",
+  "panoramaCopyright",
+  "panoramaAgeYears",
   "destinationPhotoDate",
   "destinationPhotoStatus",
   "destinationPlaceName",
   "destinationPlaceAddress",
   "destinationTypes",
   "destinationDistanceMeters",
+  "destinationOpenNow",
+  "destinationBusinessStatus",
+  "placesSearches",
+  "placeCandidates",
+  "entranceSource",
+  "entranceLat",
+  "entranceLng",
+  "besideBuilding",
   "gpsAccuracyMeters",
+  "gpsAllowanceMeters",
+  "exactGateWidened",
   "compassAccuracyLevel",
   "destinationBearing",
   "deviceHeading",
@@ -32,12 +53,18 @@ const LAST_MILE_TEST_CSV_COLUMNS = [
   "confidenceLevel",
   "confidenceReasons",
   "destinationReferenceUsed",
+  "signText",
+  "signTextMatched",
   "navigationMode",
   "testScenario",
   "currentHeading",
   "targetHeading",
   "turnInstruction",
   "finalOutput",
+  "dataSources",
+  "reviewOutcome",
+  "turnCorrectness",
+  "entranceCorrectness",
   "reviewerStatus",
   "reviewerNotes",
   "reviewedAt",
@@ -51,6 +78,26 @@ const LAST_MILE_TEST_CSV_COLUMNS = [
   "destinationPhoto",
 ];
 
+function describeCandidatesForCsv(candidates?: PlaceCandidateLog[]): string {
+  return (candidates ?? [])
+    .map(
+      (candidate) =>
+        `${candidate.name} (${candidate.address}) ${candidate.distanceMeters} m ` +
+        `${candidate.relevant ? "kept" : "rejected"} via ${candidate.source}`
+    )
+    .join(" | ");
+}
+
+function optionalEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[]
+): { ok: true; value?: T } | { ok: false } {
+  if (value === undefined || value === null || value === "") return { ok: true };
+  return typeof value === "string" && (allowed as readonly string[]).includes(value)
+    ? { ok: true, value: value as T }
+    : { ok: false };
+}
+
 export class LastMileTestLogController {
   async list(req: Request, res: Response): Promise<void> {
     if (!isAdminAuthorized(req)) {
@@ -61,7 +108,15 @@ export class LastMileTestLogController {
     const limit = parseLimit(req, 25, 500);
     const includeImages = req.query.includeImages === "true";
     const { source, data } = await lastMileTestLogService.getData(limit, buildDateFilter(req));
-    const rows = data.map((row) => toLastMileTestResponse(row, includeImages));
+    const rows = data.map((row) => {
+      if (includeImages) return toLastMileTestResponse(row, true);
+      // The candidate list is only needed in the detail view.
+      const { placeCandidates, ...summary } = row;
+      return {
+        ...toLastMileTestResponse(summary, false),
+        placeCandidateCount: placeCandidates?.length ?? 0,
+      };
+    });
 
     res.status(200).json({ source, data: rows });
   }
@@ -102,6 +157,9 @@ export class LastMileTestLogController {
         panoramaHeadings: row.panoramaHeadings.join("|"),
         destinationTypes: (row.destinationTypes || []).join("|"),
         confidenceReasons: (row.confidenceReasons || []).join("|"),
+        placesSearches: (row.placesSearches || []).join("+"),
+        placeCandidates: describeCandidatesForCsv(row.placeCandidates),
+        dataSources: (row.dataSources || []).join("|"),
         steps: JSON.stringify(row.steps),
         userPhoto: includeImages ? row.userPhoto : imagePlaceholder(row.userPhoto),
         panoramaPhoto: includeImages ? row.panoramaPhoto : imagePlaceholder(row.panoramaPhoto),
@@ -132,6 +190,19 @@ export class LastMileTestLogController {
       return;
     }
 
+    const reviewOutcome = optionalEnum(req.body?.reviewOutcome, REVIEW_OUTCOMES);
+    const turnCorrectness = optionalEnum(req.body?.turnCorrectness, TURN_CORRECTNESS);
+    const entranceCorrectness = optionalEnum(req.body?.entranceCorrectness, ENTRANCE_CORRECTNESS);
+    if (!reviewOutcome.ok || !turnCorrectness.ok || !entranceCorrectness.ok) {
+      res.status(400).json({
+        error:
+          `reviewOutcome must be ${REVIEW_OUTCOMES.join(", ")}; ` +
+          `turnCorrectness must be ${TURN_CORRECTNESS.join(", ")}; ` +
+          `entranceCorrectness must be ${ENTRANCE_CORRECTNESS.join(", ")}`,
+      });
+      return;
+    }
+
     const reviewerNotes =
       typeof req.body?.reviewerNotes === "string"
         ? req.body.reviewerNotes.slice(0, 4000)
@@ -140,6 +211,9 @@ export class LastMileTestLogController {
     const { source, data } = await lastMileTestLogService.updateReview(req.params.id, {
       reviewerStatus: status,
       reviewerNotes,
+      reviewOutcome: reviewOutcome.value,
+      turnCorrectness: turnCorrectness.value,
+      entranceCorrectness: entranceCorrectness.value,
     });
     if (!data) {
       res.status(404).json({ error: "Last Meters test log not found" });

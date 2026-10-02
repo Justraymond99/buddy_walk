@@ -1,3 +1,8 @@
+export interface NearbyPlaceViewport {
+  northeast?: { lat?: number; lng?: number };
+  southwest?: { lat?: number; lng?: number };
+}
+
 export interface NearbyPlaceCandidate {
   place_id?: string;
   name?: string;
@@ -5,12 +10,28 @@ export interface NearbyPlaceCandidate {
   formatted_address?: string;
   business_status?: string;
   types?: string[];
+  opening_hours?: { open_now?: boolean };
   geometry?: {
     location?: {
       lat?: number;
       lng?: number;
     };
+    viewport?: NearbyPlaceViewport;
   };
+  /** Which Places searches returned this result ("nearby", "text"). */
+  searchSources?: string[];
+}
+
+/** One Google Places result as stored on a trial log. */
+export interface PlaceCandidateLog {
+  placeId?: string;
+  name: string;
+  address: string;
+  distanceMeters: number;
+  types: string[];
+  relevant: boolean;
+  source: string;
+  businessStatus?: string;
 }
 
 export interface NearbyPlaceSelection extends NearbyPlaceCandidate {
@@ -62,6 +83,59 @@ function normalizeMatchText(value: string): string {
     .trim();
 }
 
+/** Optimal string alignment distance (Levenshtein plus adjacent swaps). */
+export function editDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const d: number[][] = Array.from({ length: rows }, (_, i) =>
+    Array.from({ length: cols }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+      }
+    }
+  }
+  return d[a.length][b.length];
+}
+
+/**
+ * Tolerates spacing and small spelling slips ("Fitter man hall" for
+ * "Fiterman Hall", "sweet green" for "Sweetgreen"). Short queries must match
+ * exactly so "CVS" can never fuzzy-match "UPS".
+ */
+function fuzzyNameMatch(normalizedQuery: string, normalizedName: string): boolean {
+  const query = normalizedQuery.replace(/ /g, "");
+  const name = normalizedName.replace(/ /g, "");
+  if (query.length < 5 || name.length < 4) return false;
+  if (name.includes(query)) return true;
+  const allowed = query.length >= 10 ? 2 : 1;
+  for (let length = query.length - allowed; length <= query.length + allowed; length++) {
+    if (length < 4 || length > name.length) continue;
+    for (let start = 0; start + length <= name.length; start++) {
+      if (editDistance(query, name.slice(start, start + length)) <= allowed) return true;
+    }
+  }
+  return false;
+}
+
+const ACRONYM_STOPWORDS = new Set(["of", "the", "and", "at", "for", "in", "on"]);
+
+/** "bmcc" for "Borough of Manhattan Community College". */
+function acronymMatch(normalizedQuery: string, normalizedName: string): boolean {
+  if (!/^[a-z]{2,6}$/.test(normalizedQuery)) return false;
+  const words = normalizedName.split(" ").filter(Boolean);
+  if (words.length < 2) return false;
+  const initials = (list: string[]) => list.map((word) => word[0]).join("");
+  return (
+    initials(words.filter((word) => !ACRONYM_STOPWORDS.has(word))) === normalizedQuery ||
+    initials(words) === normalizedQuery
+  );
+}
+
 export function isNearbyPlaceCandidateRelevant(
   candidate: NearbyPlaceCandidate,
   query: string
@@ -89,11 +163,43 @@ export function isNearbyPlaceCandidateRelevant(
     return true;
   }
 
+  if (
+    fuzzyNameMatch(normalizedQuery, normalizedName) ||
+    acronymMatch(normalizedQuery, normalizedName)
+  ) {
+    return true;
+  }
+
   const queryNumbers = queryTokens.filter((token) => /^\d+$/.test(token));
   return (
     queryNumbers.length > 0 &&
     queryNumbers.every((number) => normalizedAddress.split(" ").includes(number))
   );
+}
+
+/**
+ * Whether text read off a storefront names the destination. Names under five
+ * letters must appear as whole words so "Citi" never matches "Citizens Bank".
+ */
+export function signTextMatchesPlaceName(signText: string, placeName: string): boolean {
+  const name = normalizeMatchText(placeName);
+  if (!name) return false;
+  const compactName = name.replace(/ /g, "");
+  return signText.split(/[\n|]+/).some((line) => {
+    const text = normalizeMatchText(line);
+    if (!text) return false;
+    if (compactName.length < 5) {
+      return ` ${text} `.includes(` ${name} `);
+    }
+    const compactText = text.replace(/ /g, "");
+    // A sign fragment may only stand in for the name when it covers most of
+    // it, so a generic "PIZZA" sign cannot confirm "Frank's Pizza".
+    return (
+      compactText.includes(compactName) ||
+      fuzzyNameMatch(name, text) ||
+      (compactText.length >= compactName.length * 0.75 && fuzzyNameMatch(text, name))
+    );
+  });
 }
 
 export function normalizeNearbyPlaceQuery(query: string): string {
@@ -203,21 +309,59 @@ export function selectNearbyPlaceCandidates(
     .sort((a, b) => a.distanceMeters - b.distanceMeters);
 }
 
-/** Combines Nearby Search and Text Search results, keeping the first copy of each place. */
+/**
+ * Combines Nearby Search and Text Search results, keeping the first copy of
+ * each place and the union of the searches that returned it.
+ */
 export function mergeNearbyPlaceCandidates(
   ...groups: NearbyPlaceCandidate[][]
 ): NearbyPlaceCandidate[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, NearbyPlaceCandidate>();
   const merged: NearbyPlaceCandidate[] = [];
   for (const candidate of groups.flat()) {
     const key = candidate.place_id;
-    if (key) {
-      if (seen.has(key)) continue;
-      seen.add(key);
+    const existing = key ? seen.get(key) : undefined;
+    if (existing) {
+      const sources = new Set([
+        ...(existing.searchSources ?? []),
+        ...(candidate.searchSources ?? []),
+      ]);
+      existing.searchSources = [...sources];
+      continue;
     }
-    merged.push(candidate);
+    const copy = { ...candidate };
+    if (key) seen.set(key, copy);
+    merged.push(copy);
   }
   return merged;
+}
+
+/** Every returned place (kept or rejected), nearest first, for the trial log. */
+export function summarizePlaceCandidates(
+  candidates: NearbyPlaceCandidate[],
+  origin: { lat: number; lng: number },
+  query: string,
+  limit = 8
+): PlaceCandidateLog[] {
+  return candidates
+    .map((candidate): PlaceCandidateLog | null => {
+      const lat = candidate.geometry?.location?.lat;
+      const lng = candidate.geometry?.location?.lng;
+      if (typeof lat !== "number" || typeof lng !== "number") return null;
+      return {
+        placeId: candidate.place_id,
+        name: candidate.name ?? "Unnamed",
+        address: candidate.vicinity ?? candidate.formatted_address ?? "",
+        distanceMeters: Math.round(nearbyPlaceDistanceMeters(origin, { lat, lng })),
+        types: (candidate.types ?? []).slice(0, 4),
+        relevant: isNearbyPlaceCandidateRelevant(candidate, query),
+        source: (candidate.searchSources ?? []).join("+") || "unknown",
+        businessStatus: candidate.business_status,
+      };
+    })
+    .filter((candidate): candidate is PlaceCandidateLog => candidate !== null)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters)
+    .slice(0, limit);
 }
 
 export function describeNearbyPlaceCandidates(

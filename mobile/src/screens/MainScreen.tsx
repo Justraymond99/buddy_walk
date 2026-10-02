@@ -46,6 +46,7 @@ import {
   extractTrainLineFromText,
   isTrainArrivalQuestion,
 } from "../utils/trainLine";
+import { parseLastMetersInput } from "../utils/lastMetersInput";
 import { getToken } from "../api/token";
 import { warmApiBackend } from "../api/retry";
 import { transcribeAudio } from "../api/transcribe";
@@ -1363,6 +1364,13 @@ export default function MainScreen({ navigation }: Props) {
       });
       return;
     }
+    // "When is the 2 train" or "What is in front of me?" would otherwise be
+    // searched as a place name and fail with "could not verify a nearby...".
+    const parsedInput = parseLastMetersInput(rawDestination);
+    if (parsedInput.kind === "question") {
+      await handleSubmit(rawDestination);
+      return;
+    }
     if (!capturedImage) {
       speak("Please take a photo of your surroundings first.", {
         preferDevice: true,
@@ -1407,7 +1415,7 @@ export default function MainScreen({ navigation }: Props) {
           compassAccuracyLevel:
             capturedPhotoHeadingAccuracyRef.current ?? undefined,
           image: capturedImage,
-          destination: rawDestination,
+          destination: parsedInput.destination,
         },
         controller.signal,
       );

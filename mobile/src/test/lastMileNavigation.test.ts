@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAlignedHeadingInstruction,
+  buildBesideBuildingInstruction,
+  buildClosedNowNotice,
   buildCloseRangeNoTurnInstruction,
   buildHeadingConflictInstruction,
   buildLastMileApproachInstruction,
   buildLastMileDistanceSentence,
   buildLastMileRetakeInstruction,
+  buildLastMileSourceNote,
   buildLastMileTurnInstruction,
   calculateLastMileConfidence,
   compareCompassAndPanoramaHeadings,
@@ -17,11 +20,14 @@ import {
   LAST_MILE_HEADINGS,
   LAST_MILE_PANORAMA_FOV_DEGREES,
   LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS,
+  LAST_METERS_GPS_ALLOWANCE_MAX_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
+  resolveExactModeGate,
   resolveVerifiedTargetHeading,
   shouldUseDestinationReference,
   snapLastMileHeading,
+  streetViewImageryAgeYears,
 } from "../../server/utils/lastMileNavigation";
 
 test("parseLastMileHeading accepts a single valid panorama heading", () => {
@@ -307,4 +313,66 @@ test("Test B guidance asks the user to move one block and retake", () => {
     buildLastMileRetakeInstruction("Whole Foods", 120, 90),
     "Whole Foods is not visible from this block and is roughly 400 feet to the east. Continue with your primary navigation for another block, then stop safely and take a new photo."
   );
+});
+
+test("resolveExactModeGate forgives reported GPS error up to a cap", () => {
+  assert.deepEqual(resolveExactModeGate(240), { exact: true, allowanceMeters: 0, widened: false });
+  assert.deepEqual(resolveExactModeGate(280, 40), { exact: true, allowanceMeters: 40, widened: true });
+  assert.deepEqual(resolveExactModeGate(300, 40), { exact: false, allowanceMeters: 40, widened: false });
+  assert.deepEqual(resolveExactModeGate(340, 150), {
+    exact: true,
+    allowanceMeters: LAST_METERS_GPS_ALLOWANCE_MAX_METERS,
+    widened: true,
+  });
+  assert.equal(resolveExactModeGate(360, 150).exact, false);
+  assert.equal(resolveExactModeGate(260, Number.NaN).exact, false);
+  assert.throws(() => resolveExactModeGate(-1));
+});
+
+test("streetViewImageryAgeYears reads Street View capture dates", () => {
+  const now = new Date("2026-09-30T12:00:00Z");
+  assert.equal(streetViewImageryAgeYears("2016-09", now), 10);
+  assert.equal(streetViewImageryAgeYears("2026-04", now), 5 / 12);
+  assert.equal(streetViewImageryAgeYears("2020", now), 6.25);
+  assert.equal(streetViewImageryAgeYears(undefined, now), undefined);
+  assert.equal(streetViewImageryAgeYears("unknown", now), undefined);
+});
+
+test("calculateLastMileConfidence flags stale Street View imagery", () => {
+  const evidence = {
+    gpsAccuracyMeters: 10,
+    compassAccuracyLevel: 3,
+    panoramaCurrentViewMatched: true,
+    compassPanoramaAgrees: true,
+    destinationVisuallyMatched: true,
+    destinationReferenceVerified: false,
+  };
+  const fresh = calculateLastMileConfidence({ ...evidence, panoramaAgeYears: 0.5 });
+  const stale = calculateLastMileConfidence({ ...evidence, panoramaAgeYears: 10 });
+  assert.ok(Math.abs(fresh.score - stale.score - 0.05) < 1e-9);
+  assert.deepEqual(fresh.reasons, []);
+  assert.ok(stale.reasons.includes("Street View imagery is about 10 years old."));
+});
+
+test("Last Meters answers cite their source and Google's closed status", () => {
+  assert.equal(buildLastMileSourceNote(null), " Source: Google Maps.");
+  assert.equal(
+    buildLastMileSourceNote("2016-09"),
+    " Source: Google Maps and Street View imagery from 2016-09."
+  );
+  assert.equal(buildLastMileSourceNote(undefined), " Source: Google Maps and Street View.");
+  assert.equal(buildClosedNowNotice("The UPS Store"), " Google Maps lists The UPS Store as closed right now.");
+  assert.equal(buildClosedNowNotice("Citi", true), " Google Maps lists Citi as temporarily closed.");
+});
+
+test("beside-building guidance does not send the user to another block", () => {
+  const text = buildBesideBuildingInstruction("Brookfield Place", 140, 180);
+  assert.equal(
+    text,
+    "You appear to be beside Brookfield Place, which may have more than one entrance. " +
+      "I could not confirm an entrance in front of you in Street View. " +
+      "The entrance listed on Google Maps is roughly 450 feet to the south. " +
+      "If you find a door here, ask someone nearby whether it is open to the public."
+  );
+  assert.doesNotMatch(text, /not visible from this block/);
 });

@@ -12,6 +12,7 @@ import fetch from "node-fetch";
 import { getPanoramaData } from "./doorfront";
 import { getNearbyFeatures } from "./features";
 import { treeInterface, sidewalkMaterialInterface, pedestrianRampInterface } from "../database/models/features";
+import { describeOpeningStatus, placeHoursFromDetails } from "../utils/openingHours";
 
 dotenv.config();
 
@@ -293,13 +294,29 @@ export class GeminiService {
             //if its giving back a specific place link
             else if (places.data.candidates) {
               completeAIPrompt += nearbyPlacesPrompt;
-              let operatingHours = '';
-              if (places.data.candidates[0].opening_hours) {
-                const placeInformation = await axios.get(`https://maps.googleapis.com/maps/api/place/details/json?place_id=${places.data.candidates[0].place_id}&fields=opening_hours&key=${process.env.GOOGLE_API_KEY}`);
-                operatingHours = placeInformation.data.result.opening_hours.weekday_text
+              const candidate = places.data.candidates[0];
+              let openingStatus: string | null = null;
+              if (candidate?.place_id) {
+                try {
+                  const placeInformation = await axios.get("https://maps.googleapis.com/maps/api/place/details/json", {
+                    params: {
+                      place_id: candidate.place_id,
+                      fields: "name,business_status,opening_hours,current_opening_hours,utc_offset",
+                      key: process.env.GOOGLE_API_KEY,
+                    },
+                    timeout: 20_000,
+                  });
+                  openingStatus = describeOpeningStatus(
+                    placeHoursFromDetails(placeInformation.data.result, candidate.name ?? "This place")
+                  );
+                } catch (hoursError) {
+                  console.warn("Place hours lookup failed:", hoursError);
+                }
               }
-              systemContent += `Relevant Place Information: ${JSON.stringify(places.data.candidates[0], null, 2)}`
-              systemContent += `Operating Hours: ${operatingHours.length > 0 ? operatingHours : 'Not available'}`;
+              systemContent += `Relevant Place Information: ${JSON.stringify(candidate ?? null, null, 2)}\n`;
+              systemContent += openingStatus
+                ? `Opening status computed from Google Maps hours. Repeat it as written and do not recalculate open or closed yourself: ${openingStatus}\n`
+                : "Operating Hours: Not available\n";
             }
 
             //if its giving back distance matrix link
@@ -462,7 +479,7 @@ export class GeminiService {
 
     // Final Gemini Text Request
     try {
-      systemContent += `Current Date and Time: ${new Date().toLocaleString()}`;
+      systemContent += `\nCurrent Date and Time (Eastern): ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`;
       
       const priorHistory = getConversationHistory(content.analytics);
       const combinedSystemMessage = completeAIPrompt

@@ -2,14 +2,35 @@ export const LAST_MILE_HEADINGS = [0, 45, 90, 135, 180, 225, 270, 315] as const;
 export const LAST_MILE_PANORAMA_FOV_DEGREES = 45;
 export const LAST_METERS_EXACT_RADIUS_METERS = 250;
 export const LAST_METERS_DESTINATION_REFERENCE_RADIUS_METERS = 75;
+/**
+ * Most GPS error the exact-mode gate will forgive. Past this the fix is too
+ * vague to trust a panorama match, even if the user really is at the door.
+ */
+export const LAST_METERS_GPS_ALLOWANCE_MAX_METERS = 100;
+export const LAST_MILE_STALE_IMAGERY_YEARS = 3;
 
 export type LastMileTestScenario =
   | "test_a_visible"
   | "test_a_reference"
+  | "test_a_sign_text"
   | "test_b_approach"
   | "heading_aligned"
   | "heading_conflict"
-  | "destination_unverified";
+  | "destination_unverified"
+  | "no_panorama"
+  | "question_routed";
+
+export const LAST_MILE_TEST_SCENARIOS: readonly LastMileTestScenario[] = [
+  "test_a_visible",
+  "test_a_reference",
+  "test_a_sign_text",
+  "test_b_approach",
+  "heading_aligned",
+  "heading_conflict",
+  "destination_unverified",
+  "no_panorama",
+  "question_routed",
+];
 
 export type LastMileConfidenceLevel = "high" | "medium" | "low";
 
@@ -31,6 +52,7 @@ export interface LastMileConfidenceInput {
   compassPanoramaAgrees?: boolean;
   destinationVisuallyMatched: boolean;
   destinationReferenceVerified: boolean;
+  panoramaAgeYears?: number;
 }
 
 export interface LastMileConfidence {
@@ -92,6 +114,16 @@ export function calculateLastMileConfidence(
     reasons.push("Destination was verified with a separate Street View reference.");
   } else {
     reasons.push("Destination was not visually verified.");
+  }
+
+  if (
+    typeof input.panoramaAgeYears === "number" &&
+    input.panoramaAgeYears >= LAST_MILE_STALE_IMAGERY_YEARS
+  ) {
+    score -= 0.05;
+    reasons.push(
+      `Street View imagery is about ${Math.floor(input.panoramaAgeYears)} years old.`
+    );
   }
 
   // One wrong heading source means the turn itself may be wrong, so no amount
@@ -259,6 +291,55 @@ function formatLastMileDirection(bearing: number): string {
   return directionNames[snapLastMileHeading(bearing) / 45];
 }
 
+export interface ExactModeGate {
+  exact: boolean;
+  /** Meters of GPS error forgiven; 0 when accuracy was unknown. */
+  allowanceMeters: number;
+  /** True only when the allowance is what let the trial into exact mode. */
+  widened: boolean;
+}
+
+/**
+ * A tester at the door can measure past 250 m when the fix is poor, so the
+ * gate forgives up to the reported accuracy (capped) before falling back to
+ * approach mode.
+ */
+export function resolveExactModeGate(
+  distanceMeters: number,
+  gpsAccuracyMeters?: number
+): ExactModeGate {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  const allowanceMeters =
+    typeof gpsAccuracyMeters === "number" &&
+    Number.isFinite(gpsAccuracyMeters) &&
+    gpsAccuracyMeters > 0
+      ? Math.min(gpsAccuracyMeters, LAST_METERS_GPS_ALLOWANCE_MAX_METERS)
+      : 0;
+  const exact = distanceMeters - allowanceMeters <= LAST_METERS_EXACT_RADIUS_METERS;
+  return {
+    exact,
+    allowanceMeters,
+    widened: exact && distanceMeters > LAST_METERS_EXACT_RADIUS_METERS,
+  };
+}
+
+/** Street View dates are "YYYY" or "YYYY-MM". */
+export function streetViewImageryAgeYears(
+  date: string | undefined,
+  now = new Date()
+): number | undefined {
+  const match = date?.trim().match(/^(\d{4})(?:-(\d{1,2}))?/);
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = match[2] ? Number(match[2]) : 6;
+  if (!Number.isFinite(year) || month < 1 || month > 12) return undefined;
+  const capturedMonths = year * 12 + (month - 1);
+  const nowMonths = now.getUTCFullYear() * 12 + now.getUTCMonth();
+  return Math.max(0, (nowMonths - capturedMonths) / 12);
+}
+
 export function shouldUseDestinationReference(distanceMeters: number): boolean {
   if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
     throw new Error("Last Meters distance must be a non-negative finite number.");
@@ -386,6 +467,41 @@ export function buildLastMileRetakeInstruction(
     `${formatLastMileDistance(distanceMeters)} to the ${formatLastMileDirection(bearing)}. ` +
     "Continue with your primary navigation for another block, then stop safely and take a new photo."
   );
+}
+
+/**
+ * For a user standing at a large building whose listed entrance is elsewhere:
+ * "not visible from this block" would wrongly send them away from a door that
+ * may be right in front of them.
+ */
+export function buildBesideBuildingInstruction(
+  destination: string,
+  distanceMeters: number,
+  bearing: number
+): string {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    throw new Error("Last Meters distance must be a non-negative finite number.");
+  }
+  return (
+    `You appear to be beside ${destination}, which may have more than one entrance. ` +
+    "I could not confirm an entrance in front of you in Street View. " +
+    `The entrance listed on Google Maps is roughly ${formatLastMileDistance(distanceMeters)} ` +
+    `to the ${formatLastMileDirection(bearing)}. ` +
+    "If you find a door here, ask someone nearby whether it is open to the public."
+  );
+}
+
+export function buildClosedNowNotice(destination: string, temporarily = false): string {
+  return temporarily
+    ? ` Google Maps lists ${destination} as temporarily closed.`
+    : ` Google Maps lists ${destination} as closed right now.`;
+}
+
+export function buildLastMileSourceNote(streetViewDate?: string | null): string {
+  if (streetViewDate === null) return " Source: Google Maps.";
+  return streetViewDate
+    ? ` Source: Google Maps and Street View imagery from ${streetViewDate}.`
+    : " Source: Google Maps and Street View.";
 }
 
 /**

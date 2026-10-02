@@ -1,5 +1,14 @@
 import mongoose, { Schema } from "mongoose";
+import { LAST_MILE_TEST_SCENARIOS } from "../../utils/lastMileNavigation";
 import type { LastMileTestScenario } from "../../utils/lastMileNavigation";
+import type { PlaceCandidateLog } from "../../utils/nearbyPlaces";
+
+export const REVIEW_OUTCOMES = ["got_there", "needed_retake", "would_not_get_there"] as const;
+export const TURN_CORRECTNESS = ["correct", "wrong", "no_turn_given"] as const;
+export const ENTRANCE_CORRECTNESS = ["correct", "wrong", "not_identified"] as const;
+export type ReviewOutcome = (typeof REVIEW_OUTCOMES)[number];
+export type TurnCorrectness = (typeof TURN_CORRECTNESS)[number];
+export type EntranceCorrectness = (typeof ENTRANCE_CORRECTNESS)[number];
 
 export interface lastMileTestStepInterface {
   name: string;
@@ -14,13 +23,33 @@ export interface lastMileTestStepInterface {
 
 export interface lastMileTestLogInterface {
   destination: string;
+  /** Place name actually searched after question lead-ins were removed. */
+  destinationQuery?: string;
   lat: number;
   lng: number;
   userPhoto: string;
   panoramaPhoto?: string;
   panoramaDate?: string;
   panoramaStatus?: string;
+  /** "pipeline" when matched, "background" when saved only for review. */
+  panoramaSource?: "pipeline" | "background";
+  panoId?: string;
+  panoramaCopyright?: string;
+  panoramaAgeYears?: number;
   panoramaHeadings: number[];
+  placeCandidates?: PlaceCandidateLog[];
+  placesSearches?: string[];
+  gpsAllowanceMeters?: number;
+  exactGateWidened?: boolean;
+  entranceSource?: "places_pin" | "geocoding_entrance";
+  entranceLat?: number;
+  entranceLng?: number;
+  besideBuilding?: boolean;
+  destinationOpenNow?: boolean;
+  destinationBusinessStatus?: string;
+  signText?: string;
+  signTextMatched?: boolean;
+  dataSources?: string[];
   destinationPhoto?: string;
   destinationPhotoDate?: string;
   destinationPhotoStatus?: string;
@@ -51,6 +80,9 @@ export interface lastMileTestLogInterface {
   steps: lastMileTestStepInterface[];
   reviewerStatus?: "untested" | "pass" | "partial" | "fail";
   reviewerNotes?: string;
+  reviewOutcome?: ReviewOutcome;
+  turnCorrectness?: TurnCorrectness;
+  entranceCorrectness?: EntranceCorrectness;
   reviewedAt?: Date;
   success: boolean;
   error?: string;
@@ -72,15 +104,47 @@ const LastMileTestStepSchema = new Schema<lastMileTestStepInterface>(
   { _id: false }
 );
 
+const PlaceCandidateSchema = new Schema<PlaceCandidateLog>(
+  {
+    placeId: { type: String },
+    name: { type: String, required: true },
+    address: { type: String },
+    distanceMeters: { type: Number, required: true },
+    types: [{ type: String }],
+    relevant: { type: Boolean, required: true },
+    source: { type: String },
+    businessStatus: { type: String },
+  },
+  { _id: false }
+);
+
 const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   destination: { type: String, required: true, index: true },
+  destinationQuery: { type: String },
   lat: { type: Number, required: true },
   lng: { type: Number, required: true },
   userPhoto: { type: String, required: true },
   panoramaPhoto: { type: String },
   panoramaDate: { type: String },
   panoramaStatus: { type: String },
+  panoramaSource: { type: String, enum: ["pipeline", "background"] },
+  panoId: { type: String },
+  panoramaCopyright: { type: String },
+  panoramaAgeYears: { type: Number },
   panoramaHeadings: [{ type: Number }],
+  placeCandidates: [PlaceCandidateSchema],
+  placesSearches: [{ type: String }],
+  gpsAllowanceMeters: { type: Number },
+  exactGateWidened: { type: Boolean },
+  entranceSource: { type: String, enum: ["places_pin", "geocoding_entrance"] },
+  entranceLat: { type: Number },
+  entranceLng: { type: Number },
+  besideBuilding: { type: Boolean },
+  destinationOpenNow: { type: Boolean },
+  destinationBusinessStatus: { type: String },
+  signText: { type: String },
+  signTextMatched: { type: Boolean },
+  dataSources: [{ type: String }],
   destinationPhoto: { type: String },
   destinationPhotoDate: { type: String },
   destinationPhotoStatus: { type: String },
@@ -105,14 +169,7 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   navigationMode: { type: String, enum: ["approach", "exact", "aligned"] },
   testScenario: {
     type: String,
-    enum: [
-      "test_a_visible",
-      "test_a_reference",
-      "test_b_approach",
-      "heading_aligned",
-      "heading_conflict",
-      "destination_unverified",
-    ],
+    enum: [...LAST_MILE_TEST_SCENARIOS],
     index: true,
   },
   currentHeading: { type: Number },
@@ -127,6 +184,9 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
     index: true,
   },
   reviewerNotes: { type: String },
+  reviewOutcome: { type: String, enum: [...REVIEW_OUTCOMES], index: true },
+  turnCorrectness: { type: String, enum: [...TURN_CORRECTNESS] },
+  entranceCorrectness: { type: String, enum: [...ENTRANCE_CORRECTNESS] },
   reviewedAt: { type: Date },
   success: { type: Boolean, required: true, index: true },
   error: { type: String },

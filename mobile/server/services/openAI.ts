@@ -38,11 +38,14 @@ import {
 } from "../utils/conversationHistory";
 import {
   buildAlignedHeadingInstruction,
+  buildBesideBuildingInstruction,
+  buildClosedNowNotice,
   buildCloseRangeNoTurnInstruction,
   buildHeadingConflictInstruction,
   buildLastMileApproachInstruction,
   buildLastMileDistanceSentence,
   buildLastMileRetakeInstruction,
+  buildLastMileSourceNote,
   buildLastMileTurnInstruction,
   calculateLastMileConfidence,
   compareCompassAndPanoramaHeadings,
@@ -55,9 +58,11 @@ import {
   LAST_METERS_EXACT_RADIUS_METERS,
   parseDestinationVisibility,
   parseLastMileHeading,
+  resolveExactModeGate,
   resolveVerifiedTargetHeading,
   shouldUseDestinationReference,
   snapLastMileHeading,
+  streetViewImageryAgeYears,
 } from "../utils/lastMileNavigation";
 import type { LastMileTestScenario } from "../utils/lastMileNavigation";
 import {
@@ -70,8 +75,23 @@ import {
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
   selectNearbyPlaceCandidates,
+  signTextMatchesPlaceName,
+  summarizePlaceCandidates,
 } from "../utils/nearbyPlaces";
-import type { NearbyPlaceSelection } from "../utils/nearbyPlaces";
+import type {
+  NearbyPlaceCandidate,
+  NearbyPlaceSelection,
+  PlaceCandidateLog,
+} from "../utils/nearbyPlaces";
+import {
+  isBesideBuilding,
+  parseBuildingGeometry,
+  selectNearestEntrance,
+  usesBuildingEntrances,
+} from "../utils/buildingEntrances";
+import type { BuildingGeometry } from "../utils/buildingEntrances";
+import { describeOpeningStatus, placeHoursFromDetails } from "../utils/openingHours";
+import { parseLastMetersInput } from "../../src/utils/lastMetersInput";
 dotenv.config();
 
 function getGoogleMapsApiKey(): string {
@@ -158,6 +178,32 @@ interface VerifiedNearbyDestination {
   distanceMeters: number;
   /** Ranked relevant candidates and which searches ran, for the trial log. */
   candidateSummary: string;
+  placeCandidates: PlaceCandidateLog[];
+  placesSearches: string[];
+  openNow?: boolean;
+  businessStatus?: string;
+}
+
+/** Carries what Google returned so a failed lookup can still be diagnosed. */
+class DestinationNotVerifiedError extends Error {
+  constructor(
+    message: string,
+    readonly placeCandidates: PlaceCandidateLog[],
+    readonly placesSearches: string[],
+  ) {
+    super(message);
+    this.name = "DestinationNotVerifiedError";
+  }
+}
+
+function tagSearchSource(
+  results: NearbyPlaceCandidate[] | undefined,
+  source: string,
+): NearbyPlaceCandidate[] {
+  return (results ?? []).map((result) => ({
+    ...result,
+    searchSources: [source],
+  }));
 }
 
 async function getVerifiedNearbyDestination(
@@ -168,7 +214,11 @@ async function getVerifiedNearbyDestination(
 ): Promise<VerifiedNearbyDestination> {
   const nearbyQuery = normalizeNearbyPlaceQuery(destination);
   if (!nearbyQuery) {
-    throw new Error("Destination name was empty after normalization.");
+    throw new DestinationNotVerifiedError(
+      "Destination name was empty after normalization.",
+      [],
+      [],
+    );
   }
 
   const locationResponse = await axios.get(
@@ -187,10 +237,10 @@ async function getVerifiedNearbyDestination(
     throw new Error(`Nearby Places returned ${locationResponse.data.status}.`);
   }
 
-  let candidates = locationResponse.data.results ?? [];
+  let candidates = tagSearchSource(locationResponse.data.results, "nearby");
   const rankRelevant = (): NearbyPlaceSelection[] =>
     selectNearbyPlaceCandidates(
-      candidates.filter((candidate: any) =>
+      candidates.filter((candidate) =>
         isNearbyPlaceCandidateRelevant(candidate, nearbyQuery),
       ),
       { lat, lng },
@@ -246,7 +296,7 @@ async function getVerifiedNearbyDestination(
       if (textResponse.data.status === "OK") {
         candidates = mergeNearbyPlaceCandidates(
           candidates,
-          textResponse.data.results ?? [],
+          tagSearchSource(textResponse.data.results, "text"),
         );
       } else if (textResponse.data.status !== "ZERO_RESULTS") {
         console.warn(
@@ -259,14 +309,21 @@ async function getVerifiedNearbyDestination(
     ranked = rankRelevant();
     nearbyPlace = ranked[0];
   }
+  const placeCandidates = summarizePlaceCandidates(
+    candidates,
+    { lat, lng },
+    nearbyQuery,
+  );
   const placeLocation = nearbyPlace?.geometry?.location;
   if (
     !nearbyPlace?.place_id ||
     typeof placeLocation?.lat !== "number" ||
     typeof placeLocation.lng !== "number"
   ) {
-    throw new Error(
+    throw new DestinationNotVerifiedError(
       `No verified ${nearbyQuery} was found within ${Math.round(maxDistanceMeters / 1_000)} kilometers.`,
+      placeCandidates,
+      searchesUsed,
     );
   }
 
@@ -284,7 +341,40 @@ async function getVerifiedNearbyDestination(
     candidateSummary:
       `Searches: ${searchesUsed.join(" + ")}; ${candidates.length} raw results\n` +
       describeNearbyPlaceCandidates(ranked),
+    placeCandidates,
+    placesSearches: searchesUsed,
+    openNow: nearbyPlace.opening_hours?.open_now,
+    businessStatus: nearbyPlace.business_status,
   };
+}
+
+/**
+ * Building outline and entrance points from Geocoding. Optional data: any
+ * failure means the trial falls back to the single Places pin.
+ */
+async function getBuildingGeometry(
+  placeId: string,
+): Promise<BuildingGeometry | null> {
+  try {
+    const response = await axios.get(
+      "https://maps.googleapis.com/maps/api/geocode/json",
+      {
+        params: {
+          place_id: placeId,
+          extra_computations: "BUILDING_AND_ENTRANCES",
+          key: getGoogleMapsApiKey(),
+        },
+        timeout: 8_000,
+      },
+    );
+    if (response.data.status !== "OK" || !response.data.results?.[0]) {
+      return null;
+    }
+    return parseBuildingGeometry(response.data.results[0]);
+  } catch (error) {
+    console.warn("[Last Meters] Building entrance lookup failed:", error);
+    return null;
+  }
 }
 
 async function getDestinationStreetViewReference(
@@ -652,6 +742,20 @@ export class OpenAIService {
     let destinationPlaceAddress: string | undefined;
     let destinationTypes: string[] = [];
     let destinationReferenceUsed = false;
+    let destinationQuery = destination;
+    let placeCandidates: PlaceCandidateLog[] | undefined;
+    let placesSearches: string[] | undefined;
+    let gpsAllowanceMeters: number | undefined;
+    let exactGateWidened: boolean | undefined;
+    let panoId: string | undefined;
+    let panoramaCopyright: string | undefined;
+    let panoramaAgeYears: number | undefined;
+    let entranceSource: "places_pin" | "geocoding_entrance" | undefined;
+    let entranceLocation: LatLng | undefined;
+    let besideBuilding: boolean | undefined;
+    let signText: string | undefined;
+    let signTextMatched: boolean | undefined;
+    const dataSources = new Set<string>();
     const testSteps: {
       name: string;
       prompt: string;
@@ -663,6 +767,72 @@ export class OpenAIService {
       tokenCount?: number;
     }[] = [];
 
+    const trialContext = () => ({
+      destination,
+      destinationQuery,
+      lat,
+      lng,
+      panoramaPhoto,
+      panoramaDate,
+      panoramaStatus,
+      panoramaSource: panoramaPhoto ? ("pipeline" as const) : undefined,
+      panoId,
+      panoramaCopyright,
+      panoramaAgeYears,
+      panoramaHeadings,
+      placeCandidates,
+      placesSearches,
+      gpsAllowanceMeters,
+      exactGateWidened,
+      entranceSource,
+      entranceLat: entranceLocation?.lat,
+      entranceLng: entranceLocation?.lng,
+      besideBuilding,
+      destinationOpenNow: verifiedDestination?.openNow,
+      destinationBusinessStatus: verifiedDestination?.businessStatus,
+      signText,
+      signTextMatched,
+      dataSources: [...dataSources],
+      destinationPhoto,
+      destinationPhotoDate,
+      destinationPhotoStatus,
+      destinationPlaceName,
+      destinationPlaceAddress,
+      destinationTypes,
+      destinationDistanceMeters,
+      gpsAccuracyMeters,
+      compassAccuracyLevel,
+      destinationBearing,
+      deviceHeading,
+      headingDifferenceDegrees,
+      headingAligned,
+      compassHeading,
+      panoramaMatchedHeading,
+      headingComparisonDifference,
+      headingComparisonAgrees,
+      confidenceScore,
+      confidenceLevel,
+      confidenceReasons,
+      destinationReferenceUsed,
+      navigationMode,
+      testScenario,
+      currentHeading,
+      steps: testSteps,
+      latencyMs: Date.now() - startedAt,
+    });
+    const recordTrial = async (outcome: {
+      finalOutput?: string;
+      success: boolean;
+      error?: string;
+      targetHeading?: number;
+      turnInstruction?: string;
+    }) =>
+      lastMileTestLogService.record({
+        ...trialContext(),
+        userPhoto: await resizeDataUrlImage(image, 1024, 76),
+        ...outcome,
+      });
+
     console.log("\n==================================================");
     console.log("📥 [BACKEND] HIT RECEIVED ON /api/last-mile route!");
     console.log(`[BACKEND] Destination requested: "${destination}"`);
@@ -672,20 +842,77 @@ export class OpenAIService {
     );
     console.log("==================================================");
 
+    const parsedInput = parseLastMetersInput(destination);
+    if (parsedInput.kind === "question") {
+      // Older app builds send questions here; answer them like the main
+      // question box would instead of searching for a place named "When is...".
+      testScenario = "question_routed";
+      testSteps.push({
+        name: "input_classification",
+        prompt:
+          "Decide whether the Last Meters input names a place or asks a question.",
+        response: `QUESTION (${parsedInput.reason}): sent to the question answering flow`,
+        model: "deterministic-parser",
+        success: true,
+      });
+      await recordTrial({
+        finalOutput: "Answered by the question answering flow.",
+        success: true,
+      });
+      const asksAboutSurroundings =
+        parsedInput.reason === "question" &&
+        /\b(?:in front of me|around me|describe|what do you see|this)\b/i.test(
+          destination,
+        );
+      return this.textRequest(ctx, {
+        text: destination,
+        image: asksAboutSurroundings && image ? [image] : undefined,
+        coords: {
+          latitude: lat,
+          longitude: lng,
+          accuracy: gpsAccuracyMeters ?? null,
+          heading: deviceHeading ?? null,
+        },
+        analytics: {
+          feature:
+            parsedInput.reason === "transit"
+              ? "mta"
+              : asksAboutSurroundings
+                ? "photo_qa"
+                : undefined,
+        },
+      });
+    }
+    destinationQuery = parsedInput.destination;
+    testSteps.push({
+      name: "input_classification",
+      prompt:
+        "Decide whether the Last Meters input names a place or asks a question.",
+      response:
+        `DESTINATION: "${destinationQuery}"` +
+        (parsedInput.strippedLeadIn ? " (question lead-in removed)" : ""),
+      model: "deterministic-parser",
+      success: true,
+    });
+
     try {
       const proximityPrompt =
-        `Resolve "${destination}" near the user's coordinates and use exact ` +
-        `panorama matching only within ${LAST_METERS_EXACT_RADIUS_METERS} meters.`;
+        `Resolve "${destinationQuery}" near the user's coordinates and use exact ` +
+        `panorama matching only within ${LAST_METERS_EXACT_RADIUS_METERS} meters ` +
+        "plus the phone's reported GPS error.";
       try {
         verifiedDestination = await getVerifiedNearbyDestination(
           lat,
           lng,
-          destination,
+          destinationQuery,
         );
+        dataSources.add("google_places");
         destinationDistanceMeters = verifiedDestination.distanceMeters;
         destinationPlaceName = verifiedDestination.placeName;
         destinationPlaceAddress = verifiedDestination.placeAddress;
         destinationTypes = verifiedDestination.types;
+        placeCandidates = verifiedDestination.placeCandidates;
+        placesSearches = verifiedDestination.placesSearches;
         testSteps.push({
           name: "destination_candidates",
           prompt:
@@ -696,6 +923,11 @@ export class OpenAIService {
         });
       } catch (proximityError) {
         testScenario = "destination_unverified";
+        if (proximityError instanceof DestinationNotVerifiedError) {
+          placeCandidates = proximityError.placeCandidates;
+          placesSearches = proximityError.placesSearches;
+          dataSources.add("google_places");
+        }
         const message =
           proximityError instanceof Error
             ? proximityError.message
@@ -709,26 +941,13 @@ export class OpenAIService {
           error: message,
         });
         const finalOutput =
-          `I could not verify a nearby ${destination} from your current location. ` +
-          "Try a more specific name or street address.";
-        const testLogId = await lastMileTestLogService.record({
-          destination,
-          lat,
-          lng,
-          userPhoto: await resizeDataUrlImage(image, 1024, 76),
-          panoramaHeadings,
-          destinationPlaceName,
-          destinationPlaceAddress,
-          destinationTypes,
-          destinationDistanceMeters,
-          gpsAccuracyMeters,
-          deviceHeading,
-          testScenario,
+          `I could not verify a nearby ${destinationQuery} from your current location. ` +
+          "Try a more specific name or street address." +
+          buildLastMileSourceNote(null);
+        const testLogId = await recordTrial({
           finalOutput,
-          steps: testSteps,
           success: false,
           error: "destination_not_verified",
-          latencyMs: Date.now() - startedAt,
         });
         res.status(200).json({
           output: finalOutput,
@@ -739,10 +958,64 @@ export class OpenAIService {
         return;
       }
 
-      destinationBearing = calculateHeading(
-        { lat, lng },
-        verifiedDestination.location,
+      // The panorama is taken at the user's position, so it can download
+      // while the entrance lookup runs. Approach and aligned trials save it
+      // for review after they have already answered.
+      const panoramaDownload = processEightDirectionTiles(lat, lng);
+      panoramaDownload.catch(() => undefined);
+
+      let targetLocation: LatLng = verifiedDestination.location;
+      entranceSource = "places_pin";
+      const buildingGeometry = await getBuildingGeometry(
+        verifiedDestination.placeId,
       );
+      if (
+        buildingGeometry &&
+        usesBuildingEntrances(
+          verifiedDestination.placeId,
+          verifiedDestination.types,
+          buildingGeometry,
+        )
+      ) {
+        besideBuilding = isBesideBuilding(
+          { lat, lng },
+          buildingGeometry.outlines,
+          gpsAccuracyMeters,
+        );
+        const nearestEntrance = selectNearestEntrance(
+          { lat, lng },
+          buildingGeometry.entrances,
+        );
+        if (nearestEntrance) {
+          targetLocation = nearestEntrance.entrance.location;
+          entranceLocation = targetLocation;
+          entranceSource = "geocoding_entrance";
+          destinationDistanceMeters = nearestEntrance.distanceMeters;
+        }
+        dataSources.add("google_building_entrances");
+        testSteps.push({
+          name: "building_entrances",
+          prompt:
+            "Use the Google Geocoding building entrance nearest the user instead of the single map pin.",
+          response:
+            (nearestEntrance
+              ? `NEAREST_ENTRANCE: ${Math.round(nearestEntrance.distanceMeters)} meters ` +
+                `(${buildingGeometry.entrances.length} listed)`
+              : "NO_ENTRANCES_LISTED") +
+            (besideBuilding ? "; USER_BESIDE_BUILDING" : ""),
+          model: "google-geocoding",
+          success: nearestEntrance !== null,
+        });
+      }
+
+      const closedNotice =
+        verifiedDestination.businessStatus === "CLOSED_TEMPORARILY"
+          ? buildClosedNowNotice(verifiedDestination.placeName, true)
+          : verifiedDestination.openNow === false
+            ? buildClosedNowNotice(verifiedDestination.placeName)
+            : "";
+
+      destinationBearing = calculateHeading({ lat, lng }, targetLocation);
       if (typeof deviceHeading === "number") {
         headingDifferenceDegrees = lastMileHeadingDifference(
           deviceHeading,
@@ -766,48 +1039,36 @@ export class OpenAIService {
         });
       }
 
-      if (
-        headingAligned &&
-        destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS
-      ) {
+      dataSources.add("phone_gps");
+      if (typeof deviceHeading === "number") dataSources.add("phone_compass");
+
+      // Constants so the fallback closure below keeps the narrowed types.
+      const place = verifiedDestination;
+      const distanceMeters = destinationDistanceMeters;
+      const bearing = destinationBearing;
+      const gate = resolveExactModeGate(distanceMeters, gpsAccuracyMeters);
+      gpsAllowanceMeters = gate.allowanceMeters;
+      exactGateWidened = gate.widened;
+
+      if (headingAligned && !gate.exact) {
         navigationMode = "aligned";
         testScenario = "heading_aligned";
-        testSteps.unshift({
+        testSteps.push({
           name: "proximity_gate",
           prompt: proximityPrompt,
-          response:
-            `${destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS ? "APPROACH_ONLY" : "EXACT_RANGE"}: ` +
-            `${Math.round(destinationDistanceMeters)} meters`,
+          response: `APPROACH_ONLY: ${Math.round(distanceMeters)} meters`,
           model: "google-places",
           success: true,
         });
-        const finalOutput = buildAlignedHeadingInstruction(
-          verifiedDestination.placeName,
-          destinationDistanceMeters,
-          verifiedDestination.placeAddress,
-        );
-        const testLogId = await lastMileTestLogService.record({
-          destination,
-          lat,
-          lng,
-          userPhoto: await resizeDataUrlImage(image, 1024, 76),
-          panoramaHeadings,
-          destinationPlaceName,
-          destinationPlaceAddress,
-          destinationTypes,
-          destinationDistanceMeters,
-          gpsAccuracyMeters,
-          destinationBearing,
-          deviceHeading,
-          headingDifferenceDegrees,
-          headingAligned,
-          navigationMode,
-          testScenario,
-          finalOutput,
-          steps: testSteps,
-          success: true,
-          latencyMs: Date.now() - startedAt,
-        });
+        const finalOutput =
+          buildAlignedHeadingInstruction(
+            place.placeName,
+            distanceMeters,
+            place.placeAddress,
+          ) +
+          closedNotice +
+          buildLastMileSourceNote(null);
+        const testLogId = await recordTrial({ finalOutput, success: true });
         res.status(200).json({
           output: finalOutput,
           testLogId,
@@ -815,49 +1076,32 @@ export class OpenAIService {
           testScenario,
           warning: "heading_already_aligned",
         });
+        void saveBackgroundPanorama(testLogId, panoramaDownload);
         return;
       }
 
-      if (destinationDistanceMeters > LAST_METERS_EXACT_RADIUS_METERS) {
+      if (!gate.exact) {
         navigationMode = "approach";
         testScenario = "test_b_approach";
-        const finalOutput = buildLastMileApproachInstruction(
-          verifiedDestination.placeName,
-          destinationDistanceMeters,
-          destinationBearing,
-          verifiedDestination.placeAddress,
-        );
+        const finalOutput =
+          buildLastMileApproachInstruction(
+            place.placeName,
+            distanceMeters,
+            bearing,
+            place.placeAddress,
+          ) +
+          closedNotice +
+          buildLastMileSourceNote(null);
         testSteps.push({
           name: "proximity_gate",
           prompt: proximityPrompt,
           response:
-            `APPROACH_ONLY: ${Math.round(destinationDistanceMeters)} meters, ` +
-            `${destinationBearing.toFixed(1)} degrees`,
+            `APPROACH_ONLY: ${Math.round(distanceMeters)} meters, ` +
+            `${bearing.toFixed(1)} degrees`,
           model: "google-places",
           success: true,
         });
-        const testLogId = await lastMileTestLogService.record({
-          destination,
-          lat,
-          lng,
-          userPhoto: await resizeDataUrlImage(image, 1024, 76),
-          panoramaHeadings,
-          destinationPlaceName,
-          destinationPlaceAddress,
-          destinationTypes,
-          destinationDistanceMeters,
-          gpsAccuracyMeters,
-          destinationBearing,
-          deviceHeading,
-          headingDifferenceDegrees,
-          headingAligned,
-          navigationMode,
-          testScenario,
-          finalOutput,
-          steps: testSteps,
-          success: true,
-          latencyMs: Date.now() - startedAt,
-        });
+        const testLogId = await recordTrial({ finalOutput, success: true });
         res.status(200).json({
           output: finalOutput,
           testLogId,
@@ -865,6 +1109,7 @@ export class OpenAIService {
           testScenario,
           warning: "destination_too_far",
         });
+        void saveBackgroundPanorama(testLogId, panoramaDownload);
         return;
       }
 
@@ -872,20 +1117,136 @@ export class OpenAIService {
       testSteps.push({
         name: "proximity_gate",
         prompt: proximityPrompt,
-        response: `EXACT: ${Math.round(destinationDistanceMeters)} meters`,
+        response:
+          `EXACT: ${Math.round(distanceMeters)} meters` +
+          (gate.widened
+            ? ` (within ${LAST_METERS_EXACT_RADIUS_METERS} m after a ` +
+              `${Math.round(gate.allowanceMeters)} m GPS allowance)`
+            : ""),
         model: "google-places",
         success: true,
       });
+
+      /**
+       * Places-only answer for when Street View cannot confirm the entrance:
+       * a compass-to-map turn when the bearing is meaningful, never a guess
+       * when the user is closer than the GPS error.
+       */
+      const respondWithPlacesFallback = async (fallback: {
+        imageryNote: string;
+        error: string;
+        reason: string;
+      }) => {
+        const bearingReliable = isDestinationBearingReliable(
+          distanceMeters,
+          gpsAccuracyMeters,
+        );
+        let turnFallback = "";
+        let bearingTarget: number | undefined;
+        if (
+          bearingReliable &&
+          typeof deviceHeading === "number" &&
+          Number.isFinite(deviceHeading)
+        ) {
+          bearingTarget = snapLastMileHeading(bearing);
+          turnFallback =
+            ` ${buildLastMileTurnInstruction(deviceHeading, bearing)}` +
+            " That turn is based on your phone compass and the map location," +
+            " not a visually confirmed entrance — use caution.";
+        }
+        const guidance = !bearingReliable
+          ? buildCloseRangeNoTurnInstruction(place.placeName, distanceMeters)
+          : besideBuilding
+            ? buildBesideBuildingInstruction(
+                place.placeName,
+                distanceMeters,
+                bearing,
+              ) + turnFallback
+            : `You are about ${formatLastMileDistance(distanceMeters)} from ${place.placeName}. ` +
+              "Google Maps confirms the destination is near you, but I could not verify" +
+              " the exact entrance in Street View." +
+              fallback.imageryNote +
+              (turnFallback ||
+                " I cannot provide a turn direction without a compass heading.");
+        const finalOutput =
+          guidance +
+          closedNotice +
+          buildLastMileSourceNote(panoramaPhoto ? panoramaDate : null);
+        testSteps.push({
+          name: "places_proximity_fallback",
+          prompt:
+            "Use the already verified Google Places destination when Street View cannot visually confirm the entrance.",
+          response:
+            `DESTINATION_CONFIRMED: ${place.placeName}, ` +
+            `${Math.round(distanceMeters)} meters away. ${fallback.reason}.` +
+            (bearingReliable && besideBuilding ? " USER_BESIDE_BUILDING." : "") +
+            (turnFallback ? " COMPASS_BEARING_TURN_PROVIDED." : "") +
+            (bearingReliable
+              ? ""
+              : " CLOSER_THAN_GPS_ACCURACY_NO_TURN_PROVIDED."),
+          model: "google-places",
+          success: true,
+        });
+        // Destination verification succeeded; only entrance localization failed.
+        const testLogId = await recordTrial({
+          finalOutput,
+          success: true,
+          error: fallback.error,
+          targetHeading: bearingTarget,
+          turnInstruction: turnFallback.trim() || undefined,
+        });
+        res.status(200).json({
+          output: finalOutput,
+          testLogId,
+          mode: navigationMode,
+          testScenario,
+          currentHeading,
+          targetHeading: bearingTarget ?? null,
+          warning: fallback.error,
+        });
+      };
+
       activeStage = "panorama download";
-      const panorama = await processEightDirectionTiles(lat, lng);
+      let panorama: Awaited<typeof panoramaDownload>;
+      try {
+        panorama = await panoramaDownload;
+      } catch (panoramaError: any) {
+        testScenario = "no_panorama";
+        panoramaStatus =
+          typeof panoramaError?.code === "string"
+            ? panoramaError.code
+            : "STREET_VIEW_UNAVAILABLE";
+        testSteps.push({
+          name: "panorama_download",
+          prompt:
+            "Fetch an outdoor Google Street View panorama at the user's position.",
+          response: panoramaStatus,
+          model: "google-street-view",
+          success: false,
+          error:
+            panoramaError instanceof Error
+              ? panoramaError.message
+              : "Street View was unavailable.",
+        });
+        await respondWithPlacesFallback({
+          imageryNote: " Street View has no outdoor imagery at your position.",
+          error: "no_outdoor_panorama",
+          reason: "NO_OUTDOOR_PANORAMA",
+        });
+        return;
+      }
+      dataSources.add("street_view_panorama");
       const { tiles } = panorama;
       panoramaDate = panorama.metadata.date;
       panoramaStatus = panorama.metadata.status;
+      panoId = panorama.metadata.pano_id;
+      panoramaCopyright = panorama.metadata.copyright;
+      panoramaAgeYears = streetViewImageryAgeYears(panoramaDate);
       panoramaHeadings = tiles.map((tile) => tile.heading);
       const panoramaOrigin = panorama.metadata.location ?? { lat, lng };
       const panoramaTargetBearing = calculateHeading(
         panoramaOrigin,
-        verifiedDestination.location,
+        targetLocation,
       );
       const expectedTargetHeading = snapLastMileHeading(panoramaTargetBearing);
       activeStage = "panorama assembly";
@@ -990,40 +1351,10 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         const finalOutput =
           "Your phone compass was unavailable or not calibrated, so I will not calculate a turn. " +
           "Stay where you are, move the phone in a slow figure eight to recalibrate the compass, then take a new photo.";
-        const testLogId = await lastMileTestLogService.record({
-          destination,
-          lat,
-          lng,
-          userPhoto: await resizeDataUrlImage(image, 1024, 76),
-          panoramaPhoto,
-          panoramaDate,
-          panoramaStatus,
-          panoramaHeadings,
-          destinationPhoto,
-          destinationPhotoDate,
-          destinationPhotoStatus,
-          destinationPlaceName,
-          destinationPlaceAddress,
-          destinationTypes,
-          destinationDistanceMeters,
-          gpsAccuracyMeters,
-          compassAccuracyLevel,
-          destinationBearing,
-          deviceHeading,
-          headingDifferenceDegrees,
-          headingAligned,
-          compassHeading,
-          panoramaMatchedHeading,
-          headingComparisonDifference,
-          headingComparisonAgrees,
-          destinationReferenceUsed,
-          navigationMode,
-          testScenario,
+        const testLogId = await recordTrial({
           finalOutput,
-          steps: testSteps,
           success: false,
           error: "compass_heading_unavailable",
-          latencyMs: Date.now() - startedAt,
         });
         res.status(200).json({
           output: finalOutput,
@@ -1037,43 +1368,15 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
 
       if (headingComparisonAgrees === false) {
         testScenario = "heading_conflict";
-        const finalOutput = buildHeadingConflictInstruction(
-          verifiedDestination.placeName,
-          destinationDistanceMeters,
-        );
-        const testLogId = await lastMileTestLogService.record({
-          destination,
-          lat,
-          lng,
-          userPhoto: await resizeDataUrlImage(image, 1024, 76),
-          panoramaPhoto,
-          panoramaDate,
-          panoramaStatus,
-          panoramaHeadings,
-          destinationPlaceName,
-          destinationPlaceAddress,
-          destinationTypes,
-          destinationDistanceMeters,
-          gpsAccuracyMeters,
-          compassAccuracyLevel,
-          destinationBearing,
-          deviceHeading,
-          headingDifferenceDegrees,
-          headingAligned,
-          compassHeading,
-          panoramaMatchedHeading,
-          headingComparisonDifference,
-          headingComparisonAgrees,
-          confidenceLevel: "low",
-          destinationReferenceUsed,
-          navigationMode,
-          testScenario,
-          currentHeading,
+        confidenceLevel = "low";
+        const finalOutput =
+          buildHeadingConflictInstruction(place.placeName, distanceMeters) +
+          closedNotice +
+          buildLastMileSourceNote(panoramaDate);
+        const testLogId = await recordTrial({
           finalOutput,
-          steps: testSteps,
           success: true,
           error: "heading_sources_disagree",
-          latencyMs: Date.now() - startedAt,
         });
         res.status(200).json({
           output: finalOutput,
@@ -1095,7 +1398,11 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
       const panoramaDateContext = panoramaDate
         ? `Street View reports that this panorama was captured in ${panoramaDate}.`
         : "Street View did not provide a capture date for this panorama.";
-      const step2Prompt = `You will receive one panorama grid containing 8 distinct, non-overlapping views explicitly labeled with their center headings. Find the storefront, sign, or entrance for "${destination}". ${panoramaDateContext}
+      const destinationLabel =
+        place.placeName.toLowerCase() === destinationQuery.toLowerCase()
+          ? `"${place.placeName}"`
+          : `"${place.placeName}" (requested as "${destinationQuery}")`;
+      const step2Prompt = `You will receive one panorama grid containing 8 distinct, non-overlapping views explicitly labeled with their center headings. Find the storefront, sign, or entrance for ${destinationLabel}. ${panoramaDateContext}
       Google Maps places the verified destination near ${expectedTargetHeading} degrees from the panorama camera. Inspect that view and both neighboring views carefully, but use the map bearing only to focus the search, never as proof that the storefront is visible.
       If the primary name text is partially obscured by a canopy, tree, or awning, look carefully at side banners, architectural markers, or window logos before deciding it is NOT_VISIBLE.
       Reply with exactly one token: 0, 45, 90, 135, 180, 225, 270, 315, or NOT_VISIBLE.
@@ -1146,45 +1453,28 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         tokenCount: step2Response.usage?.total_tokens,
       });
       if (targetHeading === null) {
-        if (!shouldUseDestinationReference(destinationDistanceMeters)) {
+        if (!shouldUseDestinationReference(distanceMeters)) {
+          // Beside a large building the door in front of the user may be
+          // real; "not visible from this block" would send them away from it.
+          if (besideBuilding) {
+            await respondWithPlacesFallback({
+              imageryNote: "",
+              error: "entrance_not_visually_confirmed",
+              reason: "ENTRANCE_NOT_VISUALLY_CONFIRMED",
+            });
+            return;
+          }
           navigationMode = "approach";
           testScenario = "test_b_approach";
-          const finalOutput = buildLastMileRetakeInstruction(
-            verifiedDestination.placeName,
-            destinationDistanceMeters,
-            destinationBearing,
-          );
-          const testLogId = await lastMileTestLogService.record({
-            destination,
-            lat,
-            lng,
-            userPhoto: await resizeDataUrlImage(image, 1024, 76),
-            panoramaPhoto,
-            panoramaDate,
-            panoramaStatus,
-            panoramaHeadings,
-            destinationPlaceName,
-            destinationPlaceAddress,
-            destinationTypes,
-            destinationDistanceMeters,
-            gpsAccuracyMeters,
-            destinationBearing,
-            deviceHeading,
-            headingDifferenceDegrees,
-            headingAligned,
-            compassHeading,
-            panoramaMatchedHeading,
-            headingComparisonDifference,
-            headingComparisonAgrees,
-            destinationReferenceUsed,
-            navigationMode,
-            testScenario,
-            currentHeading,
-            finalOutput,
-            steps: testSteps,
-            success: true,
-            latencyMs: Date.now() - startedAt,
-          });
+          const finalOutput =
+            buildLastMileRetakeInstruction(
+              place.placeName,
+              distanceMeters,
+              bearing,
+            ) +
+            closedNotice +
+            buildLastMileSourceNote(panoramaDate);
+          const testLogId = await recordTrial({ finalOutput, success: true });
           res.status(200).json({
             output: finalOutput,
             testLogId,
@@ -1203,15 +1493,16 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
           "   Step 2B: Fetching a destination-focused Street View reference...",
         );
         const referencePrompt =
-          `Fetch a Street View image aimed at the verified nearby location for "${destination}", ` +
+          `Fetch a Street View image aimed at the verified nearby location for ${destinationLabel}, ` +
           "then confirm the destination in that image.";
         try {
           const reference = await getDestinationStreetViewReference(
             lat,
             lng,
-            destination,
-            verifiedDestination,
+            destinationQuery,
+            { ...place, location: targetLocation, distanceMeters },
           );
+          dataSources.add("street_view_reference");
           destinationPhoto = reference.photo;
           destinationPhotoDate = reference.date;
           destinationPhotoStatus = reference.status;
@@ -1281,179 +1572,85 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
             error: message,
           });
         }
-      }
-      // if (targetHeading === null) {
-      //   const ageWarning = panoramaDate
-      //     ? ` The available Street View image is dated ${panoramaDate} and may be outdated.`
-      //     : "";
-      //   const finalOutput =
-      //     `I could not confirm ${destination} in the street panorama.${ageWarning} ` +
-      //     "Do not turn based on this result. Move closer using your primary navigation and try Last Meters again.";
-      //   const testLogId = await lastMileTestLogService.record({
-      //     destination,
-      //     lat,
-      //     lng,
-      //     userPhoto: await resizeDataUrlImage(image, 1024, 76),
-      //     panoramaPhoto,
-      //     panoramaDate,
-      //     panoramaStatus,
-      //     panoramaHeadings,
-      //     destinationPhoto,
-      //     destinationPhotoDate,
-      //     destinationPhotoStatus,
-      //     destinationPlaceName,
-      //     destinationPlaceAddress,
-      //     destinationTypes,
-      //     destinationDistanceMeters,
-      //     gpsAccuracyMeters,
-      //     destinationBearing,
-      //     deviceHeading,
-      //     headingDifferenceDegrees,
-      //     headingAligned,
-      //     compassHeading,
-      //     panoramaMatchedHeading,
-      //     headingComparisonDifference,
-      //     headingComparisonAgrees,
-      //     destinationReferenceUsed,
-      //     navigationMode,
-      //     testScenario,
-      //     currentHeading,
-      //     finalOutput,
-      //     steps: testSteps,
-      //     success: false,
-      //     error: "destination_not_visible",
-      //     latencyMs: Date.now() - startedAt,
-      //   });
-      //   res.status(200).json({
-      //     output: finalOutput,
-      //     testLogId,
-      //     mode: navigationMode,
-      //     testScenario,
-      //     currentHeading,
-      //     targetHeading,
-      //     warning: "destination_not_visible",
-      //   });
-      //   return;
-      // }
 
-      if (targetHeading === null) {
-        // If last meters cannot visually verify the exact entrance, revert to google places
-
-        // confirm that the user is very close to the destination
-        // explain that street view may be outdated
-        // skip angle calculations and don't treat the request as a failure
-
-        const ageWarning = panoramaDate
-          ? ` The available Street View panorama is dated ${panoramaDate} and may be outdated.`
-          : " The available Street View imagery may be outdated.";
-
-        // Still give compass→map-bearing turn degrees when possible so testers
-        // near the door get orientation feedback even without a visual match.
-        const bearingReliable = isDestinationBearingReliable(
-          destinationDistanceMeters,
-          gpsAccuracyMeters,
-        );
-        let turnFallback = "";
-        let bearingTarget: number | undefined;
-        if (
-          bearingReliable &&
-          typeof deviceHeading === "number" &&
-          typeof destinationBearing === "number"
-        ) {
+        if (targetHeading === null) {
+          // Step 2C: read the signs in zoomed views toward the map bearing.
+          // The model is not told the destination name, so it cannot be led
+          // into "reading" it; the name comparison happens in code.
+          activeStage = "sign text close-up";
+          const signPrompt = `You will receive two zoomed Street View images of storefronts.
+Transcribe the business names and sign text you can actually read, one per line.
+Do not guess letters you cannot read and do not add names that are not clearly visible.
+If no sign text is readable, reply exactly: NO_TEXT.`;
           try {
-            bearingTarget = snapLastMileHeading(destinationBearing);
-            turnFallback =
-              ` ${buildLastMileTurnInstruction(deviceHeading, destinationBearing)}` +
-              " That turn is based on your phone compass and the map location," +
-              " not a visually confirmed entrance — use caution.";
-          } catch {
-            turnFallback = "";
-            bearingTarget = undefined;
+            const closeUps = await fetchSignCloseUps(
+              panorama.metadata,
+              lat,
+              lng,
+              panoramaTargetBearing,
+            );
+            dataSources.add("street_view_sign_closeup");
+            const signResponse = await this.client.chat.completions.create({
+              model: "gpt-4o-mini",
+              messages: [
+                { role: "system", content: signPrompt },
+                {
+                  role: "user",
+                  content: closeUps.flatMap((url, index) => [
+                    { type: "text" as const, text: `--- CLOSE-UP ${index + 1} ---` },
+                    {
+                      type: "image_url" as const,
+                      image_url: { url, detail: "high" as const },
+                    },
+                  ]),
+                },
+              ],
+              temperature: 0.0,
+              max_tokens: 80,
+            });
+            signText = signResponse.choices[0].message.content?.trim() || "";
+            signTextMatched =
+              !/^NO_TEXT$/i.test(signText) &&
+              signTextMatchesPlaceName(signText, place.placeName);
+            if (signTextMatched) {
+              testScenario = "test_a_sign_text";
+              targetHeading = expectedTargetHeading;
+              targetBearing = panoramaTargetBearing;
+            }
+            testSteps.push({
+              name: "sign_text_match",
+              prompt: signPrompt,
+              response: signText,
+              parsedHeading: signTextMatched ? expectedTargetHeading : undefined,
+              model: "gpt-4o-mini",
+              success: signTextMatched,
+              error: signTextMatched
+                ? undefined
+                : `No readable sign named ${place.placeName}.`,
+              tokenCount: signResponse.usage?.total_tokens,
+            });
+          } catch (signError) {
+            testSteps.push({
+              name: "sign_text_match",
+              prompt: signPrompt,
+              model: "google-street-view",
+              success: false,
+              error:
+                signError instanceof Error
+                  ? signError.message
+                  : "Sign close-up lookup failed.",
+            });
           }
         }
-
-        const finalOutput = bearingReliable
-          ? `You are about ${formatLastMileDistance(destinationDistanceMeters)} from ${verifiedDestination.placeName}. ` +
-            `Google Maps confirms the destination is near you, but I could not verify` +
-            ` the exact entrance in Street View.` +
-            ageWarning +
-            (turnFallback ||
-              " I cannot provide a turn direction without a compass heading.")
-          : buildCloseRangeNoTurnInstruction(
-              verifiedDestination.placeName,
-              destinationDistanceMeters,
-            );
-
-        // Record explicitly why this run stopped before precise turn guidance.
-        testSteps.push({
-          name: "places_proximity_fallback",
-          prompt:
-            "Use the already verified Google Places destination when Street View cannot visually confirm the entrance.",
-          response:
-            `DESTINATION_CONFIRMED: ${verifiedDestination.placeName}, ` +
-            `${Math.round(verifiedDestination.distanceMeters)} meters away. ` +
-            "ENTRANCE_NOT_VISUALLY_CONFIRMED." +
-            (turnFallback ? " COMPASS_BEARING_TURN_PROVIDED." : "") +
-            (bearingReliable
-              ? ""
-              : " CLOSER_THAN_GPS_ACCURACY_NO_TURN_PROVIDED."),
-          model: "google-places",
-          success: true,
-        });
-
-        const testLogId = await lastMileTestLogService.record({
-          destination,
-          lat,
-          lng,
-          userPhoto: await resizeDataUrlImage(image, 1024, 76),
-          panoramaPhoto,
-          panoramaDate,
-          panoramaStatus,
-          panoramaHeadings,
-          destinationPhoto,
-          destinationPhotoDate,
-          destinationPhotoStatus,
-          destinationPlaceName,
-          destinationPlaceAddress,
-          destinationTypes,
-          destinationDistanceMeters,
-          gpsAccuracyMeters,
-          compassAccuracyLevel,
-          destinationBearing,
-          deviceHeading,
-          headingDifferenceDegrees,
-          headingAligned,
-          compassHeading,
-          panoramaMatchedHeading,
-          headingComparisonDifference,
-          headingComparisonAgrees,
-          destinationReferenceUsed,
-          navigationMode,
-          testScenario,
-          currentHeading,
-          targetHeading: bearingTarget,
-          turnInstruction: turnFallback.trim() || undefined,
-          finalOutput,
-          steps: testSteps,
-
-          // Destination verification succeeded.
-          // Only precise entrance localization failed.
-          success: true,
+      }
+      if (targetHeading === null) {
+        await respondWithPlacesFallback({
+          imageryNote: panoramaDate
+            ? ` The available Street View panorama is dated ${panoramaDate} and may be outdated.`
+            : " The available Street View imagery may be outdated.",
           error: "entrance_not_visually_confirmed",
-
-          latencyMs: Date.now() - startedAt,
+          reason: "ENTRANCE_NOT_VISUALLY_CONFIRMED",
         });
-
-        res.status(200).json({
-          output: finalOutput,
-          testLogId,
-          mode: navigationMode,
-          testScenario,
-          currentHeading,
-          targetHeading: bearingTarget ?? null,
-          warning: "entrance_not_visually_confirmed",
-        });
-
         return;
       }
 
@@ -1462,8 +1659,9 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
         compassAccuracyLevel,
         panoramaCurrentViewMatched: panoramaMatchedHeading !== undefined,
         compassPanoramaAgrees: headingComparisonAgrees,
-        destinationVisuallyMatched: visualMatchAgreesWithMap,
+        destinationVisuallyMatched: visualMatchAgreesWithMap || signTextMatched === true,
         destinationReferenceVerified: destinationReferenceUsed,
+        panoramaAgeYears,
       });
       confidenceScore = confidence.score;
       confidenceLevel = confidence.level;
@@ -1487,8 +1685,8 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
         targetBearing ?? targetHeading,
       );
       const distanceSentence = buildLastMileDistanceSentence(
-        verifiedDestination.placeName,
-        destinationDistanceMeters,
+        place.placeName,
+        distanceMeters,
         !turnInstruction.startsWith("No turn"),
       );
 
@@ -1570,46 +1768,15 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         confidence.level === "low"
           ? " Confidence is low. Stop safely after turning and take another photo to confirm before moving forward."
           : "";
-      const finalOutput = `${turnInstruction} ${distanceSentence} Landmarks: ${landmarksGuidance}${confidenceNotice}`;
-      const testLogId = await lastMileTestLogService.record({
-        destination,
-        lat,
-        lng,
-        userPhoto: await resizeDataUrlImage(image, 1024, 76),
-        panoramaPhoto,
-        panoramaDate,
-        panoramaStatus,
-        panoramaHeadings,
-        destinationPhoto,
-        destinationPhotoDate,
-        destinationPhotoStatus,
-        destinationPlaceName,
-        destinationPlaceAddress,
-        destinationTypes,
-        destinationDistanceMeters,
-        gpsAccuracyMeters,
-        compassAccuracyLevel,
-        destinationBearing,
-        deviceHeading,
-        headingDifferenceDegrees,
-        headingAligned,
-        compassHeading,
-        panoramaMatchedHeading,
-        headingComparisonDifference,
-        headingComparisonAgrees,
-        confidenceScore,
-        confidenceLevel,
-        confidenceReasons,
-        destinationReferenceUsed,
-        navigationMode,
-        testScenario,
-        currentHeading,
+      const finalOutput =
+        `${turnInstruction} ${distanceSentence} Landmarks: ${landmarksGuidance}${confidenceNotice}` +
+        closedNotice +
+        buildLastMileSourceNote(panoramaDate);
+      const testLogId = await recordTrial({
+        finalOutput,
+        success: true,
         targetHeading,
         turnInstruction,
-        finalOutput,
-        steps: testSteps,
-        success: true,
-        latencyMs: Date.now() - startedAt,
       });
       res.status(200).json({
         output: finalOutput,
@@ -1636,36 +1803,11 @@ Keep the response to two short sentences and do not repeat the turn instruction.
         code: error?.code,
         message: error?.message,
       });
-      await lastMileTestLogService.record({
-        destination,
-        lat,
-        lng,
-        userPhoto: await resizeDataUrlImage(image, 1024, 76),
-        panoramaPhoto,
-        panoramaDate,
-        panoramaStatus,
-        panoramaHeadings,
-        destinationPhoto,
-        destinationPhotoDate,
-        destinationPhotoStatus,
-        destinationPlaceName,
-        destinationPlaceAddress,
-        destinationTypes,
-        destinationDistanceMeters,
-        gpsAccuracyMeters,
-        destinationBearing,
-        deviceHeading,
-        headingDifferenceDegrees,
-        headingAligned,
-        destinationReferenceUsed,
-        navigationMode,
-        testScenario,
-        steps: testSteps,
+      await recordTrial({
         success: false,
         error: error?.message ?? "Last meters calculation failed.",
-        latencyMs: Date.now() - startedAt,
       });
-      res.status(502).json({ error: clientError });
+      if (!res.headersSent) res.status(502).json({ error: clientError });
     }
   }
 
@@ -1967,8 +2109,16 @@ Keep the response to two short sentences and do not repeat the turn instruction.
             });
             // console.log(userContent);
             } else {
+              // A model-built Find Place link without a bias can resolve to a
+              // same-named branch anywhere; keep it near the user.
+              const biasedLink =
+                content.coords &&
+                /findplacefromtext/i.test(link) &&
+                !/locationbias=/i.test(link)
+                  ? `${link}&locationbias=circle:5000@${content.coords.latitude},${content.coords.longitude}`
+                  : link;
               const places: any = await axios.get(
-                link + `&key=${getGoogleMapsApiKey()}`,
+                biasedLink + `&key=${getGoogleMapsApiKey()}`,
               );
             //if its giving back a nearby places link
             if (places.data.results) {
@@ -1981,8 +2131,15 @@ Keep the response to two short sentences and do not repeat the turn instruction.
                       geometry: { location: { lat: number; lng: number } };
                       rating: number;
                       vicinity: string;
+                      opening_hours?: { open_now?: boolean };
                     }) =>
-                      `\n{name: ${place.name}, location(lat,lng): ${place.geometry.location.lat},${place.geometry.location.lng}, address: ${place.vicinity}, rating: ${place.rating} stars}`,
+                      `\n{name: ${place.name}, location(lat,lng): ${place.geometry.location.lat},${place.geometry.location.lng}, address: ${place.vicinity}, rating: ${place.rating} stars` +
+                      (place.opening_hours?.open_now === true
+                        ? ", Google Maps lists it as open now"
+                        : place.opening_hours?.open_now === false
+                          ? ", Google Maps lists it as closed now"
+                          : "") +
+                      "}",
                   )
                   .join(", ");
               //console.log(relevantData)
@@ -1995,17 +2152,39 @@ Keep the response to two short sentences and do not repeat the turn instruction.
               //console.log(places.data.candidates[0])
               //relevantData = `name: ${places.data.candidates[0].name}, address: ${places.data.candidates[0].formatted_address}`
               //console.log(relevantData)
-                let operatingHours = "";
-              if (places.data.candidates[0].opening_hours) {
-                //console.log("user wants operating hours")
-                  const placeInformation = await axios.get(
-                    `https://maps.googleapis.com/maps/api/place/details/json?place_id=${places.data.candidates[0].place_id}&fields=opening_hours&key=${getGoogleMapsApiKey()}`,
-                  );
-                  operatingHours =
-                    placeInformation.data.result.opening_hours.weekday_text;
+                const candidate = places.data.candidates[0];
+                // Open/closed and the next change are computed here; the model
+                // has misread weekday_text against the clock before.
+                let openingStatus: string | null = null;
+                if (candidate?.place_id) {
+                  try {
+                    const placeInformation = await axios.get(
+                      "https://maps.googleapis.com/maps/api/place/details/json",
+                      {
+                        params: {
+                          place_id: candidate.place_id,
+                          fields:
+                            "name,business_status,opening_hours,current_opening_hours,utc_offset",
+                          key: getGoogleMapsApiKey(),
+                        },
+                        timeout: 20_000,
+                      },
+                    );
+                    openingStatus = describeOpeningStatus(
+                      placeHoursFromDetails(
+                        placeInformation.data.result,
+                        candidate.name ?? "This place",
+                      ),
+                    );
+                  } catch (hoursError) {
+                    console.warn("Place hours lookup failed:", hoursError);
+                  }
                 }
-                systemContent += `Relevant Place Information: ${JSON.stringify(places.data.candidates[0], null, 2)}`;
-                systemContent += `Operating Hours: ${operatingHours.length > 0 ? operatingHours : "Not available"}`;
+                systemContent += `Relevant Place Information: ${JSON.stringify(candidate ?? null, null, 2)}\n`;
+                systemContent += openingStatus
+                  ? "Opening status computed from Google Maps hours. Repeat it as written and " +
+                    `do not recalculate open or closed yourself: ${openingStatus}\n`
+                  : "Operating Hours: Not available\n";
             }
             //if its giving back directions link
 
@@ -2496,7 +2675,7 @@ Keep the response to two short sentences and do not repeat the turn instruction.
       //  console.log("user prompt: ", userContent)
       console.log("system prompt: ", systemContent);
       // console.log("openAI history: ", openAIHistory)
-      systemContent += `Current Date and Time (Eastern): ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`;
+      systemContent += `\nCurrent Date and Time (Eastern): ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`;
       // console.log("prompt: ", completeAIPrompt)
       const priorHistory = getConversationHistory(analytics);
       const recentHistory = priorHistory.slice(-3);
@@ -2599,12 +2778,9 @@ const PANORAMA_LABEL_GLYPHS: Record<string, string[]> = {
   " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
 };
 
-export function createPanoramaOverlaySvg(
-  heading: number,
-  segmentIndex: number,
-): Buffer {
-  const paddedHeading = String(heading).padStart(3, "0");
-  const label = `VIEW ${segmentIndex} | ${paddedHeading} DEG`;
+export function createPanoramaOverlaySvg(heading: number): Buffer {
+  // Headings only: a "VIEW 2" index in the label led the model to answer "2".
+  const label = `${String(heading).padStart(3, "0")} DEG`;
   const pixelSize = 5;
   const glyphAdvance = 30;
   const startX = 24;
@@ -2650,7 +2826,7 @@ async function buildPanoramaDebugImage(
       top: topOffset,
     });
     compositeLayers.push({
-      input: createPanoramaOverlaySvg(tile.heading, index + 1),
+      input: createPanoramaOverlaySvg(tile.heading),
       left: leftOffset,
       top: topOffset,
     });
@@ -2697,9 +2873,79 @@ interface StreetViewMetadata {
   status: string;
   date?: string;
   pano_id?: string;
+  copyright?: string;
   location?: { lat: number; lng: number };
 }
 
+/**
+ * Two narrow, slightly raised views either side of the map bearing, so sign
+ * lettering that is a few pixels tall in a 45 degree tile becomes readable.
+ */
+async function fetchSignCloseUps(
+  metadata: StreetViewMetadata,
+  lat: number,
+  lng: number,
+  bearing: number,
+): Promise<string[]> {
+  return Promise.all(
+    [-15, 15].map(async (offset) => {
+      const response = await axios.get(
+        "https://maps.googleapis.com/maps/api/streetview",
+        {
+          params: {
+            size: "640x640",
+            ...(metadata.pano_id
+              ? { pano: metadata.pano_id }
+              : { location: `${lat},${lng}` }),
+            heading: (((bearing + offset) % 360) + 360) % 360,
+            fov: 30,
+            pitch: 8,
+            source: "outdoor",
+            return_error_code: true,
+            key: getGoogleMapsApiKey(),
+          },
+          responseType: "arraybuffer",
+          timeout: 20_000,
+        },
+      );
+      return `data:image/jpeg;base64,${Buffer.from(response.data).toString("base64")}`;
+    }),
+  );
+}
+
+/**
+ * Approach and aligned trials answer before any panorama is needed; this
+ * saves one afterwards so reviewers can still judge the scene.
+ */
+async function saveBackgroundPanorama(
+  testLogId: string | undefined,
+  download: ReturnType<typeof processEightDirectionTiles>,
+): Promise<void> {
+  if (!testLogId) return;
+  try {
+    const { tiles, metadata } = await download;
+    await lastMileTestLogService.attachPanorama(testLogId, {
+      panoramaPhoto: await buildPanoramaDebugImage(tiles),
+      panoramaDate: metadata.date,
+      panoramaStatus: metadata.status,
+      panoramaHeadings: tiles.map((tile) => tile.heading),
+      panoId: metadata.pano_id,
+      panoramaCopyright: metadata.copyright,
+      panoramaAgeYears: streetViewImageryAgeYears(metadata.date),
+    });
+  } catch (error: any) {
+    await lastMileTestLogService.attachPanorama(testLogId, {
+      panoramaStatus:
+        typeof error?.code === "string" ? error.code : "BACKGROUND_PANORAMA_FAILED",
+    });
+  }
+}
+
+/**
+ * Outdoor panoramas only: an indoor or user-uploaded sphere cannot match an
+ * outdoor photo. Within a radius, a Google-captured panorama is preferred over
+ * a user-contributed one.
+ */
 async function processEightDirectionTiles(
   lat: number,
   lng: number,
@@ -2710,43 +2956,42 @@ async function processEightDirectionTiles(
   console.log("🎬 FETCHING 8 INDIVIDUAL DIRECTION TILES...");
   const headings = [...LAST_MILE_HEADINGS];
   const apiKey = getGoogleMapsApiKey();
-  const metadataAttempts: Array<{ source?: string; radius?: number }> = [
-    { source: "outdoor", radius: 50 },
-    { source: "outdoor", radius: 100 },
-    { radius: 50 },
-    { radius: 100 },
-  ];
 
   let metadata: StreetViewMetadata | null = null;
-  for (const attempt of metadataAttempts) {
-    const params: Record<string, string> = {
-      location: `${lat},${lng}`,
-      key: apiKey,
-    };
-    if (attempt.source) params.source = attempt.source;
-    if (attempt.radius) params.radius = String(attempt.radius);
-
+  let lastStatus = "NO_PANORAMA";
+  for (const radius of [50, 100]) {
     const metadataResponse = await axios.get<StreetViewMetadata>(
       "https://maps.googleapis.com/maps/api/streetview/metadata",
-      { params, timeout: 20_000 },
+      {
+        params: {
+          location: `${lat},${lng}`,
+          radius,
+          source: "outdoor",
+          key: apiKey,
+        },
+        timeout: 20_000,
+      },
     );
     const candidate = metadataResponse.data;
-    if (candidate.status === "OK") {
+    if (candidate.status !== "OK") {
+      lastStatus = candidate.status;
+      console.warn(
+        `Street View metadata ${candidate.status} (source=outdoor, radius=${radius})`,
+      );
+      continue;
+    }
+    if (!metadata) metadata = candidate;
+    if (/google/i.test(candidate.copyright ?? "")) {
       metadata = candidate;
       break;
     }
-    console.warn(
-      `Street View metadata ${candidate.status} (source=${attempt.source ?? "default"}, radius=${attempt.radius ?? "default"})`,
-    );
   }
 
-  if (!metadata || metadata.status !== "OK") {
+  if (!metadata) {
     const metadataError = new Error(
-      `Street View metadata returned ${metadata?.status ?? "NO_PANORAMA"}.`,
+      `No outdoor Street View panorama: metadata returned ${lastStatus}.`,
     );
-    Object.assign(metadataError, {
-      code: `STREET_VIEW_${metadata?.status ?? "NO_PANORAMA"}`,
-    });
+    Object.assign(metadataError, { code: `STREET_VIEW_${lastStatus}` });
     throw metadataError;
   }
 

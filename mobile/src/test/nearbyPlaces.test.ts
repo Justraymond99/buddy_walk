@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   describeNearbyPlaceCandidates,
+  editDistance,
   extractNearbyPlaceQuery,
   isNearbyPlaceCandidateRelevant,
   looksLikeBareDestinationQuery,
@@ -11,6 +12,8 @@ import {
   normalizeNearbyPlaceQuery,
   selectNearbyPlaceCandidate,
   selectNearbyPlaceCandidates,
+  signTextMatchesPlaceName,
+  summarizePlaceCandidates,
 } from "../../server/utils/nearbyPlaces";
 
 const manhattan = { lat: 40.758, lng: -73.9855 };
@@ -200,4 +203,90 @@ test("local place ranking filters distant results before returning options", () 
 
   assert.deepEqual(ranked.map((place) => place.name), ["Local store"]);
   assert.ok(nearbyPlaceDistanceMeters(origin, origin) < 1);
+});
+
+test("editDistance counts insertions, substitutions and adjacent swaps", () => {
+  assert.equal(editDistance("fiterman", "fiterman"), 0);
+  assert.equal(editDistance("fitterman", "fiterman"), 1);
+  assert.equal(editDistance("sweetgreen", "sweetgren"), 1);
+  assert.equal(editDistance("acb", "abc"), 1);
+});
+
+test("isNearbyPlaceCandidateRelevant tolerates spacing and small misspellings", () => {
+  assert.equal(
+    isNearbyPlaceCandidateRelevant({ name: "BMCC Fiterman Hall", types: ["university"] }, "Fitter man hall"),
+    true
+  );
+  assert.equal(isNearbyPlaceCandidateRelevant({ name: "sweetgreen", types: ["restaurant"] }, "sweet green"), true);
+  // Short queries never fuzzy-match a different brand.
+  assert.equal(isNearbyPlaceCandidateRelevant({ name: "UPS", types: ["store"] }, "CVS"), false);
+});
+
+test("isNearbyPlaceCandidateRelevant accepts an acronym of the place name", () => {
+  assert.equal(
+    isNearbyPlaceCandidateRelevant(
+      { name: "Borough of Manhattan Community College", types: ["university"] },
+      "bmcc"
+    ),
+    true
+  );
+  assert.equal(
+    isNearbyPlaceCandidateRelevant({ name: "Brooklyn Museum", types: ["museum"] }, "bmcc"),
+    false
+  );
+});
+
+test("mergeNearbyPlaceCandidates records every search that returned a place", () => {
+  const merged = mergeNearbyPlaceCandidates(
+    [{ place_id: "a", name: "Target", searchSources: ["nearby"] }],
+    [
+      { place_id: "a", name: "Target", searchSources: ["text"] },
+      { place_id: "b", name: "Target Express", searchSources: ["text"] },
+    ]
+  );
+  assert.deepEqual(merged.map((c) => c.searchSources), [["nearby", "text"], ["text"]]);
+});
+
+test("summarizePlaceCandidates logs kept and rejected results nearest first", () => {
+  const summary = summarizePlaceCandidates(
+    [
+      {
+        place_id: "far",
+        name: "Shake Shack",
+        vicinity: "Herald Square",
+        types: ["restaurant", "food", "point_of_interest", "establishment", "extra"],
+        searchSources: ["nearby"],
+        geometry: { location: { lat: 40.75, lng: -73.988 } },
+      },
+      {
+        place_id: "near",
+        name: "Joe's Pizza",
+        vicinity: "Broadway",
+        searchSources: ["nearby", "text"],
+        geometry: { location: { lat: 40.7581, lng: -73.9855 } },
+      },
+      { place_id: "no-location", name: "Shake Shack" },
+    ],
+    manhattan,
+    "Shake Shack"
+  );
+  assert.deepEqual(
+    summary.map((c) => [c.placeId, c.relevant, c.source]),
+    [
+      ["near", false, "nearby+text"],
+      ["far", true, "nearby"],
+    ]
+  );
+  assert.equal(summary[1].types.length, 4);
+  assert.ok(summary[0].distanceMeters < summary[1].distanceMeters);
+});
+
+test("signTextMatchesPlaceName confirms only signs that name the destination", () => {
+  assert.equal(signTextMatchesPlaceName("DUNKIN'\nOPEN 24 HOURS", "Dunkin'"), true);
+  assert.equal(signTextMatchesPlaceName("AUNTIE ANNE'S | PRETZELS", "Auntie Anne's"), true);
+  assert.equal(signTextMatchesPlaceName("citi\nATM", "Citi"), true);
+  // Short names must be whole words, and a generic word cannot stand in.
+  assert.equal(signTextMatchesPlaceName("CITIZENS BANK", "Citi"), false);
+  assert.equal(signTextMatchesPlaceName("PIZZA", "Frank's Pizza"), false);
+  assert.equal(signTextMatchesPlaceName("NO_TEXT", "Subway"), false);
 });

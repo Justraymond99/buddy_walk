@@ -111,13 +111,19 @@ export class LastMileTestLogService {
 
   async updateReview(
     id: string,
-    review: { reviewerStatus?: lastMileTestLogInterface["reviewerStatus"]; reviewerNotes?: string }
+    review: Pick<
+      lastMileTestLogInterface,
+      "reviewerStatus" | "reviewerNotes" | "reviewOutcome" | "turnCorrectness" | "entranceCorrectness"
+    >
   ): Promise<{ source: string; data: lastMileTestLogInterface | null }> {
-    const update = {
+    const update: Partial<lastMileTestLogInterface> = {
       reviewerStatus: review.reviewerStatus ?? "untested",
       reviewerNotes: review.reviewerNotes ?? "",
       reviewedAt: new Date(),
     };
+    if (review.reviewOutcome) update.reviewOutcome = review.reviewOutcome;
+    if (review.turnCorrectness) update.turnCorrectness = review.turnCorrectness;
+    if (review.entranceCorrectness) update.entranceCorrectness = review.entranceCorrectness;
 
     if (isMongoConnected()) {
       const data = await lastMileTestLogModel
@@ -126,15 +132,44 @@ export class LastMileTestLogService {
       return { source: "mongo", data };
     }
 
-    const row = memoryLastMileTests.find((entry) => {
+    const row = this.findMemoryRow(id);
+    if (!row) return { source: "memory", data: null };
+    Object.assign(row, update);
+    return { source: "memory", data: row };
+  }
+
+  /** Adds a review-only panorama to a trial that returned before matching. */
+  async attachPanorama(
+    id: string,
+    panorama: Pick<
+      lastMileTestLogInterface,
+      "panoramaPhoto" | "panoramaDate" | "panoramaStatus" | "panoId" | "panoramaCopyright" | "panoramaAgeYears"
+    > & { panoramaHeadings?: number[] }
+  ): Promise<void> {
+    const update: Partial<lastMileTestLogInterface> = {
+      ...panorama,
+      panoramaSource: "background",
+      panoramaPhoto: panorama.panoramaPhoto?.startsWith("data:")
+        ? await compressPanoramaPhoto(panorama.panoramaPhoto)
+        : panorama.panoramaPhoto,
+    };
+    try {
+      if (isMongoConnected()) {
+        await lastMileTestLogModel.findByIdAndUpdate(id, update);
+        return;
+      }
+      const row = this.findMemoryRow(id);
+      if (row) Object.assign(row, update);
+    } catch (e) {
+      console.error("[LastMileTestLogService] attachPanorama failed:", e);
+    }
+  }
+
+  private findMemoryRow(id: string): lastMileTestLogInterface | undefined {
+    return memoryLastMileTests.find((entry) => {
       const maybeId = (entry as lastMileTestLogInterface & { _id?: unknown })._id;
       return String(maybeId ?? "") === id;
     });
-    if (!row) return { source: "memory", data: null };
-    row.reviewerStatus = update.reviewerStatus;
-    row.reviewerNotes = update.reviewerNotes;
-    row.reviewedAt = update.reviewedAt;
-    return { source: "memory", data: row };
   }
 }
 

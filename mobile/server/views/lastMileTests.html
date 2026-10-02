@@ -161,9 +161,21 @@
     .image-wrap > img { display: block; width: 100%; height: 200px; object-fit: contain; }
 
     /* Review Section */
-    .review-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+    .review-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
     .review-section select { width: 100%; height: 38px; }
     .review-section textarea { width: 100%; min-height: 80px; padding: 10px; resize: vertical; }
+    .review-notes-wrap { grid-column: 1 / -1; }
+    .quick-outcome { height: 32px; padding: 0 6px; font-size: 0.82rem; }
+
+    /* Success-rate summary */
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .summary-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 14px 16px; }
+    .summary-card h3 { margin: 0 0 10px; font-size: 0.95rem; }
+    .summary-card table { border: none; }
+    .summary-card th, .summary-card td { padding: 6px 8px; font-size: 0.82rem; }
+    .big-number { font-size: 1.8rem; font-weight: 800; }
+    .candidate-kept { color: #3fb950; font-weight: 700; }
+    .candidate-rejected { color: #f85149; font-weight: 700; }
 
     .small { color: var(--quiet); font-size: 0.78rem; }
     
@@ -190,7 +202,7 @@
     <div class="toolbar">
       <div class="field">
         <label for="limit">Limit</label>
-        <input id="limit" type="number" min="1" max="500" value="50" />
+        <input id="limit" type="number" min="1" max="500" value="200" />
       </div>
       <div class="field">
         <label for="modeFilter">Navigation Mode</label>
@@ -208,9 +220,13 @@
           <option value="">All</option>
           <option value="test_a_visible">test_a_visible</option>
           <option value="test_a_reference">test_a_reference</option>
+          <option value="test_a_sign_text">test_a_sign_text</option>
           <option value="test_b_approach">test_b_approach</option>
           <option value="heading_aligned">heading_aligned</option>
+          <option value="heading_conflict">heading_conflict</option>
           <option value="destination_unverified">destination_unverified</option>
+          <option value="no_panorama">no_panorama</option>
+          <option value="question_routed">question_routed</option>
         </select>
       </div>
       <div class="field">
@@ -225,10 +241,10 @@
         <label for="statusFilter">Outcome</label>
         <select id="statusFilter" class="filter">
           <option value="">All</option>
-          <option value="untested">Untested</option>
-          <option value="pass">Pass</option>
-          <option value="partial">Partial</option>
-          <option value="fail">Fail</option>
+          <option value="unscored">Not scored yet</option>
+          <option value="got_there">Would get me there</option>
+          <option value="needed_retake">Needed a retake</option>
+          <option value="would_not_get_there">Would not get me there</option>
         </select>
       </div>
       <div class="field">
@@ -241,12 +257,13 @@
       <button class="preset" data-preset="approachNoPanorama" aria-pressed="false">Approach · no panorama</button>
       <button class="preset" data-preset="noPanorama" aria-pressed="false">No panorama</button>
       <button class="preset" data-preset="needsReview" aria-pressed="false">Needs review</button>
-      <button class="preset" data-preset="failed" aria-pressed="false">Outcome: fail</button>
+      <button class="preset" data-preset="failed" aria-pressed="false">Outcome: would not get there</button>
       <button class="clear-filters" id="clearFilters">Clear filters</button>
     </div>
     
     <div class="status" id="status">Loading...</div>
     <div class="error" id="error"></div>
+    <div class="summary-grid" id="summary"></div>
     
     <div style="overflow-x: auto;">
       <table>
@@ -290,6 +307,101 @@
   <script>
     var TOKEN = '__ADMIN_TOKEN__';
     var activeTests = [];
+
+    var OUTCOME_LABELS = {
+      got_there: 'Would get me there',
+      needed_retake: 'Needed a retake',
+      would_not_get_there: 'Would not get me there'
+    };
+    var TURN_LABELS = { correct: 'Turn was correct', wrong: 'Turn was wrong', no_turn_given: 'No turn given' };
+    var ENTRANCE_LABELS = { correct: 'Right entrance', wrong: 'Wrong entrance', not_identified: 'Entrance not identified' };
+    // Older pass/partial/fail filters and exports keep working from the outcome.
+    var STATUS_FOR_OUTCOME = { got_there: 'pass', needed_retake: 'partial', would_not_get_there: 'fail' };
+    var OUTCOME_FOR_STATUS = { pass: 'got_there', partial: 'needed_retake', fail: 'would_not_get_there' };
+
+    /** Rows reviewed before outcome scoring only have a pass/partial/fail status. */
+    function outcomeOf(row) {
+      return row.reviewOutcome || OUTCOME_FOR_STATUS[row.reviewerStatus] || 'unscored';
+    }
+    var SOURCE_LABELS = {
+      google_places: 'Google Places',
+      google_building_entrances: 'Google building entrances',
+      street_view_panorama: 'Street View panorama',
+      street_view_reference: 'Street View destination image',
+      street_view_sign_closeup: 'Street View sign close-up',
+      phone_gps: 'Phone GPS',
+      phone_compass: 'Phone compass'
+    };
+
+    function optionsHtml(labels, selected, placeholder) {
+      return '<option value="">' + esc(placeholder) + '</option>' +
+        Object.keys(labels).map(function (key) {
+          return '<option value="' + key + '"' + (key === selected ? ' selected' : '') + '>' + esc(labels[key]) + '</option>';
+        }).join('');
+    }
+
+    /** Monday of the trial's week, as YYYY-MM-DD in the browser's time zone. */
+    function weekOf(value) {
+      var d = new Date(value);
+      if (Number.isNaN(d.getTime())) return 'unknown';
+      var monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+      return monday.getFullYear() + '-' + String(monday.getMonth() + 1).padStart(2, '0') + '-' + String(monday.getDate()).padStart(2, '0');
+    }
+
+    function successTable(groups, keyLabel) {
+      var keys = Object.keys(groups);
+      if (!keys.length) return '<div class="small">No scored trials yet.</div>';
+      return '<table><thead><tr><th>' + esc(keyLabel) + '</th><th>Scored</th><th>Got there</th><th>Rate</th></tr></thead><tbody>' +
+        keys.map(function (key) {
+          var g = groups[key];
+          return '<tr><td>' + esc(key) + '</td><td>' + g.scored + '</td><td>' + g.success + '</td><td>' +
+            Math.round((g.success / g.scored) * 100) + '%</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+
+    function renderSummary(rows) {
+      var trials = rows.filter(function (r) { return r.testScenario !== 'question_routed'; });
+      var scored = trials.filter(function (r) { return outcomeOf(r) !== 'unscored'; });
+      var success = scored.filter(function (r) { return outcomeOf(r) === 'got_there'; }).length;
+      var byWeek = {};
+      var byLocation = {};
+      scored.forEach(function (r) {
+        var week = 'Week of ' + weekOf(r.serverTs || r.createdAt);
+        var place = (r.destinationPlaceName || r.destination || 'Unknown') + (r.destinationPlaceAddress ? ' — ' + r.destinationPlaceAddress : '');
+        [[byWeek, week], [byLocation, place]].forEach(function (pair) {
+          var g = pair[0][pair[1]] || (pair[0][pair[1]] = { scored: 0, success: 0 });
+          g.scored += 1;
+          if (outcomeOf(r) === 'got_there') g.success += 1;
+        });
+      });
+      var sortedWeeks = {};
+      Object.keys(byWeek).sort().reverse().forEach(function (k) { sortedWeeks[k] = byWeek[k]; });
+      var sortedPlaces = {};
+      Object.keys(byLocation)
+        .sort(function (a, b) { return byLocation[b].scored - byLocation[a].scored; })
+        .slice(0, 12)
+        .forEach(function (k) { sortedPlaces[k] = byLocation[k]; });
+
+      document.getElementById('summary').innerHTML =
+        '<div class="summary-card"><h3>Success rate (scored trials)</h3>' +
+          '<div class="big-number">' + (scored.length ? Math.round((success / scored.length) * 100) + '%' : '—') + '</div>' +
+          '<div class="small">' + scored.length + ' of ' + trials.length + ' trials scored. ' +
+          'Success means the reviewer chose "Would get me there".</div></div>' +
+        '<div class="summary-card"><h3>By week</h3>' + successTable(sortedWeeks, 'Week') + '</div>' +
+        '<div class="summary-card"><h3>By location</h3>' + successTable(sortedPlaces, 'Location') + '</div>';
+    }
+
+    function saveReview(id, body) {
+      var baseUrl = window.location.origin;
+      return fetch(baseUrl + '/api/last-mile-tests/' + encodeURIComponent(id) + '/review' + (TOKEN && TOKEN !== '__ADMIN_TOKEN__' ? '?token=' + encodeURIComponent(TOKEN) : ''), {
+        method: 'PATCH',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body)
+      }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      });
+    }
 
     function qs(includeImages) {
       var params = new URLSearchParams();
@@ -343,7 +455,9 @@
 
     function buildModules(test) {
       var steps = test.steps || [];
+      var step0_input = findStep(steps, 'input_classification');
       var step0_proximity = findStep(steps, 'proximity_gate');
+      var step0_entrances = findStep(steps, 'building_entrances');
       var step0_headingAlignment = findStep(steps, 'heading_alignment');
       
       var modB_heading1 = findStep(steps, 'panorama_current_view_match');
@@ -352,15 +466,16 @@
       
       var modC_target = findStep(steps, 'target_store_match');
       var modC_reference = findStep(steps, 'destination_reference_match');
+      var modC_sign = findStep(steps, 'sign_text_match');
       
       var modD_confidence = findStep(steps, 'confidence_fusion');
       var modE_guidance = findStep(steps, 'accessible_guidance');
 
       var modBStatus = test.currentHeading !== undefined && test.currentHeading !== null ? 'pass' : 'fail';
-      if (test.testScenario === 'destination_unverified') modBStatus = 'na';
+      if (test.testScenario === 'destination_unverified' || test.testScenario === 'question_routed') modBStatus = 'na';
 
       var modCStatus = modC_target 
-        ? (modC_target.success ? 'pass' : (modC_reference && modC_reference.success ? 'pass' : 'fail')) 
+        ? ([modC_target, modC_reference, modC_sign].some(function (s) { return s && s.success; }) ? 'pass' : 'fail')
         : 'na';
 
       var modDStatus = modD_confidence ? (modD_confidence.success ? 'pass' : 'fail') : 'na';
@@ -371,10 +486,12 @@
           status: step0_proximity ? 'pass' : 'na',
           title: 'Step 0 · Geometric Reasoning & Pre-check',
           metrics: [
+            ['Input', step0_input ? step0_input.response : '—'],
             ['Approach Gate', step0_proximity ? step0_proximity.response : '—'],
+            ['Building entrances', step0_entrances ? step0_entrances.response : 'Not used (single map pin)'],
             ['Heading Alignment', step0_headingAlignment ? step0_headingAlignment.response : '—']
           ],
-          raw: [step0_proximity, step0_headingAlignment].filter(Boolean)
+          raw: [step0_input, step0_proximity, step0_entrances, step0_headingAlignment].filter(Boolean)
         },
         moduleB: {
           status: modBStatus,
@@ -393,9 +510,10 @@
           metrics: [
             ['Panorama search', modC_target ? (modC_target.response || '—') : '—'],
             ['Fallback reference search', modC_reference ? (modC_reference.response || '—') : '—'],
+            ['Sign text close-up', modC_sign ? ((modC_sign.success ? 'Matched: ' : 'No match: ') + (modC_sign.response || modC_sign.error || '—')) : '—'],
             ['Resolved destination heading', test.targetHeading != null ? test.targetHeading + '°' : 'Not visible']
           ],
-          raw: [modC_target, modC_reference].filter(Boolean)
+          raw: [modC_target, modC_reference, modC_sign].filter(Boolean)
         },
         moduleD: {
           status: modDStatus,
@@ -453,7 +571,8 @@
         heading_sources_disagree: 'The phone compass and the panorama match disagreed by 90 degrees or more about which way the user was facing. Buddy Walk deliberately withheld the turn and asked the user to recalibrate the compass and retake the photo, instead of guessing.',
         destination_not_visible: 'The destination could not be visually confirmed in the Street View panorama or the nearby reference image. Buddy Walk intentionally withheld turn guidance.',
         current_view_not_visible: 'The user photo could not be matched confidently to the Street View panorama.',
-        entrance_not_visually_confirmed: 'Google Maps verified the destination nearby, but the storefront could not be visually confirmed in the Street View panorama or the reference image (imagery may be outdated or the sign obscured). The user still received the distance and a compass-based turn; visual entrance verification was deliberately withheld.',
+        entrance_not_visually_confirmed: 'Google Maps verified the destination nearby, but the storefront could not be visually confirmed in the Street View panorama, the reference image, or the sign close-ups (imagery may be outdated or the sign obscured). The user still received the distance and a compass-based turn; visual entrance verification was deliberately withheld.',
+        no_outdoor_panorama: 'Street View has no outdoor panorama at the user position (indoor and user-uploaded panoramas are not used for matching). The user received the Google Maps distance and, when GPS allowed, a compass-based turn.',
       };
       var summary = explanations[test.error] || 'This trial stopped before Buddy Walk could provide a fully verified localization result.';
       var details = (test.steps || [])
@@ -503,6 +622,18 @@
 
     function noPanoramaReason(test) {
       var dist = typeof test.destinationDistanceMeters === 'number' ? Math.round(test.destinationDistanceMeters) : null;
+      if (test.testScenario === 'question_routed') {
+        return 'Not a Last Meters trial: the input was a question and was answered by the question flow.';
+      }
+      if (test.testScenario === 'no_panorama') {
+        return 'No outdoor Street View panorama exists at the user position (' + (test.panoramaStatus || 'unavailable') + ').';
+      }
+      if (test.panoramaSource === 'background' && test.panoramaStatus) {
+        return 'The review panorama could not be saved: ' + test.panoramaStatus + '.';
+      }
+      if ((test.navigationMode === 'approach' || test.navigationMode === 'aligned') && test.dataSources) {
+        return 'The review panorama is saved after the answer is sent. Reopen this trial in a few seconds.';
+      }
       if (test.navigationMode === 'approach' || test.testScenario === 'test_b_approach') {
         return 'Panorama skipped: destination resolved ' + (dist !== null ? dist + ' m' : '>250 m') + ' away (approach mode). Check the resolved place address — Google may have picked a different branch, or GPS drifted.';
       }
@@ -513,6 +644,54 @@
         return 'Panorama skipped: Google Places could not verify the destination nearby.';
       }
       return 'No panorama: the run stopped before or during Street View download — check the failed stage below.';
+    }
+
+    function dataSourcesHtml(test) {
+      var used = (test.dataSources || []).map(function (s) { return SOURCE_LABELS[s] || s; });
+      var pano = [];
+      if (test.panoramaDate) {
+        pano.push('captured ' + test.panoramaDate +
+          (test.panoramaAgeYears >= 3 ? ' (about ' + Math.floor(test.panoramaAgeYears) + ' years old)' : ''));
+      }
+      if (test.panoramaCopyright) pano.push(test.panoramaCopyright);
+      if (test.panoId) pano.push('pano id ' + test.panoId);
+      if (test.panoramaSource === 'background') pano.push('saved after the answer, for review only');
+      var target = test.entranceSource === 'geocoding_entrance'
+        ? 'Nearest building entrance from Google Geocoding'
+        : test.entranceSource === 'places_pin' ? 'Google Places map pin' : '—';
+      if (test.besideBuilding) target += ' (user is beside the building)';
+      var allowance = test.gpsAllowanceMeters != null
+        ? Math.round(test.gpsAllowanceMeters) + ' m' + (test.exactGateWidened ? ' (the allowance is what let this trial into exact mode)' : '')
+        : '—';
+      var openNow = test.destinationOpenNow === true ? 'Open' : test.destinationOpenNow === false ? 'Closed' : 'Not listed';
+      if (test.destinationBusinessStatus && test.destinationBusinessStatus !== 'OPERATIONAL') openNow += ' (' + test.destinationBusinessStatus + ')';
+      return '<div class="module-block"><div class="module-head"><span>Data sources</span></div>' +
+        '<div class="module-metric"><b>Used for this answer:</b> ' + esc(used.join(', ') || 'Not recorded (trial predates source logging)') + '</div>' +
+        (pano.length ? '<div class="module-metric"><b>Street View panorama:</b> ' + esc(pano.join(' · ')) + '</div>' : '') +
+        '<div class="module-metric"><b>Destination target:</b> ' + esc(target) + '</div>' +
+        '<div class="module-metric"><b>GPS allowance on the 250 m gate:</b> ' + esc(allowance) + '</div>' +
+        '<div class="module-metric"><b>Google Maps open now:</b> ' + esc(openNow) + '</div>' +
+        (test.destinationQuery && test.destinationQuery !== test.destination
+          ? '<div class="module-metric"><b>Searched as:</b> ' + esc(test.destinationQuery) + ' (from "' + esc(test.destination) + '")</div>'
+          : '') +
+      '</div>';
+    }
+
+    function candidatesHtml(test) {
+      var list = test.placeCandidates || [];
+      if (!list.length) return '';
+      var rowsHtml = list.map(function (c) {
+        var chosen = c.name === test.destinationPlaceName && c.address === test.destinationPlaceAddress;
+        return '<tr><td>' + esc(c.name) + (chosen ? ' <b>(chosen)</b>' : '') + '<br><span class="small">' + esc(c.address) + '</span></td>' +
+          '<td>' + esc(c.distanceMeters) + ' m</td>' +
+          '<td class="' + (c.relevant ? 'candidate-kept' : 'candidate-rejected') + '">' + (c.relevant ? 'kept' : 'rejected') + '</td>' +
+          '<td>' + esc(c.source) + '</td>' +
+          '<td class="small">' + esc((c.types || []).join(', ')) + '</td></tr>';
+      }).join('');
+      return '<details class="module-block"><summary style="cursor:pointer;font-weight:700">Google Places candidates (' +
+        list.length + '; searches: ' + esc((test.placesSearches || []).join(' + ') || '—') + ')</summary>' +
+        '<table style="margin-top:12px"><thead><tr><th>Place</th><th>Distance</th><th>Relevance filter</th><th>Search</th><th>Types</th></tr></thead>' +
+        '<tbody>' + rowsHtml + '</tbody></table></details>';
     }
 
     function renderDetail(test) {
@@ -527,7 +706,7 @@
         '<div class="image-wrap"><div class="image-label">I1. User Photo</div>' +
         (test.userPhoto && test.userPhoto.startsWith('data:') ? '<img src="' + imgSrc(test.userPhoto) + '" alt="User photo" />' : '<div class="empty">No photo</div>') +
         '</div>' +
-        '<div class="image-wrap"><div class="image-label">I3. Panorama (' + esc(test.panoramaDate || 'N/A') + ')</div>' +
+        '<div class="image-wrap"><div class="image-label">I3. Panorama (' + esc(test.panoramaDate || 'N/A') + (test.panoramaSource === 'background' ? ', review only' : '') + ')</div>' +
         (test.panoramaPhoto && test.panoramaPhoto.startsWith('data:') ? '<img src="' + imgSrc(test.panoramaPhoto) + '" alt="Panorama" />' : '<div class="empty">' + esc(noPanoramaReason(test)) + '</div>') +
         '</div>' +
         (test.destinationPhoto && test.destinationPhoto.startsWith('data:') ? 
@@ -535,22 +714,24 @@
           '<img src="' + imgSrc(test.destinationPhoto) + '" alt="Reference" /></div>' : '') +
         '</div>';
 
-      var reviewStatus = test.reviewerStatus || 'untested';
       var reviewHtml = '<div class="review-section" data-id="' + esc(idOf(test)) + '">' +
         '<div>' +
-          '<label class="small" style="display:block;margin-bottom:4px">Review Status</label>' +
-          '<select class="review-select">' +
-            '<option value="untested"' + (reviewStatus === 'untested' ? ' selected' : '') + '>Untested</option>' +
-            '<option value="pass"' + (reviewStatus === 'pass' ? ' selected' : '') + '>Pass</option>' +
-            '<option value="partial"' + (reviewStatus === 'partial' ? ' selected' : '') + '>Partial</option>' +
-            '<option value="fail"' + (reviewStatus === 'fail' ? ' selected' : '') + '>Fail</option>' +
-          '</select>' +
+          '<label class="small" style="display:block;margin-bottom:4px">Outcome (required)</label>' +
+          '<select class="review-outcome">' + optionsHtml(OUTCOME_LABELS, outcomeOf(test), 'Choose…') + '</select>' +
         '</div>' +
         '<div>' +
+          '<label class="small" style="display:block;margin-bottom:4px">Turn</label>' +
+          '<select class="review-turn">' + optionsHtml(TURN_LABELS, test.turnCorrectness, 'Not scored') + '</select>' +
+        '</div>' +
+        '<div>' +
+          '<label class="small" style="display:block;margin-bottom:4px">Entrance</label>' +
+          '<select class="review-entrance">' + optionsHtml(ENTRANCE_LABELS, test.entranceCorrectness, 'Not scored') + '</select>' +
+        '</div>' +
+        '<div class="review-notes-wrap">' +
           '<label class="small" style="display:block;margin-bottom:4px">Tester Notes</label>' +
           '<textarea class="review-notes" placeholder="What did the participant experience?">' + esc(test.reviewerNotes || '') + '</textarea>' +
         '</div>' +
-        '<div style="align-self:end"><button class="primary save-review-btn">Save Notes</button></div>' +
+        '<div><button class="primary save-review-btn">Save Review</button></div>' +
       '</div>';
 
       var displayMode = test.navigationMode === 'approach' ? 'Mode A (Navigation)' : 'Mode B (Fine Localization)';
@@ -573,6 +754,8 @@
 
       var failureHtml = failureExplanation(test);
       document.getElementById('lmDetailBody').innerHTML = imagesHtml + metaHtml + failureHtml +
+        dataSourcesHtml(test) +
+        candidatesHtml(test) +
         renderModuleBlock(modules.step0) +
         renderModuleBlock(modules.moduleB) +
         renderModuleBlock(modules.moduleC) +
@@ -588,7 +771,7 @@
     function distanceGate(test) {
       var mode = ['exact', 'approach', 'aligned'].indexOf(test.navigationMode) >= 0 ? test.navigationMode : 'none';
       var label = mode === 'none'
-        ? (test.testScenario === 'destination_unverified' ? 'UNVERIFIED' : 'NONE')
+        ? (test.testScenario === 'destination_unverified' ? 'UNVERIFIED' : test.testScenario === 'question_routed' ? 'QUESTION' : 'NONE')
         : mode.toUpperCase();
       var meters = typeof test.destinationDistanceMeters === 'number' ? Math.round(test.destinationDistanceMeters) + ' m' : '';
       return { mode: mode, label: label, meters: meters };
@@ -628,8 +811,8 @@
     var PRESETS = {
       approachNoPanorama: { mode: 'approach', panorama: 'no' },
       noPanorama: { panorama: 'no' },
-      needsReview: { outcome: 'untested' },
-      failed: { outcome: 'fail' }
+      needsReview: { outcome: 'unscored' },
+      failed: { outcome: 'would_not_get_there' }
     };
 
     function readFilters() {
@@ -669,7 +852,7 @@
       if (filters.mode && distanceGate(row).mode !== filters.mode) return false;
       if (filters.scenario && row.testScenario !== filters.scenario) return false;
       if (filters.panorama && Boolean(row.hasPanorama) !== (filters.panorama === 'yes')) return false;
-      if (filters.outcome && (row.reviewerStatus || 'untested') !== filters.outcome) return false;
+      if (filters.outcome && outcomeOf(row) !== filters.outcome) return false;
       if (filters.q) {
         var haystack = [row.destination, row.destinationPlaceName, row.destinationPlaceAddress].join(' ').toLowerCase();
         if (haystack.indexOf(filters.q.toLowerCase()) === -1) return false;
@@ -686,6 +869,9 @@
         btn.setAttribute('aria-pressed', String(active));
       });
       document.getElementById('clearFilters').disabled = sameFilters(filters, {});
+      // Filtering by outcome would make the success rate trivially 0% or 100%.
+      var summaryFilters = Object.assign({}, filters, { outcome: '' });
+      renderSummary(allTests.filter(function (row) { return matchesFilters(row, summaryFilters); }));
       activeTests = allTests.filter(function (row) { return matchesFilters(row, filters); });
       renderTable();
     }
@@ -705,9 +891,10 @@
 
       el.innerHTML = activeTests.map(function (t, idx) {
         var modules = buildModules(t);
-        var review = t.reviewerStatus || 'untested';
-        var reviewCls = ['pass', 'partial', 'fail'].indexOf(review) >= 0 ? review : '';
         var gate = distanceGate(t);
+        var panoramaBadge = !t.hasPanorama
+          ? badge('na', 'None')
+          : t.panoramaSource === 'background' ? badge('pass', 'Review only') : badge('pass', 'Yes');
 
         return '<tr>' +
           '<td>' + esc(fmtDate(t.serverTs || t.createdAt)) + '</td>' +
@@ -716,8 +903,9 @@
             (gate.meters ? '<span class="gate-meters">' + esc(gate.meters) + '</span>' : '') + '</div>' +
             '<div class="cell-sub">' + esc(t.testScenario || '-') + '</div></td>' +
           '<td>' + gpsAccuracyHtml(t) + '</td>' +
-          '<td>' + (t.hasPanorama ? badge('pass', 'Yes') : badge('na', 'None')) + '</td>' +
-          '<td><span class="pill ' + reviewCls + '">' + esc(review) + '</span></td>' +
+          '<td>' + panoramaBadge + '</td>' +
+          '<td><select class="quick-outcome" data-idx="' + idx + '" aria-label="Outcome">' +
+            optionsHtml(OUTCOME_LABELS, outcomeOf(t), 'Score…') + '</select></td>' +
           '<td>' + badge(modules.moduleB.status) + '</td>' +
           '<td>' + badge(modules.moduleC.status) + '</td>' +
           '<td>' + badge(modules.moduleD.status) + '</td>' +
@@ -815,33 +1003,52 @@
       if (e.target.classList.contains('save-review-btn')) {
         var container = e.target.closest('.review-section');
         var id = container.getAttribute('data-id');
-        var reviewerStatus = container.querySelector('.review-select').value;
-        var reviewerNotes = container.querySelector('.review-notes').value;
-        
-        e.target.disabled = true;
-        e.target.textContent = 'Saving...';
-        
-        var baseUrl = window.location.origin;
-        fetch(baseUrl + '/api/last-mile-tests/' + encodeURIComponent(id) + '/review' + (TOKEN && TOKEN !== '__ADMIN_TOKEN__' ? '?token=' + encodeURIComponent(TOKEN) : ''), {
-          method: 'PATCH',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ reviewerStatus: reviewerStatus, reviewerNotes: reviewerNotes })
+        var reviewOutcome = container.querySelector('.review-outcome').value;
+        if (!reviewOutcome) {
+          alert('Choose an outcome before saving: would get me there, needed a retake, or would not get me there.');
+          return;
+        }
+        var button = e.target;
+        button.disabled = true;
+        button.textContent = 'Saving...';
+        saveReview(id, {
+          reviewOutcome: reviewOutcome,
+          reviewerStatus: STATUS_FOR_OUTCOME[reviewOutcome],
+          turnCorrectness: container.querySelector('.review-turn').value || undefined,
+          entranceCorrectness: container.querySelector('.review-entrance').value || undefined,
+          reviewerNotes: container.querySelector('.review-notes').value
         })
-        .then(function (res) {
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          return res.json();
-        })
-        .then(function() {
-          e.target.textContent = 'Saved!';
-          setTimeout(function() { e.target.textContent = 'Save Notes'; e.target.disabled = false; }, 2000);
+        .then(function () {
+          button.textContent = 'Saved!';
+          setTimeout(function () { button.textContent = 'Save Review'; button.disabled = false; }, 2000);
           load();
         })
         .catch(function (error) {
           alert('Could not save review: ' + error.message);
-          e.target.disabled = false;
-          e.target.textContent = 'Save Notes';
+          button.disabled = false;
+          button.textContent = 'Save Review';
         });
       }
+    });
+
+    // One-tap scoring from the table, so field testers can score each trial
+    // right after running it without opening the detail view.
+    document.body.addEventListener('change', function (e) {
+      if (!e.target.classList.contains('quick-outcome') || !e.target.value) return;
+      var row = activeTests[Number(e.target.getAttribute('data-idx'))];
+      if (!row) return;
+      var select = e.target;
+      select.disabled = true;
+      saveReview(idOf(row), {
+        reviewOutcome: select.value,
+        reviewerStatus: STATUS_FOR_OUTCOME[select.value],
+        reviewerNotes: row.reviewerNotes || ''
+      })
+      .then(function () { load(); })
+      .catch(function (error) {
+        alert('Could not save outcome: ' + error.message);
+        select.disabled = false;
+      });
     });
 
     writeFilters(filtersFromHash());
