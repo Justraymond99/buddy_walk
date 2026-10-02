@@ -93,11 +93,11 @@ describe('serverMode', () => {
     assert.equal(getServiceRouting().speech, 'local');
   });
 
-  it('lets ZERO_CONFIG force proxying even when keys exist', () => {
+  it('lets ZERO_CONFIG force speech and MTA proxying even when keys exist', () => {
     clearCredentials();
-    process.env.OPENAI_API_KEY = 'sk-test';
     process.env.AZURE_SUBSCRIPTION_KEY = 'azure-test';
     process.env.AZURE_REGION = 'eastus';
+    process.env.MTA_API_KEY = 'mta-test';
     process.env.ZERO_CONFIG = 'true';
     assert.deepEqual(getServiceRouting(), {
       ai: 'proxy',
@@ -105,10 +105,20 @@ describe('serverMode', () => {
       mta: 'proxy',
       lastMile: 'proxy',
     });
+  });
+
+  // Regression: buddywalk.app /api/text returns 500, so ZERO_CONFIG on Render
+  // sent every question through a failing upstream before the local fallback.
+  it('keeps AI and Last Meters local under ZERO_CONFIG when their keys exist', () => {
+    clearCredentials();
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.ZERO_CONFIG = 'true';
+    assert.equal(getServiceRouting().ai, 'local');
+    assert.equal(getServiceRouting().lastMile, 'proxy');
 
     process.env.GOOGLE_MAPS_API_KEY = 'maps-test';
     assert.equal(getServiceRouting().lastMile, 'local');
-    assert.equal(getServiceRouting().ai, 'proxy');
+    assert.equal(getServiceRouting().speech, 'proxy');
   });
 
   it('lets ZERO_CONFIG=false force local handlers', () => {

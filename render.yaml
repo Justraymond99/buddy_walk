@@ -14,6 +14,11 @@
 # to buddywalk.app, so adding one key never disables an unrelated service.
 # /api/health reports the live routing for each.
 #
+# buddywalk.app is retired as the AI upstream: its /api/text returns 500, so
+# Q&A and Last Meters always run here when the AI keys are set, even with
+# ZERO_CONFIG=true. It is still used for speech and MTA when their keys are
+# missing.
+#
 # Telemetry, feedback, chat logs, thumbs, and companion data stay on YOUR server.
 services:
   - type: web

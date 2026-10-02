@@ -65,9 +65,13 @@ function route(hasKeys: boolean): ServiceRoute {
 }
 
 /**
- * ZERO_CONFIG forces every capability one way, which is useful for testing the
- * proxy path on a host that does have keys. Left unset, each capability is
- * decided independently on its own credentials.
+ * ZERO_CONFIG forces speech and MTA through the proxy, which is useful for
+ * testing that path on a host that does have keys. Left unset, each capability
+ * is decided independently on its own credentials.
+ *
+ * AI and Last Meters are never proxied when this host has its own keys:
+ * buddywalk.app's /api/text has returned 500 since August, so proxying AI
+ * only added a failing round trip before the local fallback.
  */
 export function getServiceRouting(): ServiceRouting {
   const flag = process.env.ZERO_CONFIG?.trim().toLowerCase();
@@ -78,6 +82,7 @@ export function getServiceRouting(): ServiceRouting {
       mta: 'proxy',
       lastMile: 'proxy',
     };
+    if (hasOwnAiKeys()) routing.ai = 'local';
     if (canRunLocalLastMile()) routing.lastMile = 'local';
     return routing;
   }
