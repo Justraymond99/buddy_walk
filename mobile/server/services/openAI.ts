@@ -2713,8 +2713,6 @@ async function processEightDirectionTiles(
   const metadataAttempts: Array<{ source?: string; radius?: number }> = [
     { source: "outdoor", radius: 50 },
     { source: "outdoor", radius: 100 },
-    { radius: 50 },
-    { radius: 100 },
   ];
 
   let metadata: StreetViewMetadata | null = null;
