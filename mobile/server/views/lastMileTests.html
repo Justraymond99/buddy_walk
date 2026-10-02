@@ -80,7 +80,30 @@
     .module-fail { background: #3d1418; color: #f85149; }
     .module-skip { background: #3a2f0d; color: #d29922; }
     .module-na   { background: #21262d; color: #6e7681; }
-    
+
+    /* Distance Gate Badges */
+    .gate { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.03em; white-space: nowrap; }
+    .gate-exact { background: #0f2f57; color: #93c5fd; }
+    .gate-approach { background: #3a2f0d; color: #fcd34d; }
+    .gate-aligned { background: #0d3d1e; color: #86efac; }
+    .gate-none { background: #21262d; color: #8b949e; }
+    .gate-line { white-space: nowrap; }
+    .gate-meters { margin-left: 6px; font-weight: 700; }
+
+    /* GPS Accuracy (thresholds match calculateLastMileConfidence) */
+    .gps-good { color: #86efac; font-weight: 700; }
+    .gps-ok { color: #fcd34d; font-weight: 700; }
+    .gps-poor { color: #fca5a5; font-weight: 700; }
+
+    .cell-sub { margin-top: 3px; color: var(--muted); font-size: 0.8rem; line-height: 1.35; }
+    .cell-sub.mismatch { color: #fcd34d; }
+
+    /* Quick Filter Presets */
+    .presets { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: -6px 0 8px; }
+    button.preset { padding: 5px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; background: var(--panel); }
+    button.preset:hover { background: #2a3039; }
+    button.preset.active { background: var(--blue); border-color: var(--blue); }
+
     /* Review Status Pills */
     .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px; background: #2a3039; color: var(--muted); font-size: 0.78rem; font-weight: 700; }
     .pill.pass { color: #dcfce7; background: #14532d; }
@@ -158,8 +181,37 @@
         <input id="limit" type="number" min="1" max="500" value="50" />
       </div>
       <div class="field">
-        <label for="statusFilter">Review Status</label>
-        <select id="statusFilter">
+        <label for="modeFilter">Navigation Mode</label>
+        <select id="modeFilter" class="filter">
+          <option value="">All</option>
+          <option value="exact">Exact</option>
+          <option value="approach">Approach</option>
+          <option value="aligned">Aligned</option>
+          <option value="none">None (unverified / failed)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="scenarioFilter">Scenario</label>
+        <select id="scenarioFilter" class="filter">
+          <option value="">All</option>
+          <option value="test_a_visible">test_a_visible</option>
+          <option value="test_a_reference">test_a_reference</option>
+          <option value="test_b_approach">test_b_approach</option>
+          <option value="heading_aligned">heading_aligned</option>
+          <option value="destination_unverified">destination_unverified</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="panoramaFilter">Panorama</label>
+        <select id="panoramaFilter" class="filter">
+          <option value="">All</option>
+          <option value="yes">Has panorama</option>
+          <option value="no">No panorama</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="statusFilter">Outcome</label>
+        <select id="statusFilter" class="filter">
           <option value="">All</option>
           <option value="untested">Untested</option>
           <option value="pass">Pass</option>
@@ -168,10 +220,17 @@
         </select>
       </div>
       <div class="field">
-        <label for="textFilter">Destination</label>
-        <input id="textFilter" type="text" placeholder="e.g. CVS" />
+        <label for="textFilter">Destination / Address</label>
+        <input id="textFilter" class="filter" type="text" placeholder="e.g. CVS" />
       </div>
-      <button class="primary" id="apply">Apply Filters</button>
+    </div>
+    <div class="presets">
+      <span class="small">Quick filters:</span>
+      <button class="preset" data-preset="approachNoPanorama">Approach · no panorama</button>
+      <button class="preset" data-preset="noPanorama">No panorama</button>
+      <button class="preset" data-preset="needsReview">Needs review</button>
+      <button class="preset" data-preset="failed">Outcome: fail</button>
+      <button class="preset" data-preset="clear">Clear filters</button>
     </div>
     
     <div class="status" id="status">Loading...</div>
@@ -182,9 +241,11 @@
         <thead>
           <tr>
             <th>Time</th>
-            <th>Destination</th>
-            <th>Mode</th>
-            <th>Review</th>
+            <th>Destination / Resolved Address</th>
+            <th>Distance Gate</th>
+            <th>GPS Acc.</th>
+            <th>Panorama</th>
+            <th>Outcome</th>
             <th>Mod B (User Image)</th>
             <th>Mod C (Destination)</th>
             <th>Mod D (Confidence)</th>
@@ -193,7 +254,7 @@
           </tr>
         </thead>
         <tbody id="lmTestsList">
-          <tr><td colspan="9" class="empty">Loading...</td></tr>
+          <tr><td colspan="11" class="empty">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -509,27 +570,122 @@
         reviewHtml;
     }
 
-    // --- Table Render ---
-    function render(payload) {
-      showError('');
-      var rows = payload.data || [];
-      
-      var statusFilter = document.getElementById('statusFilter').value;
-      var textFilter = document.getElementById('textFilter').value.toLowerCase().trim();
-      
-      activeTests = rows.filter(function (row) { 
-        var matchStatus = !statusFilter || (row.reviewerStatus || 'untested') === statusFilter;
-        var destStr = (row.destinationPlaceName || row.destination || '').toLowerCase();
-        var matchText = !textFilter || destStr.indexOf(textFilter) > -1;
-        return matchStatus && matchText;
-      });
+    // --- Row Facts ---
+    var TABLE_COLUMNS = 11;
 
+    function distanceGate(test) {
+      var mode = ['exact', 'approach', 'aligned'].indexOf(test.navigationMode) >= 0 ? test.navigationMode : 'none';
+      var label = mode === 'none'
+        ? (test.testScenario === 'destination_unverified' ? 'UNVERIFIED' : 'NONE')
+        : mode.toUpperCase();
+      var meters = typeof test.destinationDistanceMeters === 'number' ? Math.round(test.destinationDistanceMeters) + ' m' : '';
+      return { mode: mode, label: label, meters: meters };
+    }
+
+    function gpsAccuracyHtml(test) {
+      if (typeof test.gpsAccuracyMeters !== 'number') return '<span class="small">-</span>';
+      var meters = Math.round(test.gpsAccuracyMeters);
+      // Same bands calculateLastMileConfidence uses to weight GPS evidence.
+      var cls = test.gpsAccuracyMeters <= 15 ? 'gps-good' : (test.gpsAccuracyMeters <= 40 ? 'gps-ok' : 'gps-poor');
+      return '<span class="' + cls + '">±' + meters + ' m</span>';
+    }
+
+    function destinationHtml(test) {
+      var requested = test.destination || '';
+      var placeName = test.destinationPlaceName || '';
+      var address = test.destinationPlaceAddress || '';
+      var html = '<strong>' + esc(requested || placeName || '-') + '</strong>';
+      if (!placeName && !address) {
+        return html + '<div class="cell-sub">Not resolved</div>';
+      }
+      // Highlight when Google resolved to a differently named place (e.g. another branch).
+      var mismatch = placeName && requested && placeName.toLowerCase().indexOf(requested.toLowerCase()) === -1;
+      var resolved = [placeName, address].filter(Boolean).join(' · ');
+      return html + '<div class="cell-sub' + (mismatch ? ' mismatch' : '') + '">→ ' + esc(resolved) + '</div>';
+    }
+
+    // --- Filters ---
+    var allTests = [];
+    var FILTERS = {
+      mode: 'modeFilter',
+      scenario: 'scenarioFilter',
+      panorama: 'panoramaFilter',
+      outcome: 'statusFilter',
+      q: 'textFilter'
+    };
+    var PRESETS = {
+      approachNoPanorama: { mode: 'approach', panorama: 'no' },
+      noPanorama: { panorama: 'no' },
+      needsReview: { outcome: 'untested' },
+      failed: { outcome: 'fail' },
+      clear: {}
+    };
+
+    function readFilters() {
+      var filters = {};
+      Object.keys(FILTERS).forEach(function (key) {
+        filters[key] = document.getElementById(FILTERS[key]).value.trim();
+      });
+      return filters;
+    }
+
+    function writeFilters(filters) {
+      Object.keys(FILTERS).forEach(function (key) {
+        document.getElementById(FILTERS[key]).value = filters[key] || '';
+      });
+    }
+
+    function filtersFromHash() {
+      var params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      var filters = {};
+      Object.keys(FILTERS).forEach(function (key) { filters[key] = params.get(key) || ''; });
+      return filters;
+    }
+
+    // Mirror filters into the URL hash so a filtered view can be bookmarked or shared.
+    function syncHash(filters) {
+      var params = new URLSearchParams();
+      Object.keys(FILTERS).forEach(function (key) { if (filters[key]) params.set(key, filters[key]); });
+      var hash = params.toString();
+      history.replaceState(null, '', window.location.pathname + window.location.search + (hash ? '#' + hash : ''));
+    }
+
+    function sameFilters(a, b) {
+      return Object.keys(FILTERS).every(function (key) { return (a[key] || '') === (b[key] || ''); });
+    }
+
+    function matchesFilters(row, filters) {
+      if (filters.mode && distanceGate(row).mode !== filters.mode) return false;
+      if (filters.scenario && row.testScenario !== filters.scenario) return false;
+      if (filters.panorama && Boolean(row.hasPanorama) !== (filters.panorama === 'yes')) return false;
+      if (filters.outcome && (row.reviewerStatus || 'untested') !== filters.outcome) return false;
+      if (filters.q) {
+        var haystack = [row.destination, row.destinationPlaceName, row.destinationPlaceAddress].join(' ').toLowerCase();
+        if (haystack.indexOf(filters.q.toLowerCase()) === -1) return false;
+      }
+      return true;
+    }
+
+    function applyFilters() {
+      var filters = readFilters();
+      syncHash(filters);
+      document.querySelectorAll('button.preset').forEach(function (btn) {
+        btn.classList.toggle('active', sameFilters(filters, PRESETS[btn.getAttribute('data-preset')]));
+      });
+      activeTests = allTests.filter(function (row) { return matchesFilters(row, filters); });
+      renderTable();
+    }
+
+    // --- Table Render ---
+    function renderTable() {
+      var filtered = activeTests.length !== allTests.length;
       document.getElementById('status').textContent =
-        activeTests.length + ' trial' + (activeTests.length === 1 ? '' : 's') + ' shown - updated ' + new Date().toLocaleTimeString();
-      
+        (filtered ? activeTests.length + ' of ' + allTests.length : activeTests.length) +
+        ' trial' + (allTests.length === 1 ? '' : 's') + ' shown - updated ' + new Date().toLocaleTimeString();
+
       var el = document.getElementById('lmTestsList');
       if (!activeTests.length) {
-        el.innerHTML = '<tr><td colspan="9" class="empty">No tests match the current filters.</td></tr>';
+        el.innerHTML = '<tr><td colspan="' + TABLE_COLUMNS + '" class="empty">No tests match the current filters.</td></tr>';
         return;
       }
 
@@ -537,13 +693,16 @@
         var modules = buildModules(t);
         var review = t.reviewerStatus || 'untested';
         var reviewCls = ['pass', 'partial', 'fail'].indexOf(review) >= 0 ? review : '';
-        
-        var modeStr = t.navigationMode === 'approach' ? 'Mode A (Nav)' : (t.navigationMode === 'exact' ? 'Mode B (Localize)' : esc(t.navigationMode));
+        var gate = distanceGate(t);
 
         return '<tr>' +
           '<td>' + esc(fmtDate(t.serverTs || t.createdAt)) + '</td>' +
-          '<td><strong>' + esc(t.destinationPlaceName || t.destination) + '</strong></td>' +
-          '<td><span class="small">' + esc(modeStr) + '<br>' + esc(t.testScenario) + '</span></td>' +
+          '<td>' + destinationHtml(t) + '</td>' +
+          '<td><div class="gate-line"><span class="gate gate-' + gate.mode + '">' + esc(gate.label) + '</span>' +
+            (gate.meters ? '<span class="gate-meters">' + esc(gate.meters) + '</span>' : '') + '</div>' +
+            '<div class="cell-sub">' + esc(t.testScenario || '-') + '</div></td>' +
+          '<td>' + gpsAccuracyHtml(t) + '</td>' +
+          '<td>' + (t.hasPanorama ? badge('pass', 'Yes') : badge('na', 'None')) + '</td>' +
           '<td><span class="pill ' + reviewCls + '">' + esc(review) + '</span></td>' +
           '<td>' + badge(modules.moduleB.status) + '</td>' +
           '<td>' + badge(modules.moduleC.status) + '</td>' +
@@ -558,23 +717,43 @@
     function load() {
       var baseUrl = window.location.origin;
       document.getElementById('download').href = baseUrl + '/api/last-mile-tests/export.csv' + qs(false);
-      
+
       fetch(baseUrl + '/api/last-mile-tests' + qs(false), { headers: authHeaders() })
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
         })
-        .then(render)
+        .then(function (payload) {
+          showError('');
+          allTests = payload.data || [];
+          applyFilters();
+        })
         .catch(function (error) {
           showError('Could not load tests. Check token and logs. ' + error.message);
-          document.getElementById('lmTestsList').innerHTML = '<tr><td colspan="9" class="empty">Failed to load data.</td></tr>';
+          document.getElementById('lmTestsList').innerHTML = '<tr><td colspan="' + TABLE_COLUMNS + '" class="empty">Failed to load data.</td></tr>';
         });
     }
 
     // --- Event Listeners ---
     document.getElementById('refresh').addEventListener('click', load);
-    document.getElementById('apply').addEventListener('click', load);
-    
+    document.getElementById('limit').addEventListener('change', load);
+
+    document.querySelectorAll('.filter').forEach(function (control) {
+      control.addEventListener(control.tagName === 'INPUT' ? 'input' : 'change', applyFilters);
+    });
+
+    document.querySelectorAll('button.preset').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        writeFilters(PRESETS[btn.getAttribute('data-preset')]);
+        applyFilters();
+      });
+    });
+
+    window.addEventListener('hashchange', function () {
+      writeFilters(filtersFromHash());
+      applyFilters();
+    });
+
     document.getElementById('lmDetailClose').addEventListener('click', function () {
       document.getElementById('lmDetailOverlay').style.display = 'none';
     });
@@ -644,6 +823,7 @@
       }
     });
 
+    writeFilters(filtersFromHash());
     load();
   </script>
 </body>

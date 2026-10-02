@@ -3,6 +3,7 @@ import { lastMileTestLogService } from "../services/lastMileTestLog";
 import { toCsv } from "../utils/csv";
 import { buildDateFilter, isAdminAuthorized, parseLimit } from "../utils/adminAuth";
 import { isMongoConnected } from "../database/usageStore";
+import { imagePlaceholder, toLastMileTestResponse } from "../utils/lastMileTestRow";
 
 const LAST_MILE_TEST_CSV_COLUMNS = [
   "serverTs",
@@ -60,16 +61,7 @@ export class LastMileTestLogController {
     const limit = parseLimit(req, 25, 500);
     const includeImages = req.query.includeImages === "true";
     const { source, data } = await lastMileTestLogService.getData(limit, buildDateFilter(req));
-    const rows = includeImages
-      ? data
-      : data.map((row) => ({
-          ...row,
-          userPhoto: row.userPhoto ? `[base64 image ${row.userPhoto.length} chars]` : "",
-          panoramaPhoto: row.panoramaPhoto ? `[base64 image ${row.panoramaPhoto.length} chars]` : "",
-          destinationPhoto: row.destinationPhoto
-            ? `[base64 image ${row.destinationPhoto.length} chars]`
-            : "",
-        }));
+    const rows = data.map((row) => toLastMileTestResponse(row, includeImages));
 
     res.status(200).json({ source, data: rows });
   }
@@ -87,24 +79,10 @@ export class LastMileTestLogController {
     }
 
     const includeImages = req.query.includeImages === "true";
-    if (!includeImages) {
-      res.status(200).json({
-        source: isMongoConnected() ? "mongo" : "memory",
-        data: {
-          ...data,
-          userPhoto: data.userPhoto ? `[base64 image ${data.userPhoto.length} chars]` : "",
-          panoramaPhoto: data.panoramaPhoto
-            ? `[base64 image ${data.panoramaPhoto.length} chars]`
-            : "",
-          destinationPhoto: data.destinationPhoto
-            ? `[base64 image ${data.destinationPhoto.length} chars]`
-            : "",
-        },
-      });
-      return;
-    }
-
-    res.status(200).json({ source: isMongoConnected() ? "mongo" : "memory", data });
+    res.status(200).json({
+      source: isMongoConnected() ? "mongo" : "memory",
+      data: toLastMileTestResponse(data, includeImages),
+    });
   }
 
   async exportCsv(req: Request, res: Response): Promise<void> {
@@ -125,17 +103,11 @@ export class LastMileTestLogController {
         destinationTypes: (row.destinationTypes || []).join("|"),
         confidenceReasons: (row.confidenceReasons || []).join("|"),
         steps: JSON.stringify(row.steps),
-        userPhoto: includeImages ? row.userPhoto : row.userPhoto ? `[base64 image ${row.userPhoto.length} chars]` : "",
-        panoramaPhoto: includeImages
-          ? row.panoramaPhoto
-          : row.panoramaPhoto
-            ? `[base64 image ${row.panoramaPhoto.length} chars]`
-            : "",
+        userPhoto: includeImages ? row.userPhoto : imagePlaceholder(row.userPhoto),
+        panoramaPhoto: includeImages ? row.panoramaPhoto : imagePlaceholder(row.panoramaPhoto),
         destinationPhoto: includeImages
           ? row.destinationPhoto
-          : row.destinationPhoto
-            ? `[base64 image ${row.destinationPhoto.length} chars]`
-            : "",
+          : imagePlaceholder(row.destinationPhoto),
       })) as Record<string, unknown>[],
       LAST_MILE_TEST_CSV_COLUMNS
     );
