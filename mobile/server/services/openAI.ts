@@ -22,6 +22,7 @@ import {
 import { addPanoramaDescription, getPanoramaData } from "./doorfront";
 import { aiRequestLogService } from "./aiRequestLog";
 import { lastMileTestLogService } from "./lastMileTestLog";
+import { createLastMileModuleTimer } from "../utils/lastMileTiming";
 import { getSubwayArrivals } from "./mta";
 import { extractTrainLineFromText } from "../../src/utils/trainLine";
 import { getNearbyFeatures } from "./features";
@@ -752,6 +753,8 @@ export class OpenAIService {
     } = request;
     const { retry, pinnedPanorama } = options;
     const startedAt = Date.now();
+    const moduleTimer = createLastMileModuleTimer();
+    moduleTimer.start("step0");
     // A retry keeps the original's snapshot and judges sensor freshness as of
     // the original request.
     const evaluationTime = retry?.replayInput.receivedAt ?? startedAt;
@@ -890,8 +893,10 @@ export class OpenAIService {
       targetHeading?: number;
       turnInstruction?: string;
     }) => {
+      const moduleTimingsMs = moduleTimer.finish();
       recordedLogId = await lastMileTestLogService.record({
         ...trialContext(),
+        moduleTimingsMs,
         // A retry links to the original and reuses its stored photo.
         ...(retry
           ? {
@@ -1240,6 +1245,7 @@ export class OpenAIService {
         return withhold([fallback.error], `Google Maps places ${place.placeName} about ${formatLastMileDistance(distanceMeters)} away, but the entrance is not visually verified. I will not give a precise turn. Use your primary navigation or ask for assistance.`);
       };
 
+      moduleTimer.stop("step0");
       activeStage = "panorama download";
       let panorama: Awaited<typeof panoramaDownload>;
       try {
@@ -1328,6 +1334,7 @@ export class OpenAIService {
       // STEP 1: FIND USER HEADING (User Photo + Panorama)
       // ==========================================
       activeStage = "current-view matching";
+      moduleTimer.start("moduleB");
       console.log("   ➤ Step 1: Locating User's Current View...");
       const step1Prompt = `You will receive ${LAST_MILE_HEADINGS.length} distinct, non-overlapping panorama images labeled with their center headings at ${LAST_MILE_PANORAMA_FOV_DEGREES}-degree intervals, followed by a user's photo. Identify which single panorama segment confidently matches the center of the user's photo. Compare stable building geometry, windows, and street layout; do not rely on a repeated chain-store logo alone. Return NOT_VISIBLE for indoor imagery or ambiguous matches across multiple directions.
 Reply with exactly one heading token: ${LAST_MILE_HEADINGS.join(", ")}, or NOT_VISIBLE. Do not reply with the VIEW number.
@@ -1345,6 +1352,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
       Reply with exactly one heading token: ${LAST_MILE_HEADINGS.join(", ")}, or NOT_VISIBLE. Do not reply with the VIEW number. Return NOT_VISIBLE for indoor imagery.
       Use NOT_VISIBLE unless the requested destination is clearly identifiable in the panorama. A different nearby business is not a match. Do not infer a current business from nearby stores, an old sign, or the destination name alone.`;
       const step2StartedAt = Date.now();
+      moduleTimer.start("moduleC");
       const step2Request = this.client.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -1358,7 +1366,8 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
         ],
         temperature: 0.0,
         max_tokens: 12,
-      }).then(response => ({ response, durationMs: Date.now() - step2StartedAt }));
+      }).then(response => ({ response, durationMs: Date.now() - step2StartedAt }))
+        .finally(() => moduleTimer.stop("moduleC"));
       // Observe errors even if a compass conflict returns before Step 2 is used.
       void step2Request.catch(() => undefined);
       const step1StartedAt = Date.now();
@@ -1435,6 +1444,7 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
             ? "Both heading sources were not available."
             : undefined,
       });
+      moduleTimer.stop("moduleB");
       if (currentHeading === undefined) {
         const finalOutput = guidancePolicy.withheldMessage(["current_heading_unavailable"],
           "Your phone compass was unavailable or not calibrated, so I will not calculate a turn. " +
@@ -1483,6 +1493,9 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
       activeStage = "destination matching";
       console.log("   ➤ Step 2: Locating Target Store...");
       const { response: step2Response, durationMs: step2DurationMs } = await step2Request;
+      // The first request has its own timer, so time spent waiting for Module B
+      // is not charged to C. Resume C for parsing, fallbacks and panorama retries.
+      moduleTimer.start("moduleC");
       const step2Text = step2Response.choices[0].message.content?.trim() || "";
       const visuallyMatchedTargetHeading = parseLastMileHeading(step2Text);
       targetHeading = resolveVerifiedTargetHeading(
@@ -1514,7 +1527,10 @@ Use NOT_VISIBLE when the photo is blurry, blank, obstructed, or cannot be confid
       });
       if (targetHeading === null) {
         if (!shouldUseDestinationReference(distanceMeters)) {
-          if (await tryNextPanorama()) continue;
+          if (await tryNextPanorama()) {
+            moduleTimer.stop("moduleC");
+            continue;
+          }
           // Beside a large building the door in front of the user may be
           // real; "not visible from this block" would send them away from it.
           if (besideBuilding) {
@@ -1713,7 +1729,10 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
         }
       }
       if (targetHeading === null) {
-        if (await tryNextPanorama()) continue;
+        if (await tryNextPanorama()) {
+          moduleTimer.stop("moduleC");
+          continue;
+        }
         return respondWithPlacesFallback({
           imageryNote: panoramaDate
             ? ` The available Street View panorama is dated ${panoramaDate} and may be outdated.`
@@ -1723,9 +1742,11 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
         });
       }
 
+      moduleTimer.stop("moduleC");
       break;
       }
       if (targetHeading === null || currentHeading === undefined) throw new Error("No verified navigation heading.");
+      moduleTimer.start("moduleD");
       const confidence = calculateLastMileConfidence({
         gpsAccuracyMeters,
         compassAccuracyLevel,
@@ -1758,7 +1779,9 @@ Use VISIBLE only when the storefront, sign, or entrance clearly corresponds to t
         entranceListed: entranceSource === "geocoding_entrance",
         visualTargetMatched: visualMatchAgreesWithMap || signTextMatched === true || destinationReferenceUsed,
         walking: walkingEvidence, sensorReasons: guidancePolicy.turnSensorReasons(sensors, { lat, lng }, deviceHeading, gpsAccuracyMeters, safetyNow(), evaluationTime) });
+      moduleTimer.stop("moduleD");
       if (turnReasons.length) return withhold(turnReasons, "I cannot verify the entrance and your orientation well enough for a precise turn. Stay in a safe place and use your primary walking navigation or ask for assistance. Entrance accessibility has not been verified.");
+      moduleTimer.start("moduleE");
       // Visual bearings remain camera-origin evidence. Guidance uses phone-origin geometry.
       currentHeading = guidanceHeading ?? currentHeading;
       targetHeading = destinationBearing;

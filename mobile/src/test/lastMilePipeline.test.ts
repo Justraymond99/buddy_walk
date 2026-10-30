@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { OpenAIService } from "../../server/services/openAI";
 import { lastMileTestLogService } from "../../server/services/lastMileTestLog";
 
-for (const scenario of ["conflict", "stale", "second-panorama", "parallel-fallback", "verified-turn", "detour", "low-confidence", "ambiguous", "missing-sensors"] as const) {
+for (const scenario of ["conflict", "stale", "second-panorama", "parallel-fallback", "verified-turn", "detour", "low-confidence", "ambiguous", "missing-sensors", "vision-error"] as const) {
   test(`Last Meters integration: ${scenario}`, async t => {
     const oldKey = process.env.GOOGLE_MAPS_API_KEY;
     process.env.GOOGLE_MAPS_API_KEY = "unit-test";
@@ -52,6 +52,7 @@ for (const scenario of ["conflict", "stale", "second-panorama", "parallel-fallba
         text = (scenario === "second-panorama" && targetCalls === 2) || ["verified-turn", "detour", "low-confidence"].includes(scenario) ? "0" : "NOT_VISIBLE";
       } else if (prompt.includes("center of the user's photo")) {
         currentCalls++;
+        if (scenario === "vision-error") throw new Error("Mock vision request failed");
         assert.equal(targetCalls, currentCalls, "Step 2 must start before awaiting Step 1");
         text = scenario === "conflict" ? "270" : scenario === "low-confidence" ? "NOT_VISIBLE" : "90";
       } else if (prompt.includes("destination-focused Street View image for")) {
@@ -75,6 +76,20 @@ for (const scenario of ["conflict", "stale", "second-panorama", "parallel-fallba
       latestPosition: { lat: 40.7, lng: -74, accuracy: 14, timestamp: now },
       latestHeading: 90, latestHeadingTimestamp: now, latestHeadingReference: "true",
     } }, `data:image/jpeg;base64,${jpeg.toString("base64")}`);
+    assert.ok(Number.isFinite(logged.moduleTimingsMs.step0));
+    for (const duration of Object.values(logged.moduleTimingsMs)) {
+      assert.ok(typeof duration === "number" && duration >= 0);
+    }
+    assert.equal(typeof logged.moduleTimingsMs.moduleB, currentCalls ? "number" : "undefined");
+    assert.equal(typeof logged.moduleTimingsMs.moduleC, targetCalls ? "number" : "undefined");
+    assert.equal(typeof logged.moduleTimingsMs.moduleD,
+      logged.steps.some((s: any) => s.name === "confidence_fusion") ? "number" : "undefined");
+    assert.equal(typeof logged.moduleTimingsMs.moduleE, guidanceCalls ? "number" : "undefined");
+    if (scenario === "vision-error") {
+      assert.match(answer.error, /current-view matching/);
+      assert.equal(logged.success, false);
+      return;
+    }
     assert.equal(answer.testLogId, "trial-test");
     assert.equal(logged.runKind, "field");
     assert.equal(logged.replayInput.sensors?.photoCapturedAt, scenario === "missing-sensors" ? undefined : now);
