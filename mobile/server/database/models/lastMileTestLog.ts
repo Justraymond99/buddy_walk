@@ -5,6 +5,7 @@ import type { PlaceCandidateLog } from "../../utils/nearbyPlaces";
 import type { PanoramaAttempt } from "../../services/outdoorPanoramaSelection";
 import type { ReplayInput } from "../../utils/lastMileReplay";
 import type { WalkingEvidence } from "../../utils/lastMilePolicy";
+import type { LastMileModuleTimings } from "../../utils/lastMileTiming";
 
 export const REVIEW_OUTCOMES = ["got_there", "needed_retake", "would_not_get_there"] as const;
 export const TURN_CORRECTNESS = ["correct", "wrong", "no_turn_given"] as const;
@@ -112,6 +113,7 @@ export interface lastMileTestLogInterface {
   success: boolean;
   error?: string;
   latencyMs: number;
+  moduleTimingsMs?: LastMileModuleTimings;
   serverTs: Date;
 }
 
@@ -230,6 +232,13 @@ const LastMileTestLogSchema = new Schema<lastMileTestLogInterface>({
   success: { type: Boolean, required: true, index: true },
   error: { type: String },
   latencyMs: { type: Number, required: true },
+  moduleTimingsMs: {
+    step0: { type: Number },
+    moduleB: { type: Number },
+    moduleC: { type: Number },
+    moduleD: { type: Number },
+    moduleE: { type: Number },
+  },
   serverTs: { type: Date, default: Date.now, index: true },
 });
 
